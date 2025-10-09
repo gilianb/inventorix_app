@@ -1,13 +1,12 @@
-// lib/main_inventory_page.dart
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'new_stock_page.dart';
 import 'sales_archive_page.dart';
+import 'lot_details_page.dart';
 
 class MainInventoryPage extends StatefulWidget {
   const MainInventoryPage({super.key});
-
   @override
   State<MainInventoryPage> createState() => _MainInventoryPageState();
 }
@@ -15,268 +14,96 @@ class MainInventoryPage extends StatefulWidget {
 class _MainInventoryPageState extends State<MainInventoryPage> {
   final _supabase = Supabase.instance.client;
   final _searchCtrl = TextEditingController();
-  final _items = <Map<String, dynamic>>[];
-  final _stockByItemId = <String, int>{};
   bool _loading = true;
-  static const _defaultStockReason =
-      'manual'; // Doit exister dans l’enum reason
+  List<Map<String, dynamic>> _rows = const [];
 
   @override
   void initState() {
     super.initState();
-    _refreshAll();
+    _refresh();
   }
 
-  Future<void> _refreshAll() async {
+  Future<void> _refresh() async {
     setState(() => _loading = true);
     try {
-      await Future.wait([_fetchItems(), _fetchStockAggregates()]);
+      _rows = await _fetchMainInventory();
     } catch (e) {
-      _showMsg('Erreur de chargement : $e');
+      _msg('Erreur de chargement : $e');
     } finally {
       if (mounted) setState(() => _loading = false);
     }
   }
 
-  Future<void> _fetchItems() async {
-    const cols =
-        'id, sku, name, game, category, set_name, collector_number, rarity, '
-        'language, condition, finish, image_url, location, buy_price, sell_price, updated_at';
+  Future<List<Map<String, dynamic>>> _fetchMainInventory() async {
+    final cols =
+        'lot_id, product_name, language, purchase_date, total_cost, currency, '
+        'qty_total, qty_in_transit, qty_paid, qty_received, '
+        'qty_sent_to_grader, qty_at_grader, qty_graded, '
+        'qty_listed, qty_sold, qty_shipped, qty_finalized, '
+        'total_cost_with_fees, realized_revenue';
 
-    final q = _searchCtrl.text.trim();
-    List<Map<String, dynamic>> data = [];
+    // On récupère un petit set et on filtre en Dart si besoin
+    final List<dynamic> raw = await _supabase
+        .from('v_main_inventory')
+        .select(cols)
+        .order('purchase_date', ascending: false)
+        .limit(300);
 
-    if (q.isEmpty) {
-      final List<dynamic> raw = await _supabase
-          .from('items')
-          .select(cols)
-          .order('updated_at', ascending: false)
-          .limit(200);
-      data = raw.map((e) => Map<String, dynamic>.from(e as Map)).toList();
-    } else {
-      // Un seul SQL OR avec trois ILIKE => évite d'appeler .ilike/.filter en Dart
-      final List<dynamic> raw = await _supabase
-          .from('items')
-          .select(cols)
-          .or('name.ilike.%$q%,sku.ilike.%$q%,set_name.ilike.%$q%')
-          .order('updated_at', ascending: false)
-          .limit(200);
+    final rows = raw
+        .map<Map<String, dynamic>>((e) => Map<String, dynamic>.from(e as Map))
+        .toList();
 
-      data = raw.map((e) => Map<String, dynamic>.from(e as Map)).toList();
-    }
+    final q = _searchCtrl.text.trim().toLowerCase();
+    if (q.isEmpty) return rows;
 
-    _items
-      ..clear()
-      ..addAll(data);
-    setState(() {});
+    // Filtre local (product_name ou language contient q)
+    return rows.where((r) {
+      final name = (r['product_name'] ?? '').toString().toLowerCase();
+      final lang = (r['language'] ?? '').toString().toLowerCase();
+      return name.contains(q) || lang.contains(q);
+    }).toList();
   }
 
-  Future<void> _fetchStockAggregates() async {
-    // Récupère les mouvements et agrège côté client
-    // (Pour gros volumes: créer une RPC SQL "select item_id, sum(qty_change) from stock_moves group by 1")
-    final List<dynamic> raw =
-        await _supabase.from('stock_moves').select('item_id, qty_change');
+  void _msg(String m) =>
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
 
-    _stockByItemId.clear();
-    for (final rowAny in raw) {
-      final row = Map<String, dynamic>.from(rowAny as Map);
-      final id = (row['item_id'] ?? '').toString();
-      final delta = int.tryParse(row['qty_change'].toString()) ?? 0;
-      _stockByItemId[id] = (_stockByItemId[id] ?? 0) + delta;
-    }
-    setState(() {});
+  Future<void> _openCreateLot() async {
+    final changed = await Navigator.of(context)
+        .push<bool>(MaterialPageRoute(builder: (_) => const NewStockPage()));
+    if (changed == true) _refresh();
   }
 
-  int _stockFor(String itemId) => _stockByItemId[itemId] ?? 0;
-
-  void _showMsg(String msg) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+  void _openLot(int lotId) {
+    Navigator.of(context)
+        .push(MaterialPageRoute(builder: (_) => LotDetailsPage(lotId: lotId)));
   }
 
-  Future<void> _signOut() async {
-    try {
-      await _supabase.auth.signOut();
-    } catch (e) {
-      _showMsg('Erreur de déconnexion : $e');
-    }
-  }
+  DataRow _row(Map<String, dynamic> r) {
+    final lotId = r['lot_id'] as int;
+    String money(num? n) => ((n ?? 0).toDouble()).toStringAsFixed(2);
+    final sent = (r['qty_sent_to_grader'] ?? 0) as int;
+    final at = (r['qty_at_grader'] ?? 0) as int;
+    final grd = (r['qty_graded'] ?? 0) as int;
 
-  Future<void> _openCreateOrEdit({Map<String, dynamic>? item}) async {
-    final changed = await Navigator.of(context).push<bool>(
-      MaterialPageRoute(builder: (_) => NewStockPage(existingItem: item)),
-    );
-    if (changed == true) {
-      await _refreshAll();
-    }
-  }
-
-  Future<void> _quickAdjustStock(Map<String, dynamic> item) async {
-    final itemId = item['id']?.toString();
-    if (itemId == null) return;
-
-    final controller = TextEditingController();
-    final reasonCtrl = TextEditingController(text: _defaultStockReason);
-    final formKey = GlobalKey<FormState>();
-
-    final res = await showDialog<bool>(
-      context: context,
-      builder: (ctx) {
-        return AlertDialog(
-          title: const Text('Ajuster le stock'),
-          content: Form(
-            key: formKey,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text('Article : ${item['name'] ?? ''}'),
-                const SizedBox(height: 12),
-                TextFormField(
-                  controller: controller,
-                  keyboardType: TextInputType.number,
-                  decoration: const InputDecoration(
-                    labelText: 'Variation (ex: +5 ou -3)',
-                  ),
-                  validator: (v) {
-                    if (v == null || v.trim().isEmpty) {
-                      return 'Saisir une valeur';
-                    }
-                    final n = int.tryParse(v.trim());
-                    if (n == null || n == 0) return 'Entier non nul requis';
-                    return null;
-                  },
-                ),
-                const SizedBox(height: 12),
-                TextFormField(
-                  controller: reasonCtrl,
-                  decoration: const InputDecoration(
-                    labelText: 'Raison (enum reason)',
-                  ),
-                ),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () {
-                FocusScope.of(ctx).unfocus(); // <-- défocus avant pop
-                Navigator.pop(ctx, false);
-              },
-              child: const Text('Annuler'),
-            ),
-            ElevatedButton(
-              onPressed: () {
-                if (formKey.currentState!.validate()) {
-                  FocusScope.of(ctx).unfocus(); // <-- défocus avant pop
-                  Navigator.pop(ctx, true);
-                }
-              },
-              child: const Text('Valider'),
-            ),
-          ],
-        );
-      },
-    );
-
-    if (res != true) return;
-
-    final delta = int.parse(controller.text.trim());
-    final reason = reasonCtrl.text.trim().isEmpty
-        ? _defaultStockReason
-        : reasonCtrl.text.trim();
-
-    try {
-      await _supabase.from('stock_moves').insert({
-        'item_id': itemId,
-        'qty_change': delta,
-        'reason': reason, // doit exister dans l’enum reason
-        // 'org_id': '...' // si tu utilises l’org, ajoute-la ici
-      });
-      _showMsg('Stock ajusté : ${delta > 0 ? '+' : ''}$delta');
-      await _fetchStockAggregates();
-      setState(() {});
-    } on PostgrestException catch (e) {
-      _showMsg('Erreur d’ajustement : ${e.message}');
-    } catch (e) {
-      _showMsg('Erreur d’ajustement : $e');
-    }
-  }
-
-  Future<void> _deleteItem(Map<String, dynamic> item) async {
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('Supprimer l’article ?'),
-        content: Text(item['name'] ?? ''),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('Annuler')),
-          ElevatedButton(
-              onPressed: () => Navigator.pop(context, true),
-              child: const Text('Supprimer')),
-        ],
-      ),
-    );
-    if (ok != true) return;
-
-    try {
-      await _supabase.from('items').delete().eq('id', item['id']);
-      _showMsg('Article supprimé');
-      await _refreshAll();
-    } on PostgrestException catch (e) {
-      _showMsg('Suppression impossible : ${e.message}');
-    } catch (e) {
-      _showMsg('Suppression impossible : $e');
-    }
-  }
-
-  Widget _buildRow(Map<String, dynamic> item) {
-    final id = (item['id'] ?? '').toString();
-    final name = (item['name'] ?? '') as String;
-    final sku = (item['sku'] ?? '') as String? ?? '';
-    final setName = (item['set_name'] ?? '') as String? ?? '';
-    final lang = (item['language'] ?? '') as String? ?? '';
-    final rarity = (item['rarity'] ?? '') as String? ?? '';
-    final sellPrice = (item['sell_price'] as num?)?.toDouble();
-    final stock = _stockFor(id);
-
-    return Dismissible(
-      key: ValueKey('item-$id'),
-      direction: DismissDirection.endToStart,
-      background: Container(
-        color: Colors.red,
-        alignment: Alignment.centerRight,
-        padding: const EdgeInsets.symmetric(horizontal: 16),
-        child: const Icon(Icons.delete, color: Colors.white),
-      ),
-      confirmDismiss: (_) async {
-        await _deleteItem(item);
-        return false;
-      },
-      child: ListTile(
-        leading: CircleAvatar(
-          child: Text(stock.toString()),
-        ),
-        title: Text(name, maxLines: 1, overflow: TextOverflow.ellipsis),
-        subtitle: Text(
-          [
-            if (sku.isNotEmpty) 'SKU: $sku',
-            if (setName.isNotEmpty) setName,
-            if (lang.isNotEmpty) lang,
-            if (rarity.isNotEmpty) rarity,
-            if (sellPrice != null) '€${sellPrice.toStringAsFixed(2)}',
-          ].join(' • '),
-          maxLines: 2,
-          overflow: TextOverflow.ellipsis,
-        ),
-        onTap: () => _openCreateOrEdit(item: item),
-        trailing: IconButton(
-          icon: const Icon(Icons.add),
-          tooltip: 'Ajuster stock',
-          onPressed: () => _quickAdjustStock(item),
-        ),
-      ),
-    );
+    return DataRow(cells: [
+      DataCell(Text(r['product_name']?.toString() ?? '')),
+      DataCell(Text(r['language']?.toString() ?? '')),
+      DataCell(Text(r['purchase_date']?.toString() ?? '')),
+      DataCell(Text('${money(r['total_cost'])} ${r['currency'] ?? 'EUR'}')),
+      DataCell(Text('${r['qty_total']}')),
+      DataCell(Text(
+          '${r['qty_in_transit']} / ${r['qty_paid']} / ${r['qty_received']}')),
+      DataCell(Text('$sent / $at / $grd')),
+      DataCell(Text(
+          '${r['qty_listed']} / ${r['qty_sold']} / ${r['qty_shipped']} / ${r['qty_finalized']}')),
+      DataCell(Text(
+          '${money(r['total_cost_with_fees'])} ${r['currency'] ?? 'EUR'}')),
+      DataCell(
+          Text('${money(r['realized_revenue'])} ${r['currency'] ?? 'EUR'}')),
+      DataCell(IconButton(
+          icon: const Icon(Icons.open_in_new),
+          onPressed: () => _openLot(lotId))),
+    ]);
   }
 
   @override
@@ -284,63 +111,63 @@ class _MainInventoryPageState extends State<MainInventoryPage> {
     final body = _loading
         ? const Center(child: CircularProgressIndicator())
         : RefreshIndicator(
-            onRefresh: _refreshAll,
-            child: ListView.builder(
-              itemCount: _items.length + 1,
-              itemBuilder: (ctx, i) {
-                if (i == 0) {
-                  return Padding(
-                    padding: const EdgeInsets.all(12),
-                    child: TextField(
-                      controller: _searchCtrl,
-                      onSubmitted: (_) => _fetchItems(),
-                      decoration: InputDecoration(
-                        hintText: 'Rechercher (nom, sku, set...)',
-                        prefixIcon: const Icon(Icons.search),
-                        suffixIcon: IconButton(
-                          icon: const Icon(Icons.clear),
-                          onPressed: () {
-                            FocusScope.of(context).unfocus(); // <-- défocus
-                            _searchCtrl.clear();
-                            _fetchItems();
-                          },
-                        ),
-                      ),
-                    ),
-                  );
-                }
-                final item = _items[i - 1];
-                return _buildRow(item);
-              },
-            ),
+            onRefresh: _refresh,
+            child: ListView(children: [
+              Padding(
+                padding: const EdgeInsets.all(12),
+                child: TextField(
+                  controller: _searchCtrl,
+                  onSubmitted: (_) => _refresh(),
+                  decoration: InputDecoration(
+                    hintText: 'Rechercher (nom, langue)',
+                    prefixIcon: const Icon(Icons.search),
+                    suffixIcon: IconButton(
+                        icon: const Icon(Icons.clear),
+                        onPressed: () {
+                          _searchCtrl.clear();
+                          _refresh();
+                        }),
+                  ),
+                ),
+              ),
+              SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: DataTable(columns: const [
+                  DataColumn(label: Text('Produit')),
+                  DataColumn(label: Text('Langue')),
+                  DataColumn(label: Text('Achat (date)')),
+                  DataColumn(label: Text('Prix total')),
+                  DataColumn(label: Text('Qté')),
+                  DataColumn(label: Text('Achat (in_transit/paid/received)')),
+                  DataColumn(label: Text('Gradation (sent/at/graded)')),
+                  DataColumn(
+                      label: Text('Vente (listed/sold/shipped/finalized)')),
+                  DataColumn(label: Text('Coût total+frais')),
+                  DataColumn(label: Text('Revenu réalisé')),
+                  DataColumn(label: Text('Actions')),
+                ], rows: _rows.map(_row).toList()),
+              ),
+              const SizedBox(height: 80),
+            ]),
           );
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Inventorix — Inventaire'),
+        title: const Text('Inventorix — Inventaire (par lot)'),
         actions: [
           IconButton(
             tooltip: 'Archive ventes',
-            onPressed: () {
-              Navigator.of(context).push(
-                MaterialPageRoute(builder: (_) => const SalesArchivePage()),
-              );
-            },
+            onPressed: () => Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const SalesArchivePage())),
             icon: const Icon(Icons.receipt_long),
-          ),
-          IconButton(
-            tooltip: 'Déconnexion',
-            onPressed: _signOut,
-            icon: const Icon(Icons.logout),
           ),
         ],
       ),
       body: body,
       floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => _openCreateOrEdit(),
-        icon: const Icon(Icons.add),
-        label: const Text('Nouvel article'),
-      ),
+          onPressed: _openCreateLot,
+          icon: const Icon(Icons.add),
+          label: const Text('Nouveau lot')),
     );
   }
 }
