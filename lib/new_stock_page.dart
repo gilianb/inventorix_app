@@ -27,16 +27,24 @@ class _NewStockPageState extends State<NewStockPage> {
   final _notesCtrl = TextEditingController();
   String _initStatus = 'paid';
 
+  // Games (depuis table public.games)
+  List<Map<String, dynamic>> _games = const [];
+  int? _selectedGameId;
+
   bool _saving = false;
 
   static const langs = ['EN', 'FR', 'JP'];
   static const singleStatuses = [
-    // Achat
-    'paid', 'in_transit', 'received',
-    // Gradation
-    'sent_to_grader', 'at_grader', 'graded',
-    // Vente
-    'listed', 'sold', 'shipped', 'finalized'
+    'paid',
+    'in_transit',
+    'received',
+    'sent_to_grader',
+    'at_grader',
+    'graded',
+    'listed',
+    'sold',
+    'shipped',
+    'finalized'
   ];
   static const sealedStatuses = [
     'ordered',
@@ -46,6 +54,32 @@ class _NewStockPageState extends State<NewStockPage> {
     'shipped',
     'finalized',
   ];
+
+  @override
+  void initState() {
+    super.initState();
+    _loadGames();
+  }
+
+  Future<void> _loadGames() async {
+    try {
+      final raw =
+          await _sb.from('games').select('id, code, label').order('label');
+      setState(() {
+        _games = raw
+            .map<Map<String, dynamic>>(
+                (e) => Map<String, dynamic>.from(e as Map))
+            .toList();
+        if (_games.isNotEmpty) {
+          _selectedGameId = _games.first['id'] as int;
+        }
+      });
+    } on PostgrestException catch (e) {
+      _snack('Erreur Supabase (games) : ${e.message}');
+    } catch (e) {
+      _snack('Erreur chargement jeux: $e');
+    }
+  }
 
   void _snack(String m) =>
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
@@ -86,6 +120,10 @@ class _NewStockPageState extends State<NewStockPage> {
       _snack('Fournisseur requis');
       return;
     }
+    if (_selectedGameId == null) {
+      _snack('Choisis un jeu');
+      return;
+    }
 
     setState(() => _saving = true);
     try {
@@ -104,6 +142,7 @@ class _NewStockPageState extends State<NewStockPage> {
             : _buyerCompanyCtrl.text.trim(),
         'p_notes':
             _notesCtrl.text.trim().isEmpty ? null : _notesCtrl.text.trim(),
+        'p_game_id': _selectedGameId, // <--- NOUVEAU
       });
 
       _snack('Lot créé (#$lotId)');
@@ -160,7 +199,6 @@ class _NewStockPageState extends State<NewStockPage> {
                             ],
                             onChanged: (v) => setState(() {
                               _type = v ?? 'single';
-                              // si le statut courant n’existe pas dans la nouvelle liste, on le remet au 1er
                               final newStatuses = _type == 'single'
                                   ? singleStatuses
                                   : sealedStatuses;
@@ -175,7 +213,7 @@ class _NewStockPageState extends State<NewStockPage> {
                         const SizedBox(width: 12),
                         Expanded(
                           child: DropdownButtonFormField<String>(
-                            initialValue: _lang,
+                            value: _lang,
                             items: langs
                                 .map((l) =>
                                     DropdownMenuItem(value: l, child: Text(l)))
@@ -194,6 +232,19 @@ class _NewStockPageState extends State<NewStockPage> {
                         validator: (v) => (v == null || v.trim().isEmpty)
                             ? 'Nom requis'
                             : null,
+                      ),
+                      const SizedBox(height: 8),
+                      DropdownButtonFormField<int>(
+                        value: _selectedGameId,
+                        items: _games
+                            .map((g) => DropdownMenuItem<int>(
+                                  value: g['id'] as int,
+                                  child: Text(g['label'] as String),
+                                ))
+                            .toList(),
+                        onChanged: (v) => setState(() => _selectedGameId = v),
+                        validator: (v) => v == null ? 'Choisir un jeu' : null,
+                        decoration: const InputDecoration(labelText: 'Jeu *'),
                       ),
                     ],
                   ),
@@ -259,10 +310,9 @@ class _NewStockPageState extends State<NewStockPage> {
                         const SizedBox(width: 12),
                         Expanded(
                           child: DropdownButtonFormField<String>(
-                            initialValue:
-                                statusValue, // <-- au lieu d'initialValue / ou d'une value potentiellement invalide
+                            value: statusValue,
                             items: statuses
-                                .toSet() // dédoublonne au cas où
+                                .toSet()
                                 .map((s) =>
                                     DropdownMenuItem(value: s, child: Text(s)))
                                 .toList(),
