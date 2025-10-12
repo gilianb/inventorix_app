@@ -33,6 +33,7 @@ class InventoryTableByStatus extends StatelessWidget {
       final unit = q > 0 ? (sumUnitTotal / q) : 0;
 
       final lineColor = WidgetStateProperty.resolveWith<Color?>(
+        // ignore: deprecated_member_use
         (states) => statusColor(context, s).withOpacity(0.06),
       );
 
@@ -48,7 +49,9 @@ class InventoryTableByStatus extends StatelessWidget {
           DataCell(
             Chip(
               label: Text(s.toUpperCase()),
+              // ignore: deprecated_member_use
               backgroundColor: statusColor(context, s).withOpacity(0.15),
+              // ignore: deprecated_member_use
               side: BorderSide(color: statusColor(context, s).withOpacity(0.6)),
             ),
           ),

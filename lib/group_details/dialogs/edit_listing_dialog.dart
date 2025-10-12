@@ -297,7 +297,7 @@ class _EditListingDialogState extends State<EditListingDialog> {
                   checked: _applyStatus,
                   onChanged: (v) => setState(() => _applyStatus = v ?? false),
                   child: DropdownButtonFormField<String>(
-                    value: _status,
+                    initialValue: _status,
                     items: _itemStatuses
                         .map((s) => DropdownMenuItem(value: s, child: Text(s)))
                         .toList(),
@@ -311,7 +311,7 @@ class _EditListingDialogState extends State<EditListingDialog> {
                   checked: _applyChannel,
                   onChanged: (v) => setState(() => _applyChannel = v ?? false),
                   child: DropdownButtonFormField<int>(
-                    value: _channelId,
+                    initialValue: _channelId,
                     items: _channels
                         .map((c) => DropdownMenuItem<int>(
                               value: c['id'] as int,
@@ -330,7 +330,7 @@ class _EditListingDialogState extends State<EditListingDialog> {
                   checked: _applyLanguage,
                   onChanged: (v) => setState(() => _applyLanguage = v ?? false),
                   child: DropdownButtonFormField<String>(
-                    value: _language,
+                    initialValue: _language,
                     items: _langs
                         .map((l) => DropdownMenuItem(value: l, child: Text(l)))
                         .toList(),
@@ -344,7 +344,7 @@ class _EditListingDialogState extends State<EditListingDialog> {
                   checked: _applyGame,
                   onChanged: (v) => setState(() => _applyGame = v ?? false),
                   child: DropdownButtonFormField<int>(
-                    value: _gameId,
+                    initialValue: _gameId,
                     items: _games
                         .map((g) => DropdownMenuItem<int>(
                               value: g['id'] as int,
