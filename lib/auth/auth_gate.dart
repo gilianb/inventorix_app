@@ -2,7 +2,7 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'sign_in_page.dart';
-import '../main_inventory_page.dart';
+import '../inventory/main_inventory_page.dart';
 
 /// AuthGate : redirige entre connexion et app principale
 class AuthGate extends StatefulWidget {

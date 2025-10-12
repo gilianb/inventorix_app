@@ -12,22 +12,31 @@ class _NewStockPageState extends State<NewStockPage> {
   final _sb = Supabase.instance.client;
   final _formKey = GlobalKey<FormState>();
 
-  // Product minimal
+  // Produit minimal
   String _type = 'single'; // 'single' | 'sealed'
   final _nameCtrl = TextEditingController();
   String _lang = 'EN';
 
-  // Lot
+  // Achat
   final _supplierNameCtrl = TextEditingController(); // texte libre
   final _buyerCompanyCtrl = TextEditingController(); // société acheteuse
   DateTime _purchaseDate = DateTime.now();
-  final _totalCostCtrl = TextEditingController(); // PRIX TOTAL DU LOT (USD)
+  final _totalCostCtrl = TextEditingController(); // PRIX TOTAL (USD)
   final _qtyCtrl = TextEditingController(text: '1');
   final _feesCtrl = TextEditingController(text: '0'); // en USD
-  final _notesCtrl = TextEditingController();
   String _initStatus = 'paid';
 
-  // Games (depuis table public.games)
+  // Plus d’options (repliable)
+  bool _showMore = false;
+  final _trackingCtrl = TextEditingController();
+  final _photoUrlCtrl = TextEditingController();
+  final _docUrlCtrl = TextEditingController();
+  final _estimatedPriceCtrl = TextEditingController();
+  final _notesCtrl = TextEditingController();
+  final _gradeCtrl = TextEditingController();
+  final _gradingSubmissionIdCtrl = TextEditingController();
+
+  // Jeux
   List<Map<String, dynamic>> _games = const [];
   int? _selectedGameId;
 
@@ -35,6 +44,7 @@ class _NewStockPageState extends State<NewStockPage> {
 
   static const langs = ['EN', 'FR', 'JP'];
   static const singleStatuses = [
+    'ordered',
     'paid',
     'in_transit',
     'received',
@@ -101,6 +111,12 @@ class _NewStockPageState extends State<NewStockPage> {
     return double.tryParse(s);
   }
 
+  int? _int(TextEditingController c) {
+    final s = c.text.trim();
+    if (s.isEmpty) return null;
+    return int.tryParse(s);
+  }
+
   Future<void> _save() async {
     if (!_formKey.currentState!.validate()) return;
 
@@ -127,25 +143,54 @@ class _NewStockPageState extends State<NewStockPage> {
 
     setState(() => _saving = true);
     try {
-      final lotId = await _sb.rpc('fn_create_product_and_lot', params: {
-        'p_type': _type,
+      // Payload de base pour l’RPC
+      final params = <String, dynamic>{
+        'p_type': _type, // enum côté SQL
         'p_name': _nameCtrl.text.trim(),
         'p_language': _lang,
+        'p_game_id': _selectedGameId,
         'p_supplier_name': _supplierNameCtrl.text.trim(),
-        'p_purchase_date': _purchaseDate.toIso8601String().substring(0, 10),
-        'p_total_cost': totalCost,
-        'p_qty': qty,
-        'p_fees': fees,
-        'p_init_status': _initStatus,
         'p_buyer_company': _buyerCompanyCtrl.text.trim().isEmpty
             ? null
             : _buyerCompanyCtrl.text.trim(),
-        'p_notes':
-            _notesCtrl.text.trim().isEmpty ? null : _notesCtrl.text.trim(),
-        'p_game_id': _selectedGameId, // <--- NOUVEAU
-      });
+        'p_purchase_date': _purchaseDate.toIso8601String().substring(0, 10),
+        'p_currency': 'USD',
+        'p_qty': qty,
+        'p_total_cost': totalCost,
+        'p_fees': fees,
+        'p_init_status': _initStatus,
+      };
 
-      _snack('Lot créé (#$lotId)');
+      // Champs optionnels — ajoutés seulement s’ils sont renseignés.
+      // ⚠️ Assure-toi que ton fn_create_product_and_items attend bien ces clés,
+      // sinon retire les lignes qui posent souci.
+      if (_trackingCtrl.text.trim().isNotEmpty) {
+        params['p_tracking'] = _trackingCtrl.text.trim();
+      }
+      if (_photoUrlCtrl.text.trim().isNotEmpty) {
+        params['p_photo_url'] = _photoUrlCtrl.text.trim();
+      }
+      if (_docUrlCtrl.text.trim().isNotEmpty) {
+        params['p_document_url'] = _docUrlCtrl.text.trim();
+      }
+      final estPrice = _num(_estimatedPriceCtrl);
+      if (estPrice != null) {
+        params['p_estimated_price'] = estPrice;
+      }
+      if (_notesCtrl.text.trim().isNotEmpty) {
+        params['p_notes'] = _notesCtrl.text.trim();
+      }
+      if (_gradeCtrl.text.trim().isNotEmpty) {
+        params['p_grade'] = _gradeCtrl.text.trim();
+      }
+      final subId = _int(_gradingSubmissionIdCtrl);
+      if (subId != null) {
+        params['p_grading_submission_id'] = subId;
+      }
+
+      await _sb.rpc('fn_create_product_and_items', params: params);
+
+      _snack('Stock créé ($qty items)');
       if (mounted) Navigator.pop(context, true);
     } on PostgrestException catch (e) {
       _snack('Erreur Supabase: ${e.message}');
@@ -165,6 +210,13 @@ class _NewStockPageState extends State<NewStockPage> {
     _qtyCtrl.dispose();
     _feesCtrl.dispose();
     _notesCtrl.dispose();
+
+    _trackingCtrl.dispose();
+    _photoUrlCtrl.dispose();
+    _docUrlCtrl.dispose();
+    _estimatedPriceCtrl.dispose();
+    _gradeCtrl.dispose();
+    _gradingSubmissionIdCtrl.dispose();
     super.dispose();
   }
 
@@ -175,7 +227,7 @@ class _NewStockPageState extends State<NewStockPage> {
         statuses.contains(_initStatus) ? _initStatus : statuses.first;
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Nouveau lot')),
+      appBar: AppBar(title: const Text('Nouveau stock')),
       body: SafeArea(
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(16),
@@ -190,7 +242,7 @@ class _NewStockPageState extends State<NewStockPage> {
                       Row(children: [
                         Expanded(
                           child: DropdownButtonFormField<String>(
-                            value: _type,
+                            initialValue: _type,
                             items: const [
                               DropdownMenuItem(
                                   value: 'single', child: Text('Single')),
@@ -213,7 +265,7 @@ class _NewStockPageState extends State<NewStockPage> {
                         const SizedBox(width: 12),
                         Expanded(
                           child: DropdownButtonFormField<String>(
-                            value: _lang,
+                            initialValue: _lang,
                             items: langs
                                 .map((l) =>
                                     DropdownMenuItem(value: l, child: Text(l)))
@@ -235,7 +287,7 @@ class _NewStockPageState extends State<NewStockPage> {
                       ),
                       const SizedBox(height: 8),
                       DropdownButtonFormField<int>(
-                        value: _selectedGameId,
+                        initialValue: _selectedGameId,
                         items: _games
                             .map((g) => DropdownMenuItem<int>(
                                   value: g['id'] as int,
@@ -251,7 +303,7 @@ class _NewStockPageState extends State<NewStockPage> {
                 ),
                 const SizedBox(height: 12),
                 _Section(
-                  title: 'Lot & Achat (USD)',
+                  title: 'Achat (USD)',
                   child: Column(
                     children: [
                       TextFormField(
@@ -276,7 +328,7 @@ class _NewStockPageState extends State<NewStockPage> {
                             keyboardType: const TextInputType.numberWithOptions(
                                 decimal: true),
                             decoration: const InputDecoration(
-                                labelText: 'Prix total du lot (USD) *'),
+                                labelText: 'Prix total (USD) *'),
                             validator: (v) => (double.tryParse(
                                             (v ?? '').replaceAll(',', '.')) ??
                                         -1) >=
@@ -310,7 +362,7 @@ class _NewStockPageState extends State<NewStockPage> {
                         const SizedBox(width: 12),
                         Expanded(
                           child: DropdownButtonFormField<String>(
-                            value: statusValue,
+                            initialValue: statusValue,
                             items: statuses
                                 .toSet()
                                 .map((s) =>
@@ -345,17 +397,90 @@ class _NewStockPageState extends State<NewStockPage> {
                           ),
                         ),
                       ]),
-                      const SizedBox(height: 8),
-                      TextFormField(
-                        controller: _notesCtrl,
-                        minLines: 2,
-                        maxLines: 5,
-                        decoration: const InputDecoration(
-                            labelText: 'Notes (optionnel)'),
-                      ),
                     ],
                   ),
                 ),
+
+                const SizedBox(height: 12),
+
+                // Lien “Plus d’options”
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: TextButton.icon(
+                    onPressed: () => setState(() => _showMore = !_showMore),
+                    icon:
+                        Icon(_showMore ? Icons.expand_less : Icons.expand_more),
+                    label: const Text('Plus d’options'),
+                  ),
+                ),
+
+                if (_showMore)
+                  _Section(
+                    title: 'Options (facultatif)',
+                    child: Column(
+                      children: [
+                        Row(children: [
+                          Expanded(
+                            child: TextFormField(
+                              controller: _estimatedPriceCtrl,
+                              keyboardType:
+                                  const TextInputType.numberWithOptions(
+                                      decimal: true),
+                              decoration: const InputDecoration(
+                                  labelText: 'Prix de vente estimé (USD)'),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: TextFormField(
+                              controller: _gradeCtrl,
+                              decoration:
+                                  const InputDecoration(labelText: 'Grade'),
+                            ),
+                          ),
+                        ]),
+                        const SizedBox(height: 8),
+                        Row(children: [
+                          Expanded(
+                            child: TextFormField(
+                              controller: _gradingSubmissionIdCtrl,
+                              keyboardType: TextInputType.number,
+                              decoration: const InputDecoration(
+                                  labelText: 'Grading submission ID'),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: TextFormField(
+                              controller: _trackingCtrl,
+                              decoration:
+                                  const InputDecoration(labelText: 'Tracking'),
+                            ),
+                          ),
+                        ]),
+                        const SizedBox(height: 8),
+                        TextFormField(
+                          controller: _photoUrlCtrl,
+                          decoration:
+                              const InputDecoration(labelText: 'Photo URL'),
+                        ),
+                        const SizedBox(height: 8),
+                        TextFormField(
+                          controller: _docUrlCtrl,
+                          decoration:
+                              const InputDecoration(labelText: 'Document URL'),
+                        ),
+                        const SizedBox(height: 8),
+                        TextFormField(
+                          controller: _notesCtrl,
+                          minLines: 2,
+                          maxLines: 5,
+                          decoration: const InputDecoration(labelText: 'Notes'),
+                        ),
+                      ],
+                    ),
+                  ),
+
                 const SizedBox(height: 20),
                 SizedBox(
                   width: double.infinity,
@@ -368,7 +493,7 @@ class _NewStockPageState extends State<NewStockPage> {
                             height: 18,
                             child: CircularProgressIndicator(strokeWidth: 2))
                         : const Icon(Icons.save),
-                    label: const Text('Créer le lot'),
+                    label: const Text('Créer le stock'),
                   ),
                 ),
               ],
