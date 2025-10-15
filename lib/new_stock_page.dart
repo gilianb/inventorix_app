@@ -99,6 +99,21 @@ class _NewStockPageState extends State<NewStockPage> {
   void _snack(String m) =>
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
 
+  // === Dialog d’erreur pour les uploads ===
+  void _showUploadError(String message) {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Erreur de téléchargement'),
+        content: Text(message),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx), child: const Text('OK')),
+        ],
+      ),
+    );
+  }
+
   Future<void> _pickDate() async {
     final now = DateTime.now();
     final picked = await showDatePicker(
@@ -496,6 +511,7 @@ class _NewStockPageState extends State<NewStockPage> {
                               : _photoUrlCtrl.text,
                           onUrlChanged: (u) => _photoUrlCtrl.text = u ?? '',
                           acceptImagesOnly: true,
+                          onError: _showUploadError, // <-- affiche dialog
                         ),
                         const SizedBox(height: 8),
                         StorageUploadTile(
@@ -507,6 +523,7 @@ class _NewStockPageState extends State<NewStockPage> {
                               : _docUrlCtrl.text,
                           onUrlChanged: (u) => _docUrlCtrl.text = u ?? '',
                           acceptDocsOnly: true,
+                          onError: _showUploadError, // <-- affiche dialog
                         ),
                         const SizedBox(height: 8),
                         TextFormField(

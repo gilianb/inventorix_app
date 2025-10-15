@@ -15,6 +15,7 @@ class StorageUploadTile extends StatefulWidget {
     required this.onUrlChanged, // callback -> met à jour TextEditingController/DB
     this.acceptImagesOnly = false,
     this.acceptDocsOnly = false,
+    this.onError, // <-- nouveau
   });
 
   final String label;
@@ -24,6 +25,7 @@ class StorageUploadTile extends StatefulWidget {
   final ValueChanged<String?> onUrlChanged;
   final bool acceptImagesOnly;
   final bool acceptDocsOnly;
+  final ValueChanged<String>? onError; // <-- nouveau
 
   @override
   State<StorageUploadTile> createState() => _StorageUploadTileState();
@@ -34,18 +36,22 @@ class _StorageUploadTileState extends State<StorageUploadTile> {
   late final StorageHelper _storage = StorageHelper(_sb);
 
   String? _url; // URL publique/signée pour prévisualiser
-// chemin dans le bucket (si on veut le conserver)
 
   @override
   void initState() {
     super.initState();
     _url = widget.initialUrl;
-    // Pas forcément possible de reconstituer objectKey depuis une URL complète;
-    // si besoin, tu peux stocker la clé (objectKey) en plus dans ta DB.
   }
 
   bool get _isImage =>
       (_url ?? '').toLowerCase().contains(RegExp(r'\.(png|jpe?g|gif|webp)$'));
+
+  // Règle de nommage simple: lettres/chiffres/._- uniquement
+  bool _isSafeFileName(String name) =>
+      RegExp(r'^[A-Za-z0-9._-]+$').hasMatch(name);
+
+  String _sanitize(String name) =>
+      name.replaceAll(RegExp(r'[^A-Za-z0-9._-]'), '_');
 
   Future<void> _pickAndUpload() async {
     final res = await FilePicker.platform.pickFiles(
@@ -64,10 +70,21 @@ class _StorageUploadTileState extends State<StorageUploadTile> {
     final bytes = f.bytes;
     if (bytes == null) return;
 
-    final name = f.name;
-    // object path -> prefix/horodate-nom
+    final originalName = f.name.trim();
+
+    // Valide le nom AVANT upload
+    if (!_isSafeFileName(originalName)) {
+      widget.onError?.call(
+        "Le nom de fichier « $originalName » contient des espaces ou des caractères spéciaux. "
+        "Utilise uniquement lettres, chiffres, tirets (-), underscores (_) ou points (.).",
+      );
+      return;
+    }
+
+    final safeName = _sanitize(originalName);
     final objectPath =
-        '${widget.objectPrefix}/${DateTime.now().millisecondsSinceEpoch}_$name';
+        '${widget.objectPrefix}/${DateTime.now().millisecondsSinceEpoch}_$safeName';
+
     try {
       final key = await _storage.uploadBytes(
         bucket: widget.bucket,
@@ -75,15 +92,29 @@ class _StorageUploadTileState extends State<StorageUploadTile> {
         bytes: Uint8List.fromList(bytes),
       );
       final url = await _storage.getPublicOrSignedUrl(
-          bucket: widget.bucket, objectPath: key);
-      setState(() {
-        _url = url;
-      });
-      widget.onUrlChanged(url);
-    } catch (e) {
+        bucket: widget.bucket,
+        objectPath: key,
+      );
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Upload échoué: $e')));
+      setState(() => _url = url);
+      widget.onUrlChanged(url);
+    } on StorageException catch (e) {
+      // Erreurs storage précises -> remonte au parent via onError si fourni
+      final msg = 'Upload échoué: ${e.message} (code ${e.statusCode ?? '-'})';
+      if (widget.onError != null) {
+        widget.onError!(msg);
+      } else if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(msg)));
+      }
+    } catch (e) {
+      final msg = 'Upload échoué: $e';
+      if (widget.onError != null) {
+        widget.onError!(msg);
+      } else if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(msg)));
+      }
     }
   }
 

@@ -294,6 +294,26 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
     messenger?.showSnackBar(SnackBar(content: Text(m)));
   }
 
+  // ====== AJOUT : popup d'erreur d'upload (nom de fichier invalide, etc.) ======
+  void _showUploadError(String message) {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Nom de fichier invalide'),
+        content: Text(
+          'Le nom du fichier ne doit pas contenir d’espaces ni de caractères spéciaux.\n\n'
+          'Détail : $message',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
@@ -592,6 +612,7 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
                         _photoUrlCtrl.text.isEmpty ? null : _photoUrlCtrl.text,
                     onUrlChanged: (u) => _photoUrlCtrl.text = u ?? '',
                     acceptImagesOnly: true,
+                    onError: (err) => _showUploadError(err), // <-- AJOUT
                   ),
                 ],
               ),
@@ -622,6 +643,7 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
                         : _documentUrlCtrl.text,
                     onUrlChanged: (u) => _documentUrlCtrl.text = u ?? '',
                     acceptDocsOnly: true,
+                    onError: (err) => _showUploadError(err), // <-- AJOUT
                   ),
                 ],
               ),
