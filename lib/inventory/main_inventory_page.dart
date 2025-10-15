@@ -51,15 +51,12 @@ class _MainInventoryPageState extends State<MainInventoryPage> {
   String _typeFilter = 'single'; // 'single' | 'sealed'
   String? _statusFilter; // filtre de la liste
 
-  // Données brutes (groupes venant de la VUE unique v_items_by_status)
+  // Données brutes (groupes venant de la VUE stricte v_items_by_status)
   List<Map<String, dynamic>> _groups = const [];
 
-  // Cache d'enrichissement: key = "$productId|$status"
-  final Map<String, Map<String, dynamic>> _extrasByKey = {};
-
-  // KPIs supplémentaires
-  num _kpiPotentialRevenue = 0; // Σ estimated_price (tous items)
-  num _kpiRealRevenue = 0; // Σ sale_price (statut ∈ [sold, shipped, finalized])
+  // KPI
+  num _kpiPotentialRevenue = 0; // Σ sum_estimated_price (exposé par la vue)
+  num _kpiRealRevenue = 0; // Σ realized_revenue (exposé par la vue)
 
   @override
   void initState() {
@@ -73,8 +70,9 @@ class _MainInventoryPageState extends State<MainInventoryPage> {
   Future<void> _refresh() async {
     setState(() => _loading = true);
     try {
-      _groups = await _fetchGroupedFromView(); // <- lit v_items_by_status
-      await _hydrateOptionalFieldsAndKpis(); // <- récupère échantillon d'items + calcule KPI revenus
+      _groups =
+          await _fetchGroupedFromView(); // <- lit v_items_by_status (nouvelle stricte)
+      _recomputeKpis(); // <- calcule KPI depuis la vue
     } catch (e) {
       _snack('Erreur de chargement : $e');
     } finally {
@@ -82,15 +80,31 @@ class _MainInventoryPageState extends State<MainInventoryPage> {
     }
   }
 
-  /// Récupère les groupes depuis la **nouvelle vue unique** v_items_by_status
+  void _recomputeKpis() {
+    _kpiPotentialRevenue = 0;
+    _kpiRealRevenue = 0;
+    for (final r in _groups) {
+      _kpiPotentialRevenue += (r['sum_estimated_price'] as num?) ?? 0;
+      _kpiRealRevenue += (r['realized_revenue'] as num?) ?? 0;
+    }
+  }
+
+  /// Récupère les groupes depuis la vue stricte v_items_by_status
   Future<List<Map<String, dynamic>>> _fetchGroupedFromView() async {
     const cols =
-        'product_id, game_id, type, language, currency, purchase_date, '
+        // dimensions
+        'product_id, game_id, type, language, '
         'product_name, game_code, game_label, '
+        'purchase_date, currency, '
+        // champs optionnels homogènes (déjà au niveau du groupe strict)
+        'supplier_name, buyer_company, notes, grade_id, sale_date, sale_price, '
+        'tracking, photo_url, document_url, estimated_price, sum_estimated_price, item_location, channel_id, '
+        // agrégats
         'qty_total, '
         'qty_ordered, qty_in_transit, qty_paid, qty_received, '
         'qty_sent_to_grader, qty_at_grader, qty_graded, '
         'qty_listed, qty_sold, qty_shipped, qty_finalized, qty_collection, '
+        // totaux coûts + KPI
         'total_cost, total_cost_with_fees, realized_revenue';
 
     final List<dynamic> raw = await _sb
@@ -124,96 +138,30 @@ class _MainInventoryPageState extends State<MainInventoryPage> {
     return rows;
   }
 
-  // Construit la chaîne "(1,2,3)" pour filter('in')
-  String _idListForIn(List<int> ids) => '(${ids.join(",")})';
-
-  /// Récupère des infos items (échantillon par statut) + calcule les KPI revenus
-  ///
-  /// - Hydrate _extrasByKey pour avoir quelques champs affichables au tableau (min id par (product_id,status))
-  /// - Calcule _kpiPotentialRevenue = Σ estimated_price de TOUS les items des produits visibles
-  /// - Calcule _kpiRealRevenue = Σ sale_price des items avec status ∈ (sold,shipped,finalized)
-  Future<void> _hydrateOptionalFieldsAndKpis() async {
-    _extrasByKey.clear();
-    _kpiPotentialRevenue = 0;
-    _kpiRealRevenue = 0;
-
-    if (_groups.isEmpty) return;
-
-    final productIds = _groups
-        .map((r) => (r['product_id'] as int?))
-        .whereType<int>()
-        .toSet()
-        .toList();
-
-    if (productIds.isEmpty) return;
-
-    final String idsIn = _idListForIn(productIds);
-
-    final List<dynamic> raw = await _sb
-        .from('item')
-        .select(
-          'id, product_id, status, channel_id, supplier_name, buyer_company, '
-          'notes, grade_id, sale_date, sale_price, estimated_price, '
-          'tracking, photo_url, document_url, language, purchase_date, currency, item_location',
-        )
-        .filter('product_id', 'in', idsIn)
-        .order('id', ascending: true)
-        .limit(20000);
-
-    for (final e in raw) {
-      final m = Map<String, dynamic>.from(e as Map);
-
-      // ---- Hydratation échantillon (min id) par (product_id, status)
-      final pid = m['product_id'] as int?;
-      final st = (m['status'] ?? '').toString();
-      if (pid != null && st.isNotEmpty) {
-        final key = '$pid|$st';
-        _extrasByKey.putIfAbsent(key, () => m);
-      }
-
-      // ---- KPI Revenus
-      final est = (m['estimated_price'] as num?) ?? 0;
-      if (est > 0) _kpiPotentialRevenue += est;
-
-      if (st == 'sold' || st == 'shipped' || st == 'finalized') {
-        final sp = (m['sale_price'] as num?) ?? 0;
-        if (sp > 0) _kpiRealRevenue += sp;
-      }
-    }
-  }
-
-  // Explose les groupes en lignes “par statut” + fusionne les extras
+  // Explose les groupes en lignes “par statut” (plus de fusion d'extras ici)
   List<Map<String, dynamic>> _explodeLines() {
     final out = <Map<String, dynamic>>[];
     for (final r in _groups) {
       for (final s in kStatusOrder) {
         final q = (r['qty_$s'] as int?) ?? 0;
         if (q > 0) {
-          final pid = r['product_id'] as int?;
-          final key = pid == null ? null : '$pid|$s';
-          final extra = (key != null) ? _extrasByKey[key] : null;
-
           out.add({
             ...r,
-            if (extra != null) ...extra, // champs item optionnels
             'status': s,
             'qty_status': q,
           });
         }
       }
     }
-    // filtre statut actif
-    // filtre actif : accepte soit un statut unitaire, soit un id de groupe
+    // filtre statut actif : accepte un statut ou un id de groupe
     if ((_statusFilter ?? '').isNotEmpty) {
       final f = _statusFilter!;
       final grouped = kGroupToStatuses[f];
       if (grouped != null) {
-        // filtre par groupe (ex: 'purchase' => ordered,in_transit,paid,received)
         return out
             .where((e) => grouped.contains(e['status'] as String))
             .toList();
       } else {
-        // filtre par statut unitaire
         return out.where((e) => e['status'] == f).toList();
       }
     }
@@ -263,7 +211,7 @@ class _MainInventoryPageState extends State<MainInventoryPage> {
       return;
     }
 
-    // l'échantillon (valeurs actuelles) est déjà fusionné dans "line" via _extrasByKey
+    // Les champs optionnels sont déjà présents dans "line" (fournis par la vue stricte)
     final changed = await EditItemsDialog.show(
       context,
       productId: productId,
@@ -275,6 +223,9 @@ class _MainInventoryPageState extends State<MainInventoryPage> {
     if (changed == true) {
       _refresh();
     }
+    // Note : si, côté édition, tu dois identifier un groupe strictement,
+    // il faudra éventuellement transmettre toutes les clés de regroupement
+    // (ex: product_id, game_id, type, language, purchase_date, supplier_name, etc.)
   }
 
   @override
@@ -355,7 +306,7 @@ class _MainInventoryPageState extends State<MainInventoryPage> {
                 InventoryTableByStatus(
                   lines: lines,
                   onOpen: _openDetails,
-                  onEdit: _openEdit, // <— AJOUT : ouvre le dialog d’édition
+                  onEdit: _openEdit,
                 ),
                 const SizedBox(height: 48),
               ],

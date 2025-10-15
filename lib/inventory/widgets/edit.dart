@@ -2,7 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'storage_upload_tile.dart';
 
-/// Dialog d'édition en masse d'un groupe (product_id + status)
+/// Dialog d'édition en masse d'UN groupe strict (la ligne cliquée)
+/// - N'édite QUE les items correspondant exactement à la ligne (toutes clés identiques, NULL = NULL) + le statut courant
 /// - Permet de choisir la quantité à modifier (1..availableQty)
 /// - Permet de cocher les champs à mettre à jour et saisir les valeurs
 /// - Applique les modifs aux N items sélectionnés (par défaut: plus anciens id)
@@ -12,7 +13,7 @@ class EditItemsDialog extends StatefulWidget {
     required this.productId,
     required this.status,
     required this.availableQty,
-    required this.initialSample, // échantillon d'item pour pré-remplir (peut être vide)
+    required this.initialSample, // la "ligne" cliquée (contient les clés du groupe)
   });
 
   final int productId;
@@ -39,11 +40,9 @@ class EditItemsDialog extends StatefulWidget {
           child: ConstrainedBox(
             constraints: BoxConstraints(maxWidth: 880, maxHeight: maxH),
             child: SingleChildScrollView(
-              // << scroll vertical si trop haut
               padding: EdgeInsets.zero,
               child: ConstrainedBox(
                 constraints: BoxConstraints(
-                  // garantit que le contenu occupe au moins une hauteur pour activer le scroll
                   minHeight: mq.size.height * 0.5,
                   maxWidth: maxW,
                 ),
@@ -125,7 +124,7 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
   void initState() {
     super.initState();
     _countToEdit = widget.availableQty.clamp(1, 999999);
-    // Pré-remplissage à partir de l'échantillon (si dispo)
+    // Pré-remplissage à partir de l'échantillon (la ligne cliquée)
     final s = widget.initialSample ?? const {};
     _newStatus = widget.status;
     _gradeIdCtrl.text = (s['grade_id'] ?? '').toString();
@@ -142,15 +141,13 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
     _documentUrlCtrl.text = (s['document_url'] ?? '').toString();
   }
 
-  String _numToText(dynamic v) =>
-      v == null ? '' : (v is num ? v.toString() : v.toString());
+  String _numToText(dynamic v) => v == null ? '' : v.toString();
   String _numToIntText(dynamic v) =>
       v == null ? '' : (v is num ? v.toInt().toString() : v.toString());
   DateTime? _parseDate(dynamic v) {
     if (v == null) return null;
     try {
       final s = v.toString();
-      // IMPORTANT: utiliser ${s} pour éviter que "T00" soit interprété comme partie du nom
       return DateTime.tryParse(s.length > 10 ? s : '${s}T00:00:00');
     } catch (_) {
       return null;
@@ -252,20 +249,57 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
 
     setState(() => _saving = true);
     try {
-      // 1) récupérer les IDs des items à modifier
-      final idsQuery = _sb
-          .from('item')
-          .select('id')
-          .eq('product_id', widget.productId)
-          .eq('status', widget.status)
+      final sample = (widget.initialSample ?? {})
+        ..putIfAbsent('product_id', () => widget.productId);
+
+      // 1) récupérer les IDs des items à modifier — Filtres d'abord
+      //    Important: NE PAS appeler order()/limit() avant eq()/filter()
+      PostgrestFilterBuilder idsQuery = _sb.from('item').select('id');
+
+      // clés suffisantes pour isoler la ligne (ajoute-en si besoin)
+      const keys = <String>{
+        'product_id',
+        'game_id',
+        'type',
+        'language',
+        'purchase_date',
+        'currency',
+        'supplier_name',
+        'buyer_company',
+        'notes',
+        'grade_id',
+        'sale_date',
+        'sale_price',
+        'tracking',
+        'photo_url',
+        'document_url',
+        'item_location',
+        'channel_id',
+        // 'unit_cost', 'unit_fees', ... si tu veux encore plus strict
+      };
+
+      for (final k in keys) {
+        if (!sample.containsKey(k)) continue;
+        final v = sample[k];
+        if (v == null) {
+          idsQuery = idsQuery.filter(k, 'is', null); // NULL = NULL
+        } else {
+          idsQuery = idsQuery.eq(k, v);
+        }
+      }
+
+      // statut exactement celui de la ligne cliquée
+      idsQuery = idsQuery.eq('status', widget.status);
+
+      // ➜ Puis seulement maintenant: order + limit
+      final List<dynamic> idsRaw = await idsQuery
           .order('id', ascending: _oldestFirst)
           .limit(_countToEdit);
 
-      final List<dynamic> idsRaw = await idsQuery;
       final ids = idsRaw.map((e) => (e as Map)['id']).whereType<int>().toList();
 
       if (ids.isEmpty) {
-        _snack("Aucun item trouvé à mettre à jour.");
+        _snack("Aucun item trouvé à mettre à jour pour CETTE ligne.");
         return;
       }
 
@@ -273,10 +307,11 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
       await _sb
           .from('item')
           .update(updates)
-          .filter('id', 'in', '(${ids.join(",")})'); // compatible partout
+          .filter('id', 'in', '(${ids.join(",")})');
 
       if (mounted) {
-        _snack('Mise à jour effectuée (${ids.length} items).');
+        _snack(
+            'Mise à jour effectuée (${ids.length} item(s)) sur la ligne sélectionnée.');
         Navigator.pop(context, true);
       }
     } on PostgrestException catch (e) {
@@ -294,7 +329,7 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
     messenger?.showSnackBar(SnackBar(content: Text(m)));
   }
 
-  // ====== AJOUT : popup d'erreur d'upload (nom de fichier invalide, etc.) ======
+  // ====== popup d'erreur d'upload (nom de fichier invalide, etc.) ======
   void _showUploadError(String message) {
     showDialog<void>(
       context: context,
@@ -306,9 +341,8 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text('OK'),
-          ),
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('OK')),
         ],
       ),
     );
@@ -347,7 +381,7 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
         {bool decimal = true}) {
       return TextField(
         controller: c,
-        keyboardType: TextInputType.numberWithOptions(decimal: decimal),
+        keyboardType: const TextInputType.numberWithOptions(decimal: true),
         decoration: InputDecoration(hintText: hint),
       );
     }
@@ -373,6 +407,9 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
       ),
     );
 
+    final countController =
+        TextEditingController(text: _countToEdit.toString());
+
     final general = Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16),
       child: Column(
@@ -394,16 +431,17 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
                             : widget.availableQty - 1,
                         value: _countToEdit.toDouble(),
                         label: '$_countToEdit',
-                        onChanged: (v) => setState(() => _countToEdit =
-                            v.round().clamp(1, widget.availableQty)),
+                        onChanged: (v) => setState(
+                          () => _countToEdit =
+                              v.round().clamp(1, widget.availableQty),
+                        ),
                       ),
                     ),
                     const SizedBox(width: 8),
                     SizedBox(
-                      width: 56,
+                      width: 64,
                       child: TextField(
-                        controller: TextEditingController(
-                            text: _countToEdit.toString()),
+                        controller: countController,
                         onChanged: (t) {
                           final n = int.tryParse(t) ?? _countToEdit;
                           setState(() =>
@@ -434,7 +472,8 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
             onChanged: (v) => setState(() => incStatus = v ?? false),
             label: 'Status',
             field: DropdownButtonFormField<String>(
-              initialValue: _newStatus.isNotEmpty ? _newStatus : widget.status,
+              initialValue:
+                  (_newStatus.isNotEmpty ? _newStatus : widget.status),
               items: kAllStatuses
                   .map((s) => DropdownMenuItem(value: s, child: Text(s)))
                   .toList(),
@@ -538,8 +577,7 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
                 value: incChannelId,
                 onChanged: (v) => setState(() => incChannelId = v ?? false),
                 label: 'Endroit de vente (Channel ID)',
-                field: numberField(_channelIdCtrl, 'ex: Ebay, CardMarket...',
-                    decimal: false),
+                field: numberField(_channelIdCtrl, 'ex: 12', decimal: false),
               ),
             ),
             const SizedBox(width: 12),
@@ -595,10 +633,9 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
                   Row(
                     children: [
                       Checkbox(
-                        value: incPhotoUrl,
-                        onChanged: (v) =>
-                            setState(() => incPhotoUrl = v ?? false),
-                      ),
+                          value: incPhotoUrl,
+                          onChanged: (v) =>
+                              setState(() => incPhotoUrl = v ?? false)),
                       const SizedBox(width: 6),
                       Text('Photo',
                           style: Theme.of(context).textTheme.labelLarge),
@@ -612,7 +649,7 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
                         _photoUrlCtrl.text.isEmpty ? null : _photoUrlCtrl.text,
                     onUrlChanged: (u) => _photoUrlCtrl.text = u ?? '',
                     acceptImagesOnly: true,
-                    onError: (err) => _showUploadError(err), // <-- AJOUT
+                    onError: (err) => _showUploadError(err),
                   ),
                 ],
               ),
@@ -625,10 +662,9 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
                   Row(
                     children: [
                       Checkbox(
-                        value: incDocumentUrl,
-                        onChanged: (v) =>
-                            setState(() => incDocumentUrl = v ?? false),
-                      ),
+                          value: incDocumentUrl,
+                          onChanged: (v) =>
+                              setState(() => incDocumentUrl = v ?? false)),
                       const SizedBox(width: 6),
                       Text('Document',
                           style: Theme.of(context).textTheme.labelLarge),
@@ -643,7 +679,7 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
                         : _documentUrlCtrl.text,
                     onUrlChanged: (u) => _documentUrlCtrl.text = u ?? '',
                     acceptDocsOnly: true,
-                    onError: (err) => _showUploadError(err), // <-- AJOUT
+                    onError: (err) => _showUploadError(err),
                   ),
                 ],
               ),
