@@ -1,5 +1,21 @@
 import 'package:flutter/material.dart';
 
+/// Mapping groupes -> libellé lisible
+const Map<String, String> kGroupPrettyLabel = {
+  'all': 'Tous',
+  'purchase': 'Achat',
+  'grading': 'Gradation',
+  'sale': 'Vente',
+  'collection': 'Collection',
+};
+
+/// Mise en forme simple d’un statut unitaire: "sent_to_grader" -> "Sent to grader"
+String prettyStatus(String raw) {
+  if (raw.isEmpty) return raw;
+  final s = raw.replaceAll('_', ' ');
+  return s.substring(0, 1).toUpperCase() + s.substring(1);
+}
+
 class SearchAndGameFilter extends StatelessWidget {
   const SearchAndGameFilter({
     super.key,
@@ -108,6 +124,11 @@ class ActiveStatusFilterBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (statusFilter == null) return const SizedBox.shrink();
+
+    // Joli libellé : groupe → label FR ; sinon statut "human readable"
+    final raw = statusFilter!;
+    final label = kGroupPrettyLabel[raw] ?? prettyStatus(raw);
+
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12),
       child: Wrap(
@@ -115,7 +136,7 @@ class ActiveStatusFilterBar extends StatelessWidget {
         children: [
           Chip(
             avatar: const Icon(Icons.filter_alt, size: 18),
-            label: Text('Filtre statut: $statusFilter ($linesCount lignes)'),
+            label: Text('Filtre actif : $label  ($linesCount lignes)'),
             onDeleted: onClear,
           ),
         ],

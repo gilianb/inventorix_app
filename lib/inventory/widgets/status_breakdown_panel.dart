@@ -1,3 +1,5 @@
+// ignore_for_file: deprecated_member_use
+
 import 'package:flutter/material.dart';
 import '../utils/status_utils.dart';
 
@@ -11,86 +13,211 @@ class StatusBreakdownPanel extends StatelessWidget {
     required this.onTapStatus,
   });
 
-  /// Contrôle l’ExpansionTile
   final bool expanded;
   final ValueChanged<bool> onToggle;
-
-  /// Lignes “groupées” brutes (issues de v_items_grouped)
   final List<Map<String, dynamic>> groupRows;
-
-  /// Filtre statut actif
   final String? currentFilter;
-
-  /// Tap sur un statut
   final ValueChanged<String> onTapStatus;
+
+  static const List<String> _purchase = [
+    'ordered',
+    'in_transit',
+    'paid',
+    'received'
+  ];
+  static const List<String> _grading = [
+    'sent_to_grader',
+    'at_grader',
+    'graded'
+  ];
+  static const List<String> _sale = ['listed', 'sold', 'shipped', 'finalized'];
+  static const String _collection = 'collection';
+
+  static const Map<String, String> _groupLabels = {
+    'all': 'All',
+    'purchase': 'Achat',
+    'grading': 'Gradation',
+    'sale': 'Vente',
+    'collection': 'Collection',
+  };
 
   @override
   Widget build(BuildContext context) {
+    // Totaux par statut (inclut 'collection')
     final totals = <String, int>{for (final s in kStatusOrder) s: 0};
-    int collection = 0;
 
     for (final r in groupRows) {
       for (final s in kStatusOrder) {
         final key = 'qty_$s';
-        totals[s] = totals[s]! + ((r[key] as int?) ?? 0);
+        totals[s] = (totals[s] ?? 0) + ((r[key] as int?) ?? 0);
       }
-      collection += (r['qty_collection'] as int?) ?? 0;
     }
-    final grand = totals.values.fold<int>(0, (p, n) => p + n);
-    if (grand == 0) return const SizedBox.shrink();
 
-    Widget miniBar(String label, int value, double fraction, bool selected,
-        Color color, VoidCallback onTap) {
+    int sumOf(Iterable<String> keys) =>
+        keys.fold(0, (p, s) => p + (totals[s] ?? 0));
+    final purchaseTotal = sumOf(_purchase);
+    final gradingTotal = sumOf(_grading);
+    final saleTotal = sumOf(_sale);
+    final collectionTotal = totals[_collection] ?? 0;
+    final allTotal = purchaseTotal + gradingTotal + saleTotal + collectionTotal;
+
+    if (allTotal == 0) return const SizedBox.shrink();
+
+    Widget groupHeader({
+      required String id,
+      required String label,
+      required int count,
+      required bool selected,
+      required VoidCallback onTap,
+    }) {
       final cs = Theme.of(context).colorScheme;
       return InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(8),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+        borderRadius: BorderRadius.circular(12),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(
+            color:
+                selected ? cs.secondaryContainer : cs.surfaceContainerHighest,
+            borderRadius: BorderRadius.circular(12),
+            border:
+                Border.all(color: selected ? cs.secondary : cs.outlineVariant),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                label,
+                style: TextStyle(
+                  fontWeight: FontWeight.w600,
+                  color: selected ? cs.onSecondaryContainer : cs.onSurface,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                '$count',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: selected
+                      // ignore: duplicate_ignore
+                      // ignore: deprecated_member_use
+                      ? cs.onSecondaryContainer.withOpacity(0.9)
+                      : cs.onSurfaceVariant,
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    Widget statusPill({
+      required String status,
+      required int count,
+      required bool selected,
+      required VoidCallback onTap,
+    }) {
+      final color = statusColor(context, status);
+      final cs = Theme.of(context).colorScheme;
+      final bg = color.withOpacity(selected ? 0.35 : 0.18);
+      final border = color.withOpacity(0.60);
+      final textColor = cs.onSurface;
+
+      return InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(999),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+          decoration: BoxDecoration(
+            color: bg,
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(color: border),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                status,
+                style: TextStyle(
+                  fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                  color: textColor,
+                ),
+              ),
+              const SizedBox(width: 6),
+              Text(
+                '$count',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: textColor.withOpacity(0.85),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    Widget subStatusOneLine(List<Widget> children) {
+      return SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.only(top: 8),
+        child: Row(
           children: [
-            Row(children: [
-              Expanded(
-                  child: Text(label,
-                      style: TextStyle(
-                          fontWeight:
-                              selected ? FontWeight.w600 : FontWeight.normal))),
-              Text('$value'),
-            ]),
-            const SizedBox(height: 4),
-            LayoutBuilder(builder: (ctx, c) {
-              return Container(
-                height: 8,
-                width: c.maxWidth,
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(999),
-                  color: cs.surfaceContainerHighest,
-                ),
-                child: Align(
-                  alignment: Alignment.centerLeft,
-                  child: FractionallySizedBox(
-                    widthFactor: fraction.clamp(0, 1),
-                    child: Container(
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(999),
-                        color: selected ? cs.secondary : color,
-                      ),
-                    ),
-                  ),
-                ),
-              );
-            }),
+            for (int i = 0; i < children.length; i++) ...[
+              if (i > 0) const SizedBox(width: 8),
+              children[i],
+            ],
           ],
         ),
       );
     }
 
-    Widget legendChip(String s) => Chip(
-          label: Text(s),
-          // ignore: deprecated_member_use
-          backgroundColor: statusColor(context, s).withOpacity(0.15),
-          // ignore: deprecated_member_use
-          side: BorderSide(color: statusColor(context, s).withOpacity(0.6)),
-        );
+    Widget categoryColumn({
+      required String id,
+      required String label,
+      required int total,
+      required List<String> statuses,
+    }) {
+      final selected = currentFilter == id;
+
+      return Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.center, // << centre le contenu
+        children: [
+          // Header centré (il ne prend que sa largeur intrinsèque)
+          Align(
+            alignment: Alignment.center,
+            child: groupHeader(
+              id: id,
+              label: label,
+              count: total,
+              selected: selected,
+              onTap: () => onTapStatus(id),
+            ),
+          ),
+          if (statuses.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            // Centre la ligne de sous-statuts même si subStatusOneLine étire en largeur
+            Align(
+              alignment: Alignment.center,
+              child: subStatusOneLine(
+                statuses.map((s) {
+                  final sel = currentFilter == s;
+                  return statusPill(
+                    status: s,
+                    count: totals[s] ?? 0,
+                    selected: sel,
+                    onTap: () => onTapStatus(s),
+                  );
+                }).toList(),
+                // si ta fonction accepte un paramètre d’alignement, garde celui-ci;
+                // sinon, l’Align(ci-dessus) suffit à centrer le bloc.
+              ),
+            ),
+          ],
+        ],
+      );
+    }
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12),
@@ -99,35 +226,47 @@ class StatusBreakdownPanel extends StatelessWidget {
         child: ExpansionTile(
           initiallyExpanded: expanded,
           onExpansionChanged: onToggle,
-          title: Text('Répartition globale par statut',
-              style: Theme.of(context).textTheme.titleMedium),
+          title: Text(
+            'Status List',
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
           childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
           children: [
-            const SizedBox(height: 8),
-            ...kStatusOrder.map((s) {
-              final v = totals[s]!;
-              final pct = grand == 0 ? 0.0 : v / grand;
-              final sel = currentFilter == s;
-              return Padding(
-                padding: const EdgeInsets.symmetric(vertical: 4),
-                child: miniBar(s, v, pct, sel, statusColor(context, s),
-                    () => onTapStatus(s)),
-              );
-            }),
-            const SizedBox(height: 8),
-            // info collection (pas cliquable)
-            miniBar(
-                'collection',
-                collection,
-                grand == 0 ? 0 : collection / grand,
-                false,
-                Colors.brown,
-                () {}),
-            const SizedBox(height: 8),
-            Wrap(
-                spacing: 6,
-                runSpacing: 6,
-                children: kStatusOrder.map(legendChip).toList()),
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  categoryColumn(
+                    id: 'purchase',
+                    label: _groupLabels['purchase']!,
+                    total: purchaseTotal,
+                    statuses: _purchase,
+                  ),
+                  const SizedBox(width: 24),
+                  categoryColumn(
+                    id: 'grading',
+                    label: _groupLabels['grading']!,
+                    total: gradingTotal,
+                    statuses: _grading,
+                  ),
+                  const SizedBox(width: 24),
+                  categoryColumn(
+                    id: 'sale',
+                    label: _groupLabels['sale']!,
+                    total: saleTotal,
+                    statuses: _sale,
+                  ),
+                  const SizedBox(width: 24),
+                  categoryColumn(
+                    id: 'collection',
+                    label: _groupLabels['collection']!,
+                    total: collectionTotal,
+                    statuses: const [_collection],
+                  ),
+                ],
+              ),
+            ),
           ],
         ),
       ),

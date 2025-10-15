@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../inventory/widgets/storage_upload_tile.dart';
 
 class NewStockPage extends StatefulWidget {
   const NewStockPage({super.key});
@@ -33,8 +34,8 @@ class _NewStockPageState extends State<NewStockPage> {
   final _docUrlCtrl = TextEditingController();
   final _estimatedPriceCtrl = TextEditingController();
   final _notesCtrl = TextEditingController();
-  final _gradeCtrl = TextEditingController();
-  final _gradingSubmissionIdCtrl = TextEditingController();
+  final _gradeIdCtrl = TextEditingController();
+  final _itemLocationCtrl = TextEditingController();
 
   // Jeux
   List<Map<String, dynamic>> _games = const [];
@@ -43,10 +44,11 @@ class _NewStockPageState extends State<NewStockPage> {
   bool _saving = false;
 
   static const langs = ['EN', 'FR', 'JP'];
+
+  // Statuts cohérents (single / sealed) + 'collection'
   static const singleStatuses = [
     'ordered',
     'paid',
-    'in_transit',
     'received',
     'sent_to_grader',
     'at_grader',
@@ -54,15 +56,18 @@ class _NewStockPageState extends State<NewStockPage> {
     'listed',
     'sold',
     'shipped',
-    'finalized'
+    'finalized',
+    'collection',
   ];
   static const sealedStatuses = [
     'ordered',
     'paid',
     'received',
     'listed',
+    'sold',
     'shipped',
     'finalized',
+    'collection',
   ];
 
   @override
@@ -111,12 +116,6 @@ class _NewStockPageState extends State<NewStockPage> {
     return double.tryParse(s);
   }
 
-  int? _int(TextEditingController c) {
-    final s = c.text.trim();
-    if (s.isEmpty) return null;
-    return int.tryParse(s);
-  }
-
   Future<void> _save() async {
     if (!_formKey.currentState!.validate()) return;
 
@@ -158,12 +157,10 @@ class _NewStockPageState extends State<NewStockPage> {
         'p_qty': qty,
         'p_total_cost': totalCost,
         'p_fees': fees,
-        'p_init_status': _initStatus,
+        'p_init_status': _initStatus, // <- peut être 'collection'
       };
 
-      // Champs optionnels — ajoutés seulement s’ils sont renseignés.
-      // ⚠️ Assure-toi que ton fn_create_product_and_items attend bien ces clés,
-      // sinon retire les lignes qui posent souci.
+      // Champs optionnels
       if (_trackingCtrl.text.trim().isNotEmpty) {
         params['p_tracking'] = _trackingCtrl.text.trim();
       }
@@ -180,15 +177,47 @@ class _NewStockPageState extends State<NewStockPage> {
       if (_notesCtrl.text.trim().isNotEmpty) {
         params['p_notes'] = _notesCtrl.text.trim();
       }
-      if (_gradeCtrl.text.trim().isNotEmpty) {
-        params['p_grade'] = _gradeCtrl.text.trim();
+      if (_gradeIdCtrl.text.trim().isNotEmpty) {
+        params['p_grade_id'] = _gradeIdCtrl.text.trim(); // <- rename
       }
-      final subId = _int(_gradingSubmissionIdCtrl);
-      if (subId != null) {
-        params['p_grading_submission_id'] = subId;
+      if (_itemLocationCtrl.text.trim().isNotEmpty) {
+        params['p_item_location'] = _itemLocationCtrl.text.trim(); // <- new
       }
 
-      await _sb.rpc('fn_create_product_and_items', params: params);
+      await _sb.rpc('fn_create_product_and_items', params: {
+        'p_type': _type,
+        'p_name': _nameCtrl.text.trim(),
+        'p_language': _lang,
+        'p_game_id': _selectedGameId,
+        'p_supplier_name': _supplierNameCtrl.text.trim(),
+        'p_buyer_company': _buyerCompanyCtrl.text.trim().isEmpty
+            ? null
+            : _buyerCompanyCtrl.text.trim(),
+        'p_purchase_date': _purchaseDate.toIso8601String().substring(0, 10),
+        'p_currency': 'USD',
+        'p_qty': qty,
+        'p_total_cost': totalCost,
+        'p_fees': fees,
+        'p_init_status': _initStatus, // peut être 'collection'
+        'p_channel_id': null, // ou un int
+        'p_tracking': _trackingCtrl.text.trim().isNotEmpty
+            ? _trackingCtrl.text.trim()
+            : null,
+        'p_photo_url': _photoUrlCtrl.text.trim().isNotEmpty
+            ? _photoUrlCtrl.text.trim()
+            : null,
+        'p_document_url':
+            _docUrlCtrl.text.trim().isNotEmpty ? _docUrlCtrl.text.trim() : null,
+        'p_estimated_price': estPrice,
+        'p_notes':
+            _notesCtrl.text.trim().isNotEmpty ? _notesCtrl.text.trim() : null,
+        'p_grade_id': _gradeIdCtrl.text.trim().isNotEmpty
+            ? _gradeIdCtrl.text.trim()
+            : null,
+        'p_item_location': _itemLocationCtrl.text.trim().isNotEmpty
+            ? _itemLocationCtrl.text.trim()
+            : null,
+      });
 
       _snack('Stock créé ($qty items)');
       if (mounted) Navigator.pop(context, true);
@@ -215,8 +244,8 @@ class _NewStockPageState extends State<NewStockPage> {
     _photoUrlCtrl.dispose();
     _docUrlCtrl.dispose();
     _estimatedPriceCtrl.dispose();
-    _gradeCtrl.dispose();
-    _gradingSubmissionIdCtrl.dispose();
+    _gradeIdCtrl.dispose();
+    _itemLocationCtrl.dispose();
     super.dispose();
   }
 
@@ -364,7 +393,6 @@ class _NewStockPageState extends State<NewStockPage> {
                           child: DropdownButtonFormField<String>(
                             initialValue: statusValue,
                             items: statuses
-                                .toSet()
                                 .map((s) =>
                                     DropdownMenuItem(value: s, child: Text(s)))
                                 .toList(),
@@ -403,7 +431,7 @@ class _NewStockPageState extends State<NewStockPage> {
 
                 const SizedBox(height: 12),
 
-                // Lien “Plus d’options”
+                // Plus d’options
                 Align(
                   alignment: Alignment.centerLeft,
                   child: TextButton.icon(
@@ -433,9 +461,9 @@ class _NewStockPageState extends State<NewStockPage> {
                           const SizedBox(width: 12),
                           Expanded(
                             child: TextFormField(
-                              controller: _gradeCtrl,
-                              decoration:
-                                  const InputDecoration(labelText: 'Grade'),
+                              controller: _gradeIdCtrl,
+                              decoration: const InputDecoration(
+                                  labelText: 'Grading ID'),
                             ),
                           ),
                         ]),
@@ -443,32 +471,42 @@ class _NewStockPageState extends State<NewStockPage> {
                         Row(children: [
                           Expanded(
                             child: TextFormField(
-                              controller: _gradingSubmissionIdCtrl,
-                              keyboardType: TextInputType.number,
+                              controller: _itemLocationCtrl,
                               decoration: const InputDecoration(
-                                  labelText: 'Grading submission ID'),
+                                  labelText: "Item Location"),
                             ),
                           ),
                           const SizedBox(width: 12),
                           Expanded(
                             child: TextFormField(
                               controller: _trackingCtrl,
-                              decoration:
-                                  const InputDecoration(labelText: 'Tracking'),
+                              decoration: const InputDecoration(
+                                  labelText: 'Tracking Number'),
                             ),
                           ),
                         ]),
                         const SizedBox(height: 8),
-                        TextFormField(
-                          controller: _photoUrlCtrl,
-                          decoration:
-                              const InputDecoration(labelText: 'Photo URL'),
+                        StorageUploadTile(
+                          label: 'Photo',
+                          bucket: 'item-photos',
+                          objectPrefix:
+                              'items', // tu peux mettre 'items/${_selectedGameId ?? "gen"}'
+                          initialUrl: _photoUrlCtrl.text.isEmpty
+                              ? null
+                              : _photoUrlCtrl.text,
+                          onUrlChanged: (u) => _photoUrlCtrl.text = u ?? '',
+                          acceptImagesOnly: true,
                         ),
                         const SizedBox(height: 8),
-                        TextFormField(
-                          controller: _docUrlCtrl,
-                          decoration:
-                              const InputDecoration(labelText: 'Document URL'),
+                        StorageUploadTile(
+                          label: 'Document',
+                          bucket: 'item-docs',
+                          objectPrefix: 'items',
+                          initialUrl: _docUrlCtrl.text.isEmpty
+                              ? null
+                              : _docUrlCtrl.text,
+                          onUrlChanged: (u) => _docUrlCtrl.text = u ?? '',
+                          acceptDocsOnly: true,
                         ),
                         const SizedBox(height: 8),
                         TextFormField(
