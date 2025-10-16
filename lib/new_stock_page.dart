@@ -38,6 +38,12 @@ class _NewStockPageState extends State<NewStockPage> {
   final _gradeIdCtrl = TextEditingController();
   final _itemLocationCtrl = TextEditingController();
 
+  // --- NOUVEAUX CHAMPS vente/frais ---
+  final _shippingFeesCtrl = TextEditingController();
+  final _commissionFeesCtrl = TextEditingController();
+  final _paymentTypeCtrl = TextEditingController();
+  final _buyerInfosCtrl = TextEditingController();
+
   // Jeux
   List<Map<String, dynamic>> _games = const [];
   int? _selectedGameId;
@@ -55,6 +61,7 @@ class _NewStockPageState extends State<NewStockPage> {
     'at_grader',
     'graded',
     'listed',
+    'awaiting_payment', // ⬅️ AJOUT
     'sold',
     'shipped',
     'finalized',
@@ -65,6 +72,7 @@ class _NewStockPageState extends State<NewStockPage> {
     'paid',
     'received',
     'listed',
+    'awaiting_payment', // ⬅️ AJOUT
     'sold',
     'shipped',
     'finalized',
@@ -198,6 +206,21 @@ class _NewStockPageState extends State<NewStockPage> {
         'p_item_location': _itemLocationCtrl.text.trim().isNotEmpty
             ? _itemLocationCtrl.text.trim()
             : null,
+
+        'p_shipping_fees': (_shippingFeesCtrl.text.trim().isEmpty)
+            ? null
+            : double.tryParse(
+                _shippingFeesCtrl.text.trim().replaceAll(',', '.')),
+        'p_commission_fees': (_commissionFeesCtrl.text.trim().isEmpty)
+            ? null
+            : double.tryParse(
+                _commissionFeesCtrl.text.trim().replaceAll(',', '.')),
+        'p_payment_type': _paymentTypeCtrl.text.trim().isEmpty
+            ? null
+            : _paymentTypeCtrl.text.trim(),
+        'p_buyer_infos': _buyerInfosCtrl.text.trim().isEmpty
+            ? null
+            : _buyerInfosCtrl.text.trim(),
       });
 
       _snack('Stock créé ($qty items)');
@@ -227,6 +250,12 @@ class _NewStockPageState extends State<NewStockPage> {
     _estimatedPriceCtrl.dispose();
     _gradeIdCtrl.dispose();
     _itemLocationCtrl.dispose();
+
+    _shippingFeesCtrl.dispose();
+    _commissionFeesCtrl.dispose();
+    _paymentTypeCtrl.dispose();
+    _buyerInfosCtrl.dispose();
+
     super.dispose();
   }
 
@@ -508,6 +537,48 @@ class _NewStockPageState extends State<NewStockPage> {
                           maxLines: 5,
                           decoration: const InputDecoration(labelText: 'Notes'),
                         ),
+                        const SizedBox(height: 8),
+                        Row(children: [
+                          Expanded(
+                            child: TextFormField(
+                              controller: _shippingFeesCtrl,
+                              keyboardType:
+                                  const TextInputType.numberWithOptions(
+                                      decimal: true),
+                              decoration: const InputDecoration(
+                                  labelText: 'Frais d\'expédition (USD)'),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: TextFormField(
+                              controller: _commissionFeesCtrl,
+                              keyboardType:
+                                  const TextInputType.numberWithOptions(
+                                      decimal: true),
+                              decoration: const InputDecoration(
+                                  labelText: 'Frais de commission (USD)'),
+                            ),
+                          ),
+                        ]),
+                        const SizedBox(height: 8),
+                        Row(children: [
+                          Expanded(
+                            child: TextFormField(
+                              controller: _paymentTypeCtrl,
+                              decoration: const InputDecoration(
+                                  labelText: 'Type de paiement'),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: TextFormField(
+                              controller: _buyerInfosCtrl,
+                              decoration: const InputDecoration(
+                                  labelText: 'Infos acheteur'),
+                            ),
+                          ),
+                        ]),
                       ],
                     ),
                   ),

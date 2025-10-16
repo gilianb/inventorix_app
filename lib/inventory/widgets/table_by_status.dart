@@ -11,7 +11,7 @@ class InventoryTableByStatus extends StatelessWidget {
     required this.lines,
     required this.onOpen,
     this.onEdit, // bouton éditer
-    this.onDelete, // ➜ NOUVEAU : bouton supprimer
+    this.onDelete, // bouton supprimer
   });
 
   /// Lignes déjà agrégées par statut :
@@ -19,11 +19,11 @@ class InventoryTableByStatus extends StatelessWidget {
   /// - status (String), qty_status (int)
   /// - total_cost_with_fees, qty_total  (pour calculer le coût total du statut)
   /// - + opt : estimated_price, supplier_name, buyer_company, notes, grade_id,
-  ///           sale_date, sale_price, tracking, photo_url, document_url
+  ///           sale_date, sale_price, tracking, photo_url, document_url, item_location
   final List<Map<String, dynamic>> lines;
   final void Function(Map<String, dynamic>) onOpen;
   final void Function(Map<String, dynamic>)? onEdit;
-  final void Function(Map<String, dynamic>)? onDelete; // ➜ callback suppression
+  final void Function(Map<String, dynamic>)? onDelete;
 
   String _txt(dynamic v) =>
       (v == null || (v is String && v.trim().isEmpty)) ? '—' : v.toString();
@@ -50,11 +50,17 @@ class InventoryTableByStatus extends StatelessWidget {
         color: lineColor,
         onSelectChanged: (_) => onOpen(r),
         cells: [
-          // === 1ère cellule: bouton Edit ===
+          // 1) Edit
           DataCell(IconButton(
             tooltip: 'Éditer ce listing',
             icon: const Icon(Icons.edit),
             onPressed: onEdit == null ? null : () => onEdit!(r),
+          )),
+
+          // 2) Photo (déplacé ici, juste après Edit)
+          DataCell(_FileCell(
+            url: r['photo_url']?.toString(),
+            isImagePreferred: true,
           )),
 
           // Colonnes principales
@@ -70,26 +76,33 @@ class InventoryTableByStatus extends StatelessWidget {
               side: BorderSide(color: statusColor(context, s).withOpacity(0.6)),
             ),
           ),
+
           // Prix / unité & Prix (Qté×u)
           DataCell(Text('${money(unit)} ${r['currency'] ?? 'USD'}')),
           DataCell(Text('${money(sumUnitTotal)} ${r['currency'] ?? 'USD'}')),
 
-          // Estimated price /u. (optionnel)
+          // Estimated price /u.
           DataCell(Text(
-              est == null ? '—' : '${money(est)} ${r['currency'] ?? 'USD'}')),
+            est == null ? '—' : '${money(est)} ${r['currency'] ?? 'USD'}',
+          )),
 
-          // Champs additionnels (échantillon item)
+          // Nouveaux / additionnels
           DataCell(Text(_txt(r['supplier_name']))),
           DataCell(Text(_txt(r['buyer_company']))),
+
+          // ======== NOUVELLE COLONNE ========
+          DataCell(Text(_txt(r['item_location']))), // <= Item location
+          // ==================================
+
           DataCell(Text(_txt(r['grade_id']))),
           DataCell(Text(_txt(r['sale_date']))),
           DataCell(Text(_txt(r['sale_price']))),
           DataCell(Text(_txt(r['tracking']))),
-          DataCell(_FileCell(
-              url: r['photo_url']?.toString(), isImagePreferred: true)),
+
+          // Doc (la Photo est désormais au début)
           DataCell(_FileCell(url: r['document_url']?.toString())),
 
-          // === Dernière cellule : bouton Delete (croix) ===
+          // Delete
           DataCell(IconButton(
             tooltip: 'Supprimer cette ligne',
             icon: const Icon(Icons.close),
@@ -105,7 +118,8 @@ class InventoryTableByStatus extends StatelessWidget {
       child: DataTable(
         showCheckboxColumn: false,
         columns: const [
-          DataColumn(label: Icon(Icons.edit)), // colonne edit
+          DataColumn(label: Icon(Icons.edit)), // 1) Edit
+          DataColumn(label: Text('Photo')), // 2) Photo (déplacée ici)
           DataColumn(label: Text('Produit')),
           DataColumn(label: Text('Langue')),
           DataColumn(label: Text('Jeu')),
@@ -117,13 +131,13 @@ class InventoryTableByStatus extends StatelessWidget {
           DataColumn(label: Text('Estimated /u.')),
           DataColumn(label: Text('Supplier')),
           DataColumn(label: Text('Buyer')),
+          DataColumn(label: Text('Item location')), // <= NOUVELLE COLONNE
           DataColumn(label: Text('Grade ID')),
           DataColumn(label: Text('Sale date')),
           DataColumn(label: Text('Sale price')),
           DataColumn(label: Text('Tracking')),
-          DataColumn(label: Text('Photo')),
           DataColumn(label: Text('Doc')),
-          DataColumn(label: Icon(Icons.close)), // ➜ colonne delete (croix)
+          DataColumn(label: Icon(Icons.close)), // Delete
         ],
         rows: lines.map(row).toList(),
       ),

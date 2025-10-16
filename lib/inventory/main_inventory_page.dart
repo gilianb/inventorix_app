@@ -24,7 +24,7 @@ const kAccentG = Color(0xFF22C55E); // green
 const Map<String, List<String>> kGroupToStatuses = {
   'purchase': ['ordered', 'in_transit', 'paid', 'received'],
   'grading': ['sent_to_grader', 'at_grader', 'graded'],
-  'sale': ['listed', 'sold', 'shipped', 'finalized'],
+  'sale': ['listed', 'awaiting_payment', 'sold', 'shipped', 'finalized'],
   'collection': ['collection'],
   'all': [
     'ordered',
@@ -35,6 +35,7 @@ const Map<String, List<String>> kGroupToStatuses = {
     'at_grader',
     'graded',
     'listed',
+    'awaiting_payment',
     'sold',
     'shipped',
     'finalized',
@@ -105,14 +106,16 @@ class _MainInventoryPageState extends State<MainInventoryPage> {
         'purchase_date, currency, '
         // champs homogènes
         'supplier_name, buyer_company, notes, grade_id, sale_date, sale_price, '
-        'tracking, photo_url, document_url, estimated_price, sum_estimated_price, item_location, channel_id, '
+        'tracking, photo_url, document_url, estimated_price, sum_estimated_price, item_location, channel_id,  '
+        'payment_type, buyer_infos, '
         // agrégats
         'qty_total, '
         'qty_ordered, qty_in_transit, qty_paid, qty_received, '
         'qty_sent_to_grader, qty_at_grader, qty_graded, '
-        'qty_listed, qty_sold, qty_shipped, qty_finalized, qty_collection, '
+        'qty_listed, qty_awaiting_payment, qty_sold, qty_shipped, qty_finalized, qty_collection, '
         // totaux coûts + KPI
-        'total_cost, total_cost_with_fees, realized_revenue';
+        'total_cost, total_cost_with_fees, realized_revenue,'
+        'sum_shipping_fees, sum_commission_fees';
 
     final List<dynamic> raw = await _sb
         .from('v_items_by_status')
@@ -184,9 +187,20 @@ class _MainInventoryPageState extends State<MainInventoryPage> {
   num _kpiInvestedFromLines(List<Map<String, dynamic>> lines) {
     num total = 0;
     for (final r in lines) {
-      final qtyTotal = (r['qty_total'] as int?) ?? 0;
+      final qtyTotal = (r['qty_total'] as num?) ?? 0;
       final totalWithFees = (r['total_cost_with_fees'] as num?) ?? 0;
-      final unit = qtyTotal > 0 ? (totalWithFees / qtyTotal) : 0;
+
+      // nouveaux agrégats (sur l’ensemble du groupe)
+      final sumShipping = (r['sum_shipping_fees'] as num?) ?? 0;
+      final sumCommission = (r['sum_commission_fees'] as num?) ?? 0;
+
+      // coût /u = (coût+fees achat)/u + shipping/u + commission/u
+      final perUnitBase = qtyTotal > 0 ? (totalWithFees / qtyTotal) : 0;
+      final perUnitShipping = qtyTotal > 0 ? (sumShipping / qtyTotal) : 0;
+      final perUnitCommission = qtyTotal > 0 ? (sumCommission / qtyTotal) : 0;
+
+      final unit = perUnitBase + perUnitShipping + perUnitCommission;
+
       final q = (r['qty_status'] as int?) ?? 0;
       total += unit * q;
     }

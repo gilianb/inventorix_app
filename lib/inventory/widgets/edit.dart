@@ -73,7 +73,7 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
   // appliquer sur les items les plus anciens (id ASC) ou récents (id DESC)
   bool _oldestFirst = true;
 
-  // champs éditables + "inclusion" (checkbox pour appliquer)
+  // ======= FLAGS d'inclusion =======
   bool incStatus = false;
   bool incGradeId = false;
   bool incEstimatedPrice = false;
@@ -88,7 +88,17 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
   bool incPhotoUrl = false;
   bool incDocumentUrl = false;
 
-  // contrôleurs
+  // Nouveaux champs
+  bool incType = false;
+  bool incProductName = false;
+  bool incLanguage = false;
+  bool incGameId = false;
+  bool incShippingFees = false;
+  bool incCommissionFees = false;
+  bool incPaymentType = false;
+  bool incBuyerInfos = false;
+
+  // ======= CONTRÔLEURS =======
   String _newStatus = '';
   final _gradeIdCtrl = TextEditingController();
   final _estimatedPriceCtrl = TextEditingController();
@@ -103,8 +113,22 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
   final _photoUrlCtrl = TextEditingController();
   final _documentUrlCtrl = TextEditingController();
 
+  // Nouveaux contrôleurs
+  String _newType = 'single'; // 'single' | 'sealed'
+  final _productNameCtrl = TextEditingController();
+  String _language = 'EN';
+  int? _gameId; // via dropdown
+  final _shippingFeesCtrl = TextEditingController();
+  final _commissionFeesCtrl = TextEditingController();
+  final _paymentTypeCtrl = TextEditingController();
+  final _buyerInfosCtrl = TextEditingController();
+
+  // Jeux pour dropdown
+  List<Map<String, dynamic>> _games = const [];
+
   bool _saving = false;
 
+  // Ajout du statut awaiting_payment
   static const List<String> kAllStatuses = [
     'ordered',
     'in_transit',
@@ -114,6 +138,7 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
     'at_grader',
     'graded',
     'listed',
+    'awaiting_payment', // ⬅︎ ajouté
     'sold',
     'shipped',
     'finalized',
@@ -122,6 +147,9 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
 
   static const Set<String> kSalePhase = {'sold', 'shipped', 'finalized'};
 
+  static const langs = ['EN', 'FR', 'JP'];
+  static const itemTypes = ['single', 'sealed'];
+
   @override
   void initState() {
     super.initState();
@@ -129,7 +157,9 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
     // Pré-remplissage à partir de l'échantillon (la ligne cliquée)
     final s = widget.initialSample ?? const {};
     _newStatus = widget.status;
+
     _gradeIdCtrl.text = (s['grade_id'] ?? '').toString();
+    // robustesse: si la vue renvoie null on met vide
     _estimatedPriceCtrl.text = _numToText(s['estimated_price']);
     _salePriceCtrl.text = _numToText(s['sale_price']);
     _saleDate = _parseDate(s['sale_date']);
@@ -141,6 +171,45 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
     _notesCtrl.text = (s['notes'] ?? '').toString();
     _photoUrlCtrl.text = (s['photo_url'] ?? '').toString();
     _documentUrlCtrl.text = (s['document_url'] ?? '').toString();
+
+    // Nouveaux champs
+    _newType = (s['type'] ?? 'single').toString().isEmpty
+        ? 'single'
+        : (s['type'] ?? 'single').toString();
+    _productNameCtrl.text = (s['product_name'] ?? '').toString();
+    _language = (s['language'] ?? 'EN').toString().isEmpty
+        ? 'EN'
+        : (s['language'] ?? 'EN').toString();
+    _gameId = _asInt(s['game_id']);
+    _shippingFeesCtrl.text = _numToText(s['shipping_fees']); // si exposé
+    _commissionFeesCtrl.text = _numToText(s['commission_fees']);
+    _paymentTypeCtrl.text = (s['payment_type'] ?? '').toString();
+    _buyerInfosCtrl.text = (s['buyer_infos'] ?? '').toString();
+
+    _loadGames();
+  }
+
+  Future<void> _loadGames() async {
+    try {
+      final raw =
+          await _sb.from('games').select('id, code, label').order('label');
+      setState(() {
+        _games = raw
+            .map<Map<String, dynamic>>(
+                (e) => Map<String, dynamic>.from(e as Map))
+            .toList();
+        // si pas de game défini, on prend le premier
+        _gameId ??= _games.isNotEmpty ? _games.first['id'] as int : null;
+      });
+    } catch (_) {
+      // silencieux
+    }
+  }
+
+  int? _asInt(dynamic v) {
+    if (v == null) return null;
+    if (v is int) return v;
+    return int.tryParse(v.toString());
   }
 
   String _numToText(dynamic v) => v == null ? '' : v.toString();
@@ -169,6 +238,12 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
     _notesCtrl.dispose();
     _photoUrlCtrl.dispose();
     _documentUrlCtrl.dispose();
+
+    _productNameCtrl.dispose();
+    _shippingFeesCtrl.dispose();
+    _commissionFeesCtrl.dispose();
+    _paymentTypeCtrl.dispose();
+    _buyerInfosCtrl.dispose();
     super.dispose();
   }
 
@@ -239,6 +314,27 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
           : _documentUrlCtrl.text.trim();
     }
 
+    // Nouveaux champs (items)
+    if (incType) baseUpdates['type'] = _newType;
+    if (incLanguage) baseUpdates['language'] = _language;
+    if (incGameId) baseUpdates['game_id'] = _gameId;
+    if (incShippingFees) {
+      baseUpdates['shipping_fees'] = _tryNum(_shippingFeesCtrl.text);
+    }
+    if (incCommissionFees) {
+      baseUpdates['commission_fees'] = _tryNum(_commissionFeesCtrl.text);
+    }
+    if (incPaymentType) {
+      baseUpdates['payment_type'] = _paymentTypeCtrl.text.trim().isEmpty
+          ? null
+          : _paymentTypeCtrl.text.trim();
+    }
+    if (incBuyerInfos) {
+      baseUpdates['buyer_infos'] = _buyerInfosCtrl.text.trim().isEmpty
+          ? null
+          : _buyerInfosCtrl.text.trim();
+    }
+
     // Champs de vente (appliqués UNIQUEMENT sur les IDs ciblés)
     final saleUpdates = <String, dynamic>{};
     if (incSalePrice) saleUpdates['sale_price'] = _tryNum(_salePriceCtrl.text);
@@ -250,7 +346,21 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
     String? newStatus;
     if (incStatus) newStatus = _newStatus;
 
-    if (baseUpdates.isEmpty && saleUpdates.isEmpty && newStatus == null) {
+    // Mise à jour du produit (name/type)
+    final productUpdates = <String, dynamic>{};
+    if (incProductName) {
+      final n = _productNameCtrl.text.trim();
+      productUpdates['name'] = n.isEmpty ? null : n;
+    }
+    if (incType) {
+      // aligner product.type sur item.type
+      productUpdates['type'] = _newType;
+    }
+
+    if (baseUpdates.isEmpty &&
+        saleUpdates.isEmpty &&
+        newStatus == null &&
+        productUpdates.isEmpty) {
       _snack('Sélectionne au moins un champ à modifier.');
       return;
     }
@@ -261,7 +371,6 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
         ..putIfAbsent('product_id', () => widget.productId);
 
       // === 2) Sélectionner exactement N IDs, strictement ===
-      //      (filtres -> status courant -> tri -> limit)
       PostgrestFilterBuilder idsQ = _sb.from('item').select('id');
 
       const keys = <String>{
@@ -283,6 +392,8 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
         'item_location',
         'channel_id',
         // 'unit_cost', 'unit_fees' si tu veux rendre encore plus strict
+        // NB: on n'utilise pas shipping/commission/payment/buyer_infos pour filtrer
+        // car ces champs peuvent être nouvellement ajoutés et souvent NULL.
       };
 
       for (final k in keys) {
@@ -309,7 +420,6 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
       }
 
       // === 3) Construire l'update final et l'appliquer UNIQUEMENT aux IDs ===
-      // On fusionne intelligemment :
       final updatePayload = <String, dynamic>{};
       updatePayload.addAll(baseUpdates);
 
@@ -317,19 +427,22 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
         updatePayload['status'] = newStatus;
       }
 
-      // N’écrire les champs de vente que si explicitement cochés
-      // ET (optionnel) si on part vers une phase de vente (sécurité UX)
       final goingToSale = newStatus != null && kSalePhase.contains(newStatus);
       if (saleUpdates.isNotEmpty && (goingToSale || !incStatus)) {
         updatePayload.addAll(saleUpdates);
       }
 
-      // Application STRICTE aux IDs choisis (typage -> pas de string '(1,2)')
-      final upd = _sb
-          .from('item')
-          .update(updatePayload)
-          .filter('id', 'in', '(${ids.join(",")})');
-      await upd;
+      // Application STRICTE aux IDs choisis (sans .in_(), on passe un IN string)
+      final idsCsv = '(${ids.join(",")})';
+      await _sb.from('item').update(updatePayload).filter('id', 'in', idsCsv);
+
+      // Mise à jour Product (si demandé)
+      if (productUpdates.isNotEmpty) {
+        await _sb
+            .from('product')
+            .update(productUpdates)
+            .eq('id', widget.productId);
+      }
 
       if (mounted) {
         _snack(
@@ -403,7 +516,7 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
         {bool decimal = true}) {
       return TextField(
         controller: c,
-        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+        keyboardType: TextInputType.numberWithOptions(decimal: decimal),
         decoration: InputDecoration(hintText: hint),
       );
     }
@@ -488,7 +601,78 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
             ),
           ]),
           const SizedBox(height: 8),
-          // STATUS
+
+          // ====== CHAMPS PRODUIT / ITEM DE TÊTE ======
+          Row(children: [
+            Expanded(
+              child: checkRow(
+                value: incProductName,
+                onChanged: (v) => setState(() => incProductName = v ?? false),
+                label: 'Product name',
+                field: TextField(
+                  controller: _productNameCtrl,
+                  decoration: const InputDecoration(hintText: 'Nom du produit'),
+                ),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: checkRow(
+                value: incType,
+                onChanged: (v) => setState(() => incType = v ?? false),
+                label: 'Type',
+                field: DropdownButtonFormField<String>(
+                  initialValue: _newType,
+                  items: itemTypes
+                      .map((t) => DropdownMenuItem(value: t, child: Text(t)))
+                      .toList(),
+                  onChanged: (v) => setState(() => _newType = v ?? 'single'),
+                  decoration: const InputDecoration(hintText: 'Type'),
+                ),
+              ),
+            ),
+          ]),
+          const SizedBox(height: 8),
+
+          Row(children: [
+            Expanded(
+              child: checkRow(
+                value: incLanguage,
+                onChanged: (v) => setState(() => incLanguage = v ?? false),
+                label: 'Language',
+                field: DropdownButtonFormField<String>(
+                  initialValue: _language,
+                  items: langs
+                      .map((l) => DropdownMenuItem(value: l, child: Text(l)))
+                      .toList(),
+                  onChanged: (v) => setState(() => _language = v ?? 'EN'),
+                  decoration: const InputDecoration(hintText: 'Langue'),
+                ),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: checkRow(
+                value: incGameId,
+                onChanged: (v) => setState(() => incGameId = v ?? false),
+                label: 'Jeu',
+                field: DropdownButtonFormField<int>(
+                  initialValue: _gameId,
+                  items: _games
+                      .map((g) => DropdownMenuItem<int>(
+                            value: g['id'] as int,
+                            child: Text(g['label'] as String),
+                          ))
+                      .toList(),
+                  onChanged: (v) => setState(() => _gameId = v),
+                  decoration: const InputDecoration(hintText: 'Game'),
+                ),
+              ),
+            ),
+          ]),
+          const SizedBox(height: 8),
+
+          // ====== STATUS ======
           checkRow(
             value: incStatus,
             onChanged: (v) => setState(() => incStatus = v ?? false),
@@ -504,7 +688,8 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
             ),
           ),
           const SizedBox(height: 8),
-          // LIGNE 1
+
+          // ====== LIGNE 1 ======
           Row(children: [
             Expanded(
               child: checkRow(
@@ -533,7 +718,8 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
             ),
           ]),
           const SizedBox(height: 8),
-          // LIGNE 2
+
+          // ====== LIGNE 2 ======
           Row(children: [
             Expanded(
               child: checkRow(
@@ -556,7 +742,8 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
             ),
           ]),
           const SizedBox(height: 8),
-          // LIGNE 3
+
+          // ====== LIGNE 3 ======
           Row(children: [
             Expanded(
               child: checkRow(
@@ -592,7 +779,8 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
             ),
           ]),
           const SizedBox(height: 8),
-          // LIGNE 4
+
+          // ====== LIGNE 4 ======
           Row(children: [
             Expanded(
               child: checkRow(
@@ -617,7 +805,8 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
             ),
           ]),
           const SizedBox(height: 8),
-          // LIGNE 5
+
+          // ====== LIGNE 5 ======
           Row(children: [
             Expanded(
               child: checkRow(
@@ -646,7 +835,64 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
             ),
           ]),
           const SizedBox(height: 8),
-          // LIGNE 6
+
+          // ====== LIGNE 6 (frais & paiements) ======
+          Row(children: [
+            Expanded(
+              child: checkRow(
+                value: incShippingFees,
+                onChanged: (v) => setState(() => incShippingFees = v ?? false),
+                label: 'Shipping fees (USD)',
+                field:
+                    numberField(_shippingFeesCtrl, 'ex: 12.50', decimal: true),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: checkRow(
+                value: incCommissionFees,
+                onChanged: (v) =>
+                    setState(() => incCommissionFees = v ?? false),
+                label: 'Commission fees (USD)',
+                field:
+                    numberField(_commissionFeesCtrl, 'ex: 5.90', decimal: true),
+              ),
+            ),
+          ]),
+          const SizedBox(height: 8),
+
+          Row(children: [
+            Expanded(
+              child: checkRow(
+                value: incPaymentType,
+                onChanged: (v) => setState(() => incPaymentType = v ?? false),
+                label: 'Payment type',
+                field: TextField(
+                  controller: _paymentTypeCtrl,
+                  decoration: const InputDecoration(
+                      hintText: 'e.g. PayPal / Bank / ...'),
+                ),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: checkRow(
+                value: incBuyerInfos,
+                onChanged: (v) => setState(() => incBuyerInfos = v ?? false),
+                label: 'Buyer infos',
+                field: TextField(
+                  controller: _buyerInfosCtrl,
+                  minLines: 1,
+                  maxLines: 3,
+                  decoration: const InputDecoration(
+                      hintText: 'Nom / Adresse / Réf. commande...'),
+                ),
+              ),
+            ),
+          ]),
+          const SizedBox(height: 8),
+
+          // ====== LIGNE 7 : Fichiers ======
           Row(children: [
             Expanded(
               child: Column(

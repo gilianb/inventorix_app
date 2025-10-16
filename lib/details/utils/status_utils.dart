@@ -10,6 +10,7 @@ const kStatusOrder = <String>[
   'at_grader',
   'graded',
   'listed',
+  'awaiting_payment', // ⬅️ AJOUT
   'sold',
   'shipped',
   'finalized',
@@ -35,6 +36,8 @@ Color statusColor(BuildContext context, String s) {
       return Colors.amber;
     case 'listed':
       return Colors.blue;
+    case 'awaiting_payment':
+      return const Color(0xFFF59E0B); // amber-ish / ou ta palette
     case 'sold':
       return Colors.purple;
     case 'shipped':

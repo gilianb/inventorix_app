@@ -30,7 +30,16 @@ class StatusBreakdownPanel extends StatelessWidget {
     'at_grader',
     'graded'
   ];
-  static const List<String> _sale = ['listed', 'sold', 'shipped', 'finalized'];
+
+  // ← AJOUT awaiting_payment dans la catégorie vente
+  static const List<String> _sale = [
+    'listed',
+    'awaiting_payment',
+    'sold',
+    'shipped',
+    'finalized'
+  ];
+
   static const String _collection = 'collection';
 
   static const Map<String, String> _groupLabels = {
@@ -80,8 +89,9 @@ class StatusBreakdownPanel extends StatelessWidget {
             color:
                 selected ? cs.secondaryContainer : cs.surfaceContainerHighest,
             borderRadius: BorderRadius.circular(12),
-            border:
-                Border.all(color: selected ? cs.secondary : cs.outlineVariant),
+            border: Border.all(
+              color: selected ? cs.secondary : cs.outlineVariant,
+            ),
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
@@ -99,8 +109,6 @@ class StatusBreakdownPanel extends StatelessWidget {
                 style: TextStyle(
                   fontSize: 12,
                   color: selected
-                      // ignore: duplicate_ignore
-                      // ignore: deprecated_member_use
                       ? cs.onSecondaryContainer.withOpacity(0.9)
                       : cs.onSurfaceVariant,
                 ),
@@ -182,9 +190,8 @@ class StatusBreakdownPanel extends StatelessWidget {
 
       return Column(
         mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.center, // << centre le contenu
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          // Header centré (il ne prend que sa largeur intrinsèque)
           Align(
             alignment: Alignment.center,
             child: groupHeader(
@@ -197,7 +204,6 @@ class StatusBreakdownPanel extends StatelessWidget {
           ),
           if (statuses.isNotEmpty) ...[
             const SizedBox(height: 6),
-            // Centre la ligne de sous-statuts même si subStatusOneLine étire en largeur
             Align(
               alignment: Alignment.center,
               child: subStatusOneLine(
@@ -210,8 +216,6 @@ class StatusBreakdownPanel extends StatelessWidget {
                     onTap: () => onTapStatus(s),
                   );
                 }).toList(),
-                // si ta fonction accepte un paramètre d’alignement, garde celui-ci;
-                // sinon, l’Align(ci-dessus) suffit à centrer le bloc.
               ),
             ),
           ],
@@ -255,7 +259,7 @@ class StatusBreakdownPanel extends StatelessWidget {
                     id: 'sale',
                     label: _groupLabels['sale']!,
                     total: saleTotal,
-                    statuses: _sale,
+                    statuses: _sale, // ← contient awaiting_payment
                   ),
                   const SizedBox(width: 24),
                   categoryColumn(

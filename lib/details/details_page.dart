@@ -60,6 +60,11 @@ const List<String> kViewCols = [
   'total_cost',
   'total_cost_with_fees',
   'realized_revenue',
+  'payment_type',
+  'buyer_infos',
+  // === AJOUTS pour Investi(vue) enrichi ===
+  'sum_shipping_fees',
+  'sum_commission_fees',
 ];
 
 class GroupDetailsPage extends StatefulWidget {
@@ -80,6 +85,10 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
 
   // Filtre local par statut (timeline / chips)
   String? _localStatusFilter;
+
+  // Toggles d’affichage (demandés)
+  bool _showItemsTable = true;
+  bool _showHistory = true;
 
   // Helpers
   Map<String, dynamic> get _initial => widget.group;
@@ -170,6 +179,10 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
       'created_at',
       'estimated_price',
       'item_location',
+      'shipping_fees',
+      'commission_fees',
+      'payment_type',
+      'buyer_infos',
     ];
 
     var q = _sb.from('item').select(itemCols.join(','));
@@ -198,6 +211,10 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
       'item_location',
       'unit_cost',
       'unit_fees',
+      'shipping_fees',
+      'commission_fees',
+      'payment_type',
+      'buyer_infos',
     };
 
     for (final k in filterableKeys) {
@@ -299,10 +316,18 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
     final currency =
         (_viewRow?['currency'] ?? widget.group['currency'] ?? 'USD').toString();
 
-    final qtyTotal = (_viewRow?['qty_total'] as int?) ?? qtyStatus;
+    // === Investi(vue) enrichi avec shipping + commission ===
+    final qtyTotal = (_viewRow?['qty_total'] as num?) ?? qtyStatus;
     final totalWithFees = (_viewRow?['total_cost_with_fees'] as num?) ?? 0;
-    final unitCost = qtyTotal > 0 ? totalWithFees / qtyTotal : 0;
-    final investedForView = unitCost * (qtyStatus);
+    final sumShipping = (_viewRow?['sum_shipping_fees'] as num?) ?? 0;
+    final sumCommission = (_viewRow?['sum_commission_fees'] as num?) ?? 0;
+
+    final perUnitBase = qtyTotal > 0 ? (totalWithFees / qtyTotal) : 0;
+    final perUnitShipping = qtyTotal > 0 ? (sumShipping / qtyTotal) : 0;
+    final perUnitCommission = qtyTotal > 0 ? (sumCommission / qtyTotal) : 0;
+    final unitCost = perUnitBase + perUnitShipping + perUnitCommission;
+
+    final investedForView = unitCost * qtyStatus;
 
     // Σ estimated_price en traitant null comme 0
     final potential =
@@ -497,21 +522,53 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
                     ),
                     const SizedBox(height: 16),
 
-                    // TABLE / LISTE ITEMS
-                    _ItemsTable(
-                      items: visibleItems,
-                      currency: currency,
+                    // ====== TABLE / LISTE ITEMS avec toggle ======
+                    Row(
+                      children: [
+                        Text('Items',
+                            style: Theme.of(context)
+                                .textTheme
+                                .titleMedium
+                                ?.copyWith(fontWeight: FontWeight.w700)),
+                        const SizedBox(width: 8),
+                        IconButton(
+                          tooltip: _showItemsTable ? 'Masquer' : 'Afficher',
+                          icon: Icon(_showItemsTable
+                              ? Icons.expand_less
+                              : Icons.expand_more),
+                          onPressed: () => setState(
+                              () => _showItemsTable = !_showItemsTable),
+                        ),
+                      ],
                     ),
+                    if (_showItemsTable)
+                      _ItemsTable(
+                        items: visibleItems,
+                        currency: currency,
+                      ),
                     const SizedBox(height: 16),
 
-                    // HISTORIQUE
-                    Text('Historique complet',
-                        style: Theme.of(context)
-                            .textTheme
-                            .titleMedium
-                            ?.copyWith(fontWeight: FontWeight.w700)),
+                    // ====== HISTORIQUE avec toggle ======
+                    Row(
+                      children: [
+                        Text('Historique complet',
+                            style: Theme.of(context)
+                                .textTheme
+                                .titleMedium
+                                ?.copyWith(fontWeight: FontWeight.w700)),
+                        const SizedBox(width: 8),
+                        IconButton(
+                          tooltip: _showHistory ? 'Masquer' : 'Afficher',
+                          icon: Icon(_showHistory
+                              ? Icons.expand_less
+                              : Icons.expand_more),
+                          onPressed: () =>
+                              setState(() => _showHistory = !_showHistory),
+                        ),
+                      ],
+                    ),
                     const SizedBox(height: 8),
-                    HistoryList(movements: _movements),
+                    if (_showHistory) HistoryList(movements: _movements),
                   ],
                 ),
               ),
