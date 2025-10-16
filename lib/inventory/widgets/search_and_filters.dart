@@ -1,3 +1,5 @@
+// ignore_for_file: deprecated_member_use
+
 import 'package:flutter/material.dart';
 
 /// Mapping groupes -> libellé lisible
@@ -89,21 +91,50 @@ class TypeTabs extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
     final isSingle = typeFilter == 'single';
+
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12),
-      child: ToggleButtons(
-        isSelected: [isSingle, !isSingle],
-        onPressed: (i) => onTypeChanged(i == 0 ? 'single' : 'sealed'),
-        borderRadius: BorderRadius.circular(999),
-        children: const [
-          Padding(
-              padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              child: Text('Single')),
-          Padding(
-              padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              child: Text('Sealed')),
-        ],
+      child: Center(
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: cs.surfaceContainerHighest,
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(color: cs.primary.withOpacity(.20), width: 1),
+          ),
+          child: ToggleButtons(
+            isSelected: [isSingle, !isSingle],
+            onPressed: (i) => onTypeChanged(i == 0 ? 'single' : 'sealed'),
+            borderRadius: BorderRadius.circular(999),
+            borderWidth: 0,
+            borderColor: Colors.transparent,
+            selectedBorderColor: Colors.transparent,
+            color: cs.primary, // texte non sélectionné
+            selectedColor: cs.onPrimary, // texte sélectionné
+            fillColor: cs.primary, // fond sélectionné
+            splashColor: cs.primary.withOpacity(.15),
+            hoverColor: cs.primary.withOpacity(.08),
+            constraints: const BoxConstraints(
+              minHeight: 48, // plus grand
+              minWidth: 140, // plus large
+            ),
+            textStyle: Theme.of(context).textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.w800, // bien visible
+                  letterSpacing: .3,
+                ),
+            children: const [
+              Padding(
+                padding: EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+                child: Text('SINGLE'),
+              ),
+              Padding(
+                padding: EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+                child: Text('SEALED'),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

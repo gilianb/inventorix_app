@@ -1,3 +1,5 @@
+// ignore_for_file: deprecated_member_use
+
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -10,7 +12,13 @@ import '../../inventory/widgets/edit.dart';
 
 import 'package:inventorix_app/new_stock_page.dart';
 import 'package:inventorix_app/sales_archive_page.dart';
-import 'package:inventorix_app/group_details/group_details_page.dart';
+import 'package:inventorix_app/details/details_page.dart';
+
+/// Accents (UI only)
+const kAccentA = Color(0xFF6C5CE7); // violet
+const kAccentB = Color(0xFF00D1B2); // menthe
+const kAccentC = Color(0xFFFFB545); // amber
+const kAccentG = Color(0xFF22C55E); // green
 
 /// Mapping des groupes logiques -> liste de statuts inclus
 const Map<String, List<String>> kGroupToStatuses = {
@@ -47,7 +55,7 @@ class _MainInventoryPageState extends State<MainInventoryPage> {
   final _searchCtrl = TextEditingController();
   String? _gameFilter;
   bool _loading = true;
-  bool _breakdownExpanded = true;
+  bool _breakdownExpanded = false;
   String _typeFilter = 'single'; // 'single' | 'sealed'
   String? _statusFilter; // filtre de la liste
 
@@ -55,8 +63,8 @@ class _MainInventoryPageState extends State<MainInventoryPage> {
   List<Map<String, dynamic>> _groups = const [];
 
   // KPI
-  num _kpiPotentialRevenue = 0; // Σ sum_estimated_price (exposé par la vue)
-  num _kpiRealRevenue = 0; // Σ realized_revenue (exposé par la vue)
+  num _kpiPotentialRevenue = 0; // Σ sum_estimated_price
+  num _kpiRealRevenue = 0; // Σ realized_revenue
 
   @override
   void initState() {
@@ -70,9 +78,8 @@ class _MainInventoryPageState extends State<MainInventoryPage> {
   Future<void> _refresh() async {
     setState(() => _loading = true);
     try {
-      _groups =
-          await _fetchGroupedFromView(); // <- lit v_items_by_status (nouvelle stricte)
-      _recomputeKpis(); // <- calcule KPI depuis la vue
+      _groups = await _fetchGroupedFromView();
+      _recomputeKpis();
     } catch (e) {
       _snack('Erreur de chargement : $e');
     } finally {
@@ -96,7 +103,7 @@ class _MainInventoryPageState extends State<MainInventoryPage> {
         'product_id, game_id, type, language, '
         'product_name, game_code, game_label, '
         'purchase_date, currency, '
-        // champs optionnels homogènes (déjà au niveau du groupe strict)
+        // champs homogènes
         'supplier_name, buyer_company, notes, grade_id, sale_date, sale_price, '
         'tracking, photo_url, document_url, estimated_price, sum_estimated_price, item_location, channel_id, '
         // agrégats
@@ -138,7 +145,7 @@ class _MainInventoryPageState extends State<MainInventoryPage> {
     return rows;
   }
 
-  // Explose les groupes en lignes “par statut” (plus de fusion d'extras ici)
+  // Explose les groupes en lignes “par statut”
   List<Map<String, dynamic>> _explodeLines() {
     final out = <Map<String, dynamic>>[];
     for (final r in _groups) {
@@ -170,12 +177,10 @@ class _MainInventoryPageState extends State<MainInventoryPage> {
 
   // ===== KPIs (vue par statut) =====
   int _kpiLinesCount(List<Map<String, dynamic>> lines) => lines.length;
-
   int _kpiUnits(List<Map<String, dynamic>> lines) =>
       lines.fold<int>(0, (p, e) => p + ((e['qty_status'] as int?) ?? 0));
 
   /// Investi (vue) = Σ (Prix/unité estimé × Qté du statut)
-  /// Prix/unité estimé (fallback) = total_cost_with_fees / qty_total
   num _kpiInvestedFromLines(List<Map<String, dynamic>> lines) {
     num total = 0;
     for (final r in lines) {
@@ -190,14 +195,7 @@ class _MainInventoryPageState extends State<MainInventoryPage> {
 
   void _openDetails(Map<String, dynamic> line) {
     Navigator.of(context).push(MaterialPageRoute(
-      builder: (_) => GroupDetailsPage(group: {
-        'product_id': line['product_id'],
-        'status': line['status'],
-        'product_name': line['product_name'],
-        'game_label': line['game_label'],
-        'language': line['language'],
-        'currency': line['currency'],
-      }),
+      builder: (_) => GroupDetailsPage(group: Map<String, dynamic>.from(line)),
     ));
   }
 
@@ -211,7 +209,6 @@ class _MainInventoryPageState extends State<MainInventoryPage> {
       return;
     }
 
-    // Les champs optionnels sont déjà présents dans "line" (fournis par la vue stricte)
     final changed = await EditItemsDialog.show(
       context,
       productId: productId,
@@ -223,9 +220,117 @@ class _MainInventoryPageState extends State<MainInventoryPage> {
     if (changed == true) {
       _refresh();
     }
-    // Note : si, côté édition, tu dois identifier un groupe strictement,
-    // il faudra éventuellement transmettre toutes les clés de regroupement
-    // (ex: product_id, game_id, type, language, purchase_date, supplier_name, etc.)
+  }
+
+  // ======= SUPPRESSION D'UNE LIGNE (et données associées) =======
+
+  Future<bool> _confirmDeleteDialog(Map<String, dynamic> line) async {
+    final name = (line['product_name'] ?? '').toString();
+    final status = (line['status'] ?? '').toString();
+    return await showDialog<bool>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('Supprimer cette ligne ?'),
+            content: Text(
+              'Produit : $name\nStatut : $status\n\n'
+              'Cette action supprimera définitivement tous les items et mouvements '
+              'associés à CETTE ligne (strictement) et uniquement ceux-là.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('Annuler'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                style: FilledButton.styleFrom(
+                  backgroundColor: Colors.redAccent,
+                  foregroundColor: Colors.white,
+                ),
+                child: const Text('Supprimer'),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+  }
+
+  /// Récupère les IDs d'items appartenant STRICTEMENT à la "ligne" (même logique que l’édition)
+  Future<List<int>> _collectItemIdsForLine(Map<String, dynamic> line) async {
+    PostgrestFilterBuilder q = _sb.from('item').select('id');
+
+    // Clés strictes pour isoler la ligne
+    const keys = <String>{
+      'product_id',
+      'game_id',
+      'type',
+      'language',
+      'channel_id',
+      'purchase_date',
+      'currency',
+      'supplier_name',
+      'buyer_company',
+      'notes',
+      'grade_id',
+      'grading_submission_id',
+      'sale_date',
+      'sale_price',
+      'tracking',
+      'photo_url',
+      'document_url',
+      'estimated_price',
+      'item_location',
+      'unit_cost',
+      'unit_fees',
+    };
+
+    for (final k in keys) {
+      if (!line.containsKey(k)) continue;
+      final v = line[k];
+      if (v == null) {
+        q = q.filter(k, 'is', null);
+      } else {
+        q = q.eq(k, v);
+      }
+    }
+
+    // statut EXACT de la ligne
+    q = q.eq('status', (line['status'] ?? '').toString());
+
+    final List<dynamic> raw = await q.order('id', ascending: true).limit(20000);
+
+    return raw
+        .map((e) => (e as Map)['id'])
+        .whereType<int>()
+        .toList(growable: false);
+  }
+
+  Future<void> _deleteLine(Map<String, dynamic> line) async {
+    final ok = await _confirmDeleteDialog(line);
+    if (!ok) return;
+
+    try {
+      // 1) Récupérer les ids d’items strictement de cette ligne
+      final ids = await _collectItemIdsForLine(line);
+      if (ids.isEmpty) {
+        _snack('Aucun item trouvé pour cette ligne.');
+        return;
+      }
+
+      final idsCsv = '(${ids.join(",")})';
+
+      // 2) Supprimer les mouvements liés puis les items (sans .in_())
+      await _sb.from('movement').delete().filter('item_id', 'in', idsCsv);
+
+      await _sb.from('item').delete().filter('id', 'in', idsCsv);
+
+      _snack('Ligne supprimée (${ids.length} item(s) + mouvements).');
+      _refresh();
+    } on PostgrestException catch (e) {
+      _snack('Erreur Supabase: ${e.message}');
+    } catch (e) {
+      _snack('Erreur: $e');
+    }
   }
 
   @override
@@ -239,30 +344,66 @@ class _MainInventoryPageState extends State<MainInventoryPage> {
             child: ListView(
               padding: const EdgeInsets.only(bottom: 24),
               children: [
-                SearchAndGameFilter(
-                  searchCtrl: _searchCtrl,
-                  games: _groups
-                      .map((r) => (r['game_label'] ?? '') as String)
-                      .where((s) => s.isNotEmpty)
-                      .toSet()
-                      .toList()
-                    ..sort(),
-                  selectedGame: _gameFilter,
-                  onGameChanged: (v) {
-                    setState(() => _gameFilter = v);
-                    _refresh();
-                  },
-                  onSearch: _refresh,
+                // === Encart coloré: Recherche & Filtres ===
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+                  child: Card(
+                    elevation: 1,
+                    shadowColor: kAccentA.withOpacity(.18),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(16)),
+                    child: Container(
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(16),
+                        gradient: LinearGradient(
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                          colors: [
+                            kAccentA.withOpacity(.06),
+                            kAccentB.withOpacity(.05),
+                          ],
+                        ),
+                        border: Border.all(
+                          color: kAccentA.withOpacity(.15),
+                          width: 0.8,
+                        ),
+                      ),
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
+                        child: Column(
+                          children: [
+                            SearchAndGameFilter(
+                              searchCtrl: _searchCtrl,
+                              games: _groups
+                                  .map((r) => (r['game_label'] ?? '') as String)
+                                  .where((s) => s.isNotEmpty)
+                                  .toSet()
+                                  .toList()
+                                ..sort(),
+                              selectedGame: _gameFilter,
+                              onGameChanged: (v) {
+                                setState(() => _gameFilter = v);
+                                _refresh();
+                              },
+                              onSearch: _refresh,
+                            ),
+                            const SizedBox(height: 8),
+                            TypeTabs(
+                              typeFilter: _typeFilter,
+                              onTypeChanged: (t) {
+                                setState(() => _typeFilter = t);
+                                _refresh();
+                              },
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
                 ),
-                const SizedBox(height: 8),
-                TypeTabs(
-                  typeFilter: _typeFilter,
-                  onTypeChanged: (t) {
-                    setState(() => _typeFilter = t);
-                    _refresh();
-                  },
-                ),
-                const SizedBox(height: 8),
+
+                const SizedBox(height: 10),
+
                 if (_groups.isNotEmpty) ...[
                   const SizedBox(height: 8),
                   _OverviewKpis(
@@ -277,6 +418,8 @@ class _MainInventoryPageState extends State<MainInventoryPage> {
                         : 'USD',
                   ),
                   const SizedBox(height: 12),
+
+                  // ⚠️ NE PAS TOUCHER: StatusBreakdownPanel (status liste)
                   StatusBreakdownPanel(
                     expanded: _breakdownExpanded,
                     onToggle: (v) => setState(() => _breakdownExpanded = v),
@@ -288,6 +431,7 @@ class _MainInventoryPageState extends State<MainInventoryPage> {
                     },
                   ),
                   const SizedBox(height: 12),
+
                   ActiveStatusFilterBar(
                     statusFilter: _statusFilter,
                     linesCount: lines.length,
@@ -297,16 +441,22 @@ class _MainInventoryPageState extends State<MainInventoryPage> {
                   ),
                   const SizedBox(height: 12),
                 ],
+
+                // ⚠️ NE PAS TOUCHER: libellé + table “lignes — vue par statut”
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 12),
                   child: Text('Lignes (${lines.length}) — vue par statut',
-                      style: Theme.of(context).textTheme.titleMedium),
+                      style: Theme.of(context)
+                          .textTheme
+                          .titleMedium
+                          ?.copyWith(fontWeight: FontWeight.w700)),
                 ),
                 const SizedBox(height: 4),
                 InventoryTableByStatus(
                   lines: lines,
                   onOpen: _openDetails,
                   onEdit: _openEdit,
+                  onDelete: _deleteLine, // ⇦ AJOUT : suppression
                 ),
                 const SizedBox(height: 48),
               ],
@@ -325,9 +475,21 @@ class _MainInventoryPageState extends State<MainInventoryPage> {
             icon: const Icon(Icons.receipt_long),
           ),
         ],
+        // Dégradé d’appBar
+        flexibleSpace: Container(
+          decoration: const BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment(-1, -1),
+              end: Alignment(1, 1),
+              colors: [kAccentA, kAccentB],
+            ),
+          ),
+        ),
       ),
       body: body,
       floatingActionButton: FloatingActionButton.extended(
+        backgroundColor: kAccentA,
+        foregroundColor: Colors.white,
         onPressed: () async {
           final changed = await Navigator.of(context).push<bool>(
             MaterialPageRoute(builder: (_) => const NewStockPage()),
@@ -370,80 +532,82 @@ class _OverviewKpis extends StatelessWidget {
     required String title,
     required String value,
     String? subtitle,
+    List<Color>? gradient,
+    Color? iconBg,
   }) {
     final cs = Theme.of(context).colorScheme;
     return Card(
-      elevation: 0,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-      color: cs.surfaceContainerHighest,
-      child: Padding(
-        padding: const EdgeInsets.all(14),
-        child: Row(
-          children: [
-            Container(
-              padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(
-                color: cs.primaryContainer,
-                shape: BoxShape.circle,
+      elevation: 1,
+      shadowColor: kAccentA.withOpacity(.16),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: Container(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(16),
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: gradient ??
+                [kAccentA.withOpacity(.08), kAccentB.withOpacity(.06)],
+          ),
+          border: Border.all(color: kAccentA.withOpacity(.14), width: 0.8),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: (iconBg ?? kAccentA),
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(icon, size: 20, color: Colors.white),
               ),
-              child: Icon(icon, size: 20),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(title,
-                      style: Theme.of(context)
-                          .textTheme
-                          .labelMedium
-                          ?.copyWith(color: cs.onSurfaceVariant)),
-                  const SizedBox(height: 2),
-                  Text(
-                    value,
-                    style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                          fontWeight: FontWeight.w700,
-                        ),
-                  ),
-                  if (subtitle != null) ...[
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(title,
+                        style: Theme.of(context)
+                            .textTheme
+                            .labelMedium
+                            ?.copyWith(color: cs.onSurfaceVariant)),
                     const SizedBox(height: 2),
                     Text(
-                      subtitle,
-                      style: Theme.of(context).textTheme.bodySmall,
+                      value,
+                      style: Theme.of(context)
+                          .textTheme
+                          .headlineSmall
+                          ?.copyWith(fontWeight: FontWeight.w800),
                     ),
+                    if (subtitle != null) ...[
+                      const SizedBox(height: 2),
+                      Text(subtitle,
+                          style: Theme.of(context).textTheme.bodySmall),
+                    ],
                   ],
-                ],
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
   }
 
   @override
+  @override
   Widget build(BuildContext context) {
     final kpis = [
-      _kpiCard(
-        context: context,
-        icon: Icons.view_list,
-        title: 'Lignes',
-        value: '$linesCount',
-        subtitle: 'Type: ${typeFilter.toUpperCase()}',
-      ),
-      _kpiCard(
-        context: context,
-        icon: Icons.format_list_numbered,
-        title: 'Unités (total)',
-        value: '$units',
-        subtitle: 'Somme des quantités',
-      ),
       _kpiCard(
         context: context,
         icon: Icons.savings,
         title: 'Investi (vue)',
         value: '${_money(investedView)} $currency',
         subtitle: 'Σ (Qté × coût/u estimé)',
+        gradient: [kAccentA.withOpacity(.12), kAccentB.withOpacity(.06)],
+        iconBg: kAccentA,
       ),
       _kpiCard(
         context: context,
@@ -451,6 +615,8 @@ class _OverviewKpis extends StatelessWidget {
         title: 'Revenu potentiel',
         value: '${_money(potentialRevenue)} $currency',
         subtitle: 'Σ estimated_price (tous items)',
+        gradient: [kAccentB.withOpacity(.12), kAccentC.withOpacity(.06)],
+        iconBg: kAccentB,
       ),
       _kpiCard(
         context: context,
@@ -458,6 +624,8 @@ class _OverviewKpis extends StatelessWidget {
         title: 'Revenu réel',
         value: '${_money(realRevenue)} $currency',
         subtitle: 'Σ sale_price (sold/shipped/finalized)',
+        gradient: [kAccentG.withOpacity(.14), kAccentB.withOpacity(.06)],
+        iconBg: kAccentG,
       ),
     ];
 
@@ -467,31 +635,20 @@ class _OverviewKpis extends StatelessWidget {
         builder: (ctx, c) {
           final isWide = c.maxWidth > 960;
           final isMedium = c.maxWidth > 680;
+
           if (isWide) {
-            // 5 cartes sur 2 lignes (3 + 2)
-            return Column(
+            // 3 cartes sur une seule ligne
+            return Row(
               children: [
-                Row(
-                  children: [
-                    Expanded(child: kpis[0]),
-                    const SizedBox(width: 12),
-                    Expanded(child: kpis[1]),
-                    const SizedBox(width: 12),
-                    Expanded(child: kpis[2]),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                Row(
-                  children: [
-                    Expanded(child: kpis[3]),
-                    const SizedBox(width: 12),
-                    Expanded(child: kpis[4]),
-                  ],
-                ),
+                Expanded(child: kpis[0]),
+                const SizedBox(width: 12),
+                Expanded(child: kpis[1]),
+                const SizedBox(width: 12),
+                Expanded(child: kpis[2]),
               ],
             );
           } else if (isMedium) {
-            // 2 colonnes
+            // 2 colonnes (2 + 1)
             return Column(
               children: [
                 Row(
@@ -502,23 +659,11 @@ class _OverviewKpis extends StatelessWidget {
                   ],
                 ),
                 const SizedBox(height: 12),
-                Row(
-                  children: [
-                    Expanded(child: kpis[2]),
-                    const SizedBox(width: 12),
-                    Expanded(child: kpis[3]),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                Row(
-                  children: [
-                    Expanded(child: kpis[4]),
-                  ],
-                ),
+                Row(children: [Expanded(child: kpis[2])]),
               ],
             );
           } else {
-            // 1 colonne
+            // 1 colonne (mobile)
             return Column(
               children: [
                 kpis[0],
@@ -526,10 +671,6 @@ class _OverviewKpis extends StatelessWidget {
                 kpis[1],
                 const SizedBox(height: 12),
                 kpis[2],
-                const SizedBox(height: 12),
-                kpis[3],
-                const SizedBox(height: 12),
-                kpis[4],
               ],
             );
           }

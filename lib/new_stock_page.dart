@@ -25,6 +25,8 @@ class _NewStockPageState extends State<NewStockPage> {
   final _totalCostCtrl = TextEditingController(); // PRIX TOTAL (USD)
   final _qtyCtrl = TextEditingController(text: '1');
   final _feesCtrl = TextEditingController(text: '0'); // en USD
+  final _estimatedPriceCtrl =
+      TextEditingController(); // <- OBLIGATOIRE désormais
   String _initStatus = 'paid';
 
   // Plus d’options (repliable)
@@ -32,7 +34,6 @@ class _NewStockPageState extends State<NewStockPage> {
   final _trackingCtrl = TextEditingController();
   final _photoUrlCtrl = TextEditingController();
   final _docUrlCtrl = TextEditingController();
-  final _estimatedPriceCtrl = TextEditingController();
   final _notesCtrl = TextEditingController();
   final _gradeIdCtrl = TextEditingController();
   final _itemLocationCtrl = TextEditingController();
@@ -137,6 +138,7 @@ class _NewStockPageState extends State<NewStockPage> {
     final qty = int.tryParse(_qtyCtrl.text.trim()) ?? 0;
     final totalCost = _num(_totalCostCtrl) ?? 0;
     final fees = _num(_feesCtrl) ?? 0;
+    final estPrice = _num(_estimatedPriceCtrl); // <- requis
 
     if (qty <= 0) {
       _snack('Quantité > 0 requise');
@@ -154,50 +156,14 @@ class _NewStockPageState extends State<NewStockPage> {
       _snack('Choisis un jeu');
       return;
     }
+    if (estPrice == null || estPrice < 0) {
+      _snack('Prix estimé par unité requis (>= 0)');
+      return;
+    }
 
     setState(() => _saving = true);
     try {
-      // Payload de base pour l’RPC
-      final params = <String, dynamic>{
-        'p_type': _type, // enum côté SQL
-        'p_name': _nameCtrl.text.trim(),
-        'p_language': _lang,
-        'p_game_id': _selectedGameId,
-        'p_supplier_name': _supplierNameCtrl.text.trim(),
-        'p_buyer_company': _buyerCompanyCtrl.text.trim().isEmpty
-            ? null
-            : _buyerCompanyCtrl.text.trim(),
-        'p_purchase_date': _purchaseDate.toIso8601String().substring(0, 10),
-        'p_currency': 'USD',
-        'p_qty': qty,
-        'p_total_cost': totalCost,
-        'p_fees': fees,
-        'p_init_status': _initStatus, // <- peut être 'collection'
-      };
-
-      // Champs optionnels
-      if (_trackingCtrl.text.trim().isNotEmpty) {
-        params['p_tracking'] = _trackingCtrl.text.trim();
-      }
-      if (_photoUrlCtrl.text.trim().isNotEmpty) {
-        params['p_photo_url'] = _photoUrlCtrl.text.trim();
-      }
-      if (_docUrlCtrl.text.trim().isNotEmpty) {
-        params['p_document_url'] = _docUrlCtrl.text.trim();
-      }
-      final estPrice = _num(_estimatedPriceCtrl);
-      if (estPrice != null) {
-        params['p_estimated_price'] = estPrice;
-      }
-      if (_notesCtrl.text.trim().isNotEmpty) {
-        params['p_notes'] = _notesCtrl.text.trim();
-      }
-      if (_gradeIdCtrl.text.trim().isNotEmpty) {
-        params['p_grade_id'] = _gradeIdCtrl.text.trim(); // <- rename
-      }
-      if (_itemLocationCtrl.text.trim().isNotEmpty) {
-        params['p_item_location'] = _itemLocationCtrl.text.trim(); // <- new
-      }
+      // (variable inutilisée, conservée si tu veux réutiliser plus tard)
 
       await _sb.rpc('fn_create_product_and_items', params: {
         'p_type': _type,
@@ -223,7 +189,7 @@ class _NewStockPageState extends State<NewStockPage> {
             : null,
         'p_document_url':
             _docUrlCtrl.text.trim().isNotEmpty ? _docUrlCtrl.text.trim() : null,
-        'p_estimated_price': estPrice,
+        'p_estimated_price': estPrice, // <- toujours envoyé (non null)
         'p_notes':
             _notesCtrl.text.trim().isNotEmpty ? _notesCtrl.text.trim() : null,
         'p_grade_id': _gradeIdCtrl.text.trim().isNotEmpty
@@ -440,6 +406,24 @@ class _NewStockPageState extends State<NewStockPage> {
                           ),
                         ),
                       ]),
+                      const SizedBox(height: 8),
+                      // === Estimated price (OBLIGATOIRE) ===
+                      TextFormField(
+                        controller: _estimatedPriceCtrl,
+                        keyboardType: const TextInputType.numberWithOptions(
+                            decimal: true),
+                        decoration: const InputDecoration(
+                          labelText: 'Prix de vente estimé par unité (USD) *',
+                        ),
+                        validator: (v) {
+                          final n = double.tryParse(
+                              (v ?? '').trim().replaceAll(',', '.'));
+                          if (n == null || n < 0) {
+                            return 'Prix estimé requis (>= 0)';
+                          }
+                          return null;
+                        },
+                      ),
                     ],
                   ),
                 ),
@@ -462,18 +446,8 @@ class _NewStockPageState extends State<NewStockPage> {
                     title: 'Options (facultatif)',
                     child: Column(
                       children: [
+                        // (Estimated price retiré d’ici)
                         Row(children: [
-                          Expanded(
-                            child: TextFormField(
-                              controller: _estimatedPriceCtrl,
-                              keyboardType:
-                                  const TextInputType.numberWithOptions(
-                                      decimal: true),
-                              decoration: const InputDecoration(
-                                  labelText: 'Prix de vente estimé (USD)'),
-                            ),
-                          ),
-                          const SizedBox(width: 12),
                           Expanded(
                             child: TextFormField(
                               controller: _gradeIdCtrl,
@@ -481,9 +455,7 @@ class _NewStockPageState extends State<NewStockPage> {
                                   labelText: 'Grading ID'),
                             ),
                           ),
-                        ]),
-                        const SizedBox(height: 8),
-                        Row(children: [
+                          const SizedBox(width: 12),
                           Expanded(
                             child: TextFormField(
                               controller: _itemLocationCtrl,
@@ -491,7 +463,9 @@ class _NewStockPageState extends State<NewStockPage> {
                                   labelText: "Item Location"),
                             ),
                           ),
-                          const SizedBox(width: 12),
+                        ]),
+                        const SizedBox(height: 8),
+                        Row(children: [
                           Expanded(
                             child: TextFormField(
                               controller: _trackingCtrl,
@@ -499,6 +473,8 @@ class _NewStockPageState extends State<NewStockPage> {
                                   labelText: 'Tracking Number'),
                             ),
                           ),
+                          const SizedBox(width: 12),
+                          const Expanded(child: SizedBox.shrink()),
                         ]),
                         const SizedBox(height: 8),
                         StorageUploadTile(

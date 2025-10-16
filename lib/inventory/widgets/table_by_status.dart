@@ -1,3 +1,5 @@
+// ignore_for_file: deprecated_member_use
+
 import 'package:flutter/material.dart';
 import '../utils/status_utils.dart';
 import '../utils/format.dart';
@@ -8,7 +10,8 @@ class InventoryTableByStatus extends StatelessWidget {
     super.key,
     required this.lines,
     required this.onOpen,
-    this.onEdit, // <-- edit déjà présent
+    this.onEdit, // bouton éditer
+    this.onDelete, // ➜ NOUVEAU : bouton supprimer
   });
 
   /// Lignes déjà agrégées par statut :
@@ -20,6 +23,7 @@ class InventoryTableByStatus extends StatelessWidget {
   final List<Map<String, dynamic>> lines;
   final void Function(Map<String, dynamic>) onOpen;
   final void Function(Map<String, dynamic>)? onEdit;
+  final void Function(Map<String, dynamic>)? onDelete; // ➜ callback suppression
 
   String _txt(dynamic v) =>
       (v == null || (v is String && v.trim().isEmpty)) ? '—' : v.toString();
@@ -37,7 +41,6 @@ class InventoryTableByStatus extends StatelessWidget {
       final sumUnitTotal = unit * q;
 
       final lineColor = WidgetStateProperty.resolveWith<Color?>(
-        // ignore: deprecated_member_use
         (states) => statusColor(context, s).withOpacity(0.06),
       );
 
@@ -63,9 +66,7 @@ class InventoryTableByStatus extends StatelessWidget {
           DataCell(
             Chip(
               label: Text(s.toUpperCase()),
-              // ignore: deprecated_member_use
               backgroundColor: statusColor(context, s).withOpacity(0.15),
-              // ignore: deprecated_member_use
               side: BorderSide(color: statusColor(context, s).withOpacity(0.6)),
             ),
           ),
@@ -73,10 +74,9 @@ class InventoryTableByStatus extends StatelessWidget {
           DataCell(Text('${money(unit)} ${r['currency'] ?? 'USD'}')),
           DataCell(Text('${money(sumUnitTotal)} ${r['currency'] ?? 'USD'}')),
 
-          // === Remplacement: Channel -> Estimated ===
-          DataCell(
-            Text(est == null ? '—' : '${money(est)} ${r['currency'] ?? 'USD'}'),
-          ),
+          // Estimated price /u. (optionnel)
+          DataCell(Text(
+              est == null ? '—' : '${money(est)} ${r['currency'] ?? 'USD'}')),
 
           // Champs additionnels (échantillon item)
           DataCell(Text(_txt(r['supplier_name']))),
@@ -88,6 +88,14 @@ class InventoryTableByStatus extends StatelessWidget {
           DataCell(_FileCell(
               url: r['photo_url']?.toString(), isImagePreferred: true)),
           DataCell(_FileCell(url: r['document_url']?.toString())),
+
+          // === Dernière cellule : bouton Delete (croix) ===
+          DataCell(IconButton(
+            tooltip: 'Supprimer cette ligne',
+            icon: const Icon(Icons.close),
+            color: Colors.redAccent,
+            onPressed: onDelete == null ? null : () => onDelete!(r),
+          )),
         ],
       );
     }
@@ -106,8 +114,7 @@ class InventoryTableByStatus extends StatelessWidget {
           DataColumn(label: Text('Statut')),
           DataColumn(label: Text('Prix / u.')),
           DataColumn(label: Text('Prix (Qté×u)')),
-          // ⬇️ ICI : Channel -> Estimated
-          DataColumn(label: Text('Estimated')),
+          DataColumn(label: Text('Estimated /u.')),
           DataColumn(label: Text('Supplier')),
           DataColumn(label: Text('Buyer')),
           DataColumn(label: Text('Grade ID')),
@@ -116,6 +123,7 @@ class InventoryTableByStatus extends StatelessWidget {
           DataColumn(label: Text('Tracking')),
           DataColumn(label: Text('Photo')),
           DataColumn(label: Text('Doc')),
+          DataColumn(label: Icon(Icons.close)), // ➜ colonne delete (croix)
         ],
         rows: lines.map(row).toList(),
       ),

@@ -120,6 +120,8 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
     'collection',
   ];
 
+  static const Set<String> kSalePhase = {'sold', 'shipped', 'finalized'};
+
   @override
   void initState() {
     super.initState();
@@ -194,55 +196,61 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
   }
 
   Future<void> _apply() async {
-    // construire la map de mise à jour uniquement avec les champs cochés
-    final updates = <String, dynamic>{};
-    if (incStatus) updates['status'] = _newStatus;
+    // === 1) Construire l'update de façon SÛRE et ciblée ===
+    final baseUpdates = <String, dynamic>{};
     if (incGradeId) {
-      updates['grade_id'] =
+      baseUpdates['grade_id'] =
           _gradeIdCtrl.text.trim().isEmpty ? null : _gradeIdCtrl.text.trim();
     }
     if (incEstimatedPrice) {
-      updates['estimated_price'] = _tryNum(_estimatedPriceCtrl.text);
-    }
-    if (incSalePrice) updates['sale_price'] = _tryNum(_salePriceCtrl.text);
-    if (incSaleDate) {
-      updates['sale_date'] = _saleDate?.toIso8601String().substring(0, 10);
+      baseUpdates['estimated_price'] = _tryNum(_estimatedPriceCtrl.text);
     }
     if (incItemLocation) {
-      updates['item_location'] = _itemLocationCtrl.text.trim().isEmpty
+      baseUpdates['item_location'] = _itemLocationCtrl.text.trim().isEmpty
           ? null
           : _itemLocationCtrl.text.trim();
     }
     if (incTracking) {
-      updates['tracking'] =
+      baseUpdates['tracking'] =
           _trackingCtrl.text.trim().isEmpty ? null : _trackingCtrl.text.trim();
     }
-    if (incChannelId) updates['channel_id'] = _tryInt(_channelIdCtrl.text);
+    if (incChannelId) baseUpdates['channel_id'] = _tryInt(_channelIdCtrl.text);
     if (incBuyerCompany) {
-      updates['buyer_company'] = _buyerCompanyCtrl.text.trim().isEmpty
+      baseUpdates['buyer_company'] = _buyerCompanyCtrl.text.trim().isEmpty
           ? null
           : _buyerCompanyCtrl.text.trim();
     }
     if (incSupplierName) {
-      updates['supplier_name'] = _supplierNameCtrl.text.trim().isEmpty
+      baseUpdates['supplier_name'] = _supplierNameCtrl.text.trim().isEmpty
           ? null
           : _supplierNameCtrl.text.trim();
     }
     if (incNotes) {
-      updates['notes'] =
+      baseUpdates['notes'] =
           _notesCtrl.text.trim().isEmpty ? null : _notesCtrl.text.trim();
     }
     if (incPhotoUrl) {
-      updates['photo_url'] =
+      baseUpdates['photo_url'] =
           _photoUrlCtrl.text.trim().isEmpty ? null : _photoUrlCtrl.text.trim();
     }
     if (incDocumentUrl) {
-      updates['document_url'] = _documentUrlCtrl.text.trim().isEmpty
+      baseUpdates['document_url'] = _documentUrlCtrl.text.trim().isEmpty
           ? null
           : _documentUrlCtrl.text.trim();
     }
 
-    if (updates.isEmpty) {
+    // Champs de vente (appliqués UNIQUEMENT sur les IDs ciblés)
+    final saleUpdates = <String, dynamic>{};
+    if (incSalePrice) saleUpdates['sale_price'] = _tryNum(_salePriceCtrl.text);
+    if (incSaleDate) {
+      saleUpdates['sale_date'] = _saleDate?.toIso8601String().substring(0, 10);
+    }
+
+    // Changement de statut
+    String? newStatus;
+    if (incStatus) newStatus = _newStatus;
+
+    if (baseUpdates.isEmpty && saleUpdates.isEmpty && newStatus == null) {
       _snack('Sélectionne au moins un champ à modifier.');
       return;
     }
@@ -252,11 +260,10 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
       final sample = (widget.initialSample ?? {})
         ..putIfAbsent('product_id', () => widget.productId);
 
-      // 1) récupérer les IDs des items à modifier — Filtres d'abord
-      //    Important: NE PAS appeler order()/limit() avant eq()/filter()
-      PostgrestFilterBuilder idsQuery = _sb.from('item').select('id');
+      // === 2) Sélectionner exactement N IDs, strictement ===
+      //      (filtres -> status courant -> tri -> limit)
+      PostgrestFilterBuilder idsQ = _sb.from('item').select('id');
 
-      // clés suffisantes pour isoler la ligne (ajoute-en si besoin)
       const keys = <String>{
         'product_id',
         'game_id',
@@ -275,27 +282,25 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
         'document_url',
         'item_location',
         'channel_id',
-        // 'unit_cost', 'unit_fees', ... si tu veux encore plus strict
+        // 'unit_cost', 'unit_fees' si tu veux rendre encore plus strict
       };
 
       for (final k in keys) {
         if (!sample.containsKey(k)) continue;
         final v = sample[k];
         if (v == null) {
-          idsQuery = idsQuery.filter(k, 'is', null); // NULL = NULL
+          idsQ = idsQ.filter(k, 'is', null); // NULL = NULL strict
         } else {
-          idsQuery = idsQuery.eq(k, v);
+          idsQ = idsQ.eq(k, v);
         }
       }
 
-      // statut exactement celui de la ligne cliquée
-      idsQuery = idsQuery.eq('status', widget.status);
+      // Statut EXACT de la ligne cliquée
+      idsQ = idsQ.eq('status', widget.status);
 
-      // ➜ Puis seulement maintenant: order + limit
-      final List<dynamic> idsRaw = await idsQuery
-          .order('id', ascending: _oldestFirst)
-          .limit(_countToEdit);
-
+      // Tri + Limit APRÈS les filtres
+      final idsRaw =
+          await idsQ.order('id', ascending: _oldestFirst).limit(_countToEdit);
       final ids = idsRaw.map((e) => (e as Map)['id']).whereType<int>().toList();
 
       if (ids.isEmpty) {
@@ -303,11 +308,28 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
         return;
       }
 
-      // 2) appliquer la mise à jour
-      await _sb
+      // === 3) Construire l'update final et l'appliquer UNIQUEMENT aux IDs ===
+      // On fusionne intelligemment :
+      final updatePayload = <String, dynamic>{};
+      updatePayload.addAll(baseUpdates);
+
+      if (newStatus != null) {
+        updatePayload['status'] = newStatus;
+      }
+
+      // N’écrire les champs de vente que si explicitement cochés
+      // ET (optionnel) si on part vers une phase de vente (sécurité UX)
+      final goingToSale = newStatus != null && kSalePhase.contains(newStatus);
+      if (saleUpdates.isNotEmpty && (goingToSale || !incStatus)) {
+        updatePayload.addAll(saleUpdates);
+      }
+
+      // Application STRICTE aux IDs choisis (typage -> pas de string '(1,2)')
+      final upd = _sb
           .from('item')
-          .update(updates)
+          .update(updatePayload)
           .filter('id', 'in', '(${ids.join(",")})');
+      await upd;
 
       if (mounted) {
         _snack(
@@ -518,7 +540,7 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
                 value: incEstimatedPrice,
                 onChanged: (v) =>
                     setState(() => incEstimatedPrice = v ?? false),
-                label: 'Estimated price',
+                label: 'Estimated price per unit (USD)',
                 field: numberField(_estimatedPriceCtrl, 'ex: 125.00',
                     decimal: true),
               ),
