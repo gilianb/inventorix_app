@@ -93,6 +93,9 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
   bool _showItemsTable = true;
   bool _showHistory = true;
 
+  // ✅ NEW: indique si un edit a modifié quelque chose
+  bool _dirty = false;
+
   // Helpers
   Map<String, dynamic> get _initial => widget.group;
 
@@ -117,17 +120,160 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
     _loadAll();
   }
 
+  /// Construit la clé de groupe STRICTE à partir d'un item "échantillon"
+  Map<String, dynamic> _groupKeyFromItem(Map<String, dynamic> it) {
+    // mêmes clés que la vue / filtres stricts
+    return <String, dynamic>{
+      'product_id': it['product_id'],
+      'game_id': it['game_id'],
+      'type': it['type'],
+      'language': it['language'],
+      'channel_id': it['channel_id'],
+      'purchase_date': it['purchase_date'],
+      'currency': it['currency'],
+      'supplier_name': it['supplier_name'],
+      'buyer_company': it['buyer_company'],
+      'notes': it['notes'],
+      'grade_id': it['grade_id'],
+      'grading_note': it['grading_note'],
+      'grading_fees': it['grading_fees'],
+      'sale_date': it['sale_date'],
+      'sale_price': it['sale_price'],
+      'tracking': it['tracking'],
+      'photo_url': it['photo_url'],
+      'document_url': it['document_url'],
+      'estimated_price': it['estimated_price'],
+      'item_location': it['item_location'],
+      'unit_cost': it['unit_cost'],
+      'unit_fees': it['unit_fees'],
+      'shipping_fees': it['shipping_fees'],
+      'commission_fees': it['commission_fees'],
+      'payment_type': it['payment_type'],
+      'buyer_infos': it['buyer_infos'],
+      // statut gardé à part pour filtrer la liste, pas dans la vue
+      'status': it['status'],
+    };
+  }
+
   Future<void> _loadAll() async {
     setState(() => _loading = true);
     try {
-      final row = await _fetchViewRow(widget.group);
-      final items = await _fetchGroupItems(row ?? widget.group);
-      final mvts =
-          await _fetchMovementsFor(items.map((e) => e['id'] as int).toList());
+      final productId = (widget.group['product_id'] as int?);
+      if (productId == null) {
+        setState(() {
+          _viewRow = null;
+          _items = [];
+          _movements = [];
+        });
+        return;
+      }
+
+      // Statut "préféré" (celui qui était affiché)
+      final preferredStatus =
+          (_localStatusFilter ?? widget.group['status'])?.toString();
+
+      // === 1) On tente d'abord avec le statut préféré
+      const itemCols = [
+        'id',
+        'product_id',
+        'game_id',
+        'type',
+        'language',
+        'status',
+        'channel_id',
+        'purchase_date',
+        'currency',
+        'supplier_name',
+        'buyer_company',
+        'unit_cost',
+        'unit_fees',
+        'notes',
+        'grade_id',
+        'grading_note',
+        'grading_fees',
+        'sale_date',
+        'sale_price',
+        'tracking',
+        'photo_url',
+        'document_url',
+        'created_at',
+        'estimated_price',
+        'item_location',
+        'shipping_fees',
+        'commission_fees',
+        'payment_type',
+        'buyer_infos',
+      ];
+
+      var q = _sb
+          .from('item')
+          .select(itemCols.join(','))
+          .eq('product_id', productId);
+      if ((preferredStatus ?? '').isNotEmpty) {
+        q = q.eq('status', preferredStatus as Object);
+      }
+      List<dynamic> looseRaw =
+          await q.order('id', ascending: true).limit(20000) as List<dynamic>;
+      List<Map<String, dynamic>> looseItems =
+          looseRaw.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+
+      // === 2) Si aucun item avec le statut préféré -> retomber sur TOUS les items du produit
+      bool fellBackAllStatuses = false;
+      if (looseItems.isEmpty) {
+        fellBackAllStatuses = true;
+        final anyRaw = await _sb
+            .from('item')
+            .select(itemCols.join(','))
+            .eq('product_id', productId)
+            .order('id', ascending: true)
+            .limit(20000) as List<dynamic>;
+        looseItems =
+            anyRaw.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+
+        // ⚠️ IMPORTANT : on recale le filtre local sur le *nouveau* statut trouvé
+        if (looseItems.isNotEmpty) {
+          _localStatusFilter = (looseItems.first['status'] ?? '').toString();
+        }
+      }
+
+      if (looseItems.isEmpty) {
+        // Plus rien pour ce produit -> vider proprement
+        setState(() {
+          _viewRow = null;
+          _items = [];
+          _movements = [];
+        });
+        return;
+      }
+
+      // === 3) Construire la clé du groupe à partir d'un item "ancre"
+      final anchor = _groupKeyFromItem(looseItems.first);
+
+      // === 4) Recharger la vue avec CETTE clé (sans appliquer 'status' puisque la vue n'a pas de filtre statut)
+      final viewRow = await _fetchViewRow(anchor) ?? anchor;
+
+      // === 5) Recharger la liste stricte d'items à partir de la même clé
+      final strictItems = await _fetchGroupItems(anchor);
+
+      // === 6) Historique
+      final mvts = await _fetchMovementsFor(
+          strictItems.map((e) => e['id'] as int).toList());
+
+      // === 7) Ajuster le filtre local sur le statut réellement présent
+      String? newStatusDetected = strictItems.isNotEmpty
+          ? (strictItems.first['status']?.toString())
+          : null;
+
+      // Si on a dû tomber en back (e.g. listed -> sold) OU si le statut réel diffère, on aligne
+      if (fellBackAllStatuses ||
+          (newStatusDetected != null &&
+              newStatusDetected != _localStatusFilter)) {
+        _localStatusFilter = newStatusDetected ?? _localStatusFilter;
+      }
 
       setState(() {
-        _viewRow = row ?? widget.group;
-        _items = items;
+        _viewRow = viewRow;
+        _items = strictItems;
         _movements = mvts;
       });
     } catch (e) {
@@ -191,8 +337,6 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
 
     var q = _sb.from('item').select(itemCols.join(','));
 
-    final src = source;
-
     const filterableKeys = <String>{
       'product_id',
       'game_id',
@@ -223,8 +367,8 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
     };
 
     for (final k in filterableKeys) {
-      if (!src.containsKey(k)) continue;
-      final v = src[k];
+      if (!source.containsKey(k)) continue;
+      final v = source[k];
       if (v == null) {
         q = q.filter(k, 'is', null);
       } else {
@@ -232,10 +376,12 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
       }
     }
 
-    final clickedStatus = (widget.group['status'] ?? '').toString();
-    if (clickedStatus.isNotEmpty) {
-      q = q.eq('status', clickedStatus);
-      _localStatusFilter ??= clickedStatus;
+    // 🔑 Statut : on prend celui du "source" s’il est renseigné, sinon le filtre local si présent
+    final srcStatus = (source['status'] ?? '').toString();
+    if (srcStatus.isNotEmpty) {
+      q = q.eq('status', srcStatus);
+    } else if ((_localStatusFilter ?? '').isNotEmpty) {
+      q = q.eq('status', _localStatusFilter as Object);
     }
 
     final raw = await q.order('id', ascending: true).limit(20000);
@@ -288,7 +434,10 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
       },
     );
 
-    if (changed == true) await _loadAll();
+    if (changed == true) {
+      _dirty = true; // ✅ marque comme modifié
+      await _loadAll(); // ✅ refresh local immédiat
+    }
   }
 
   // ===== Helpers KPIs =====
@@ -313,13 +462,21 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
 
   @override
   Widget build(BuildContext context) {
-    final status =
-        (_localStatusFilter ?? widget.group['status'] ?? '').toString();
+    final status = (_localStatusFilter ??
+            (_items.isNotEmpty
+                ? (_items.first['status']?.toString())
+                : widget.group['status']?.toString()) ??
+            '')
+        .toString();
+
     final visibleItems = _filteredItems();
 
-    final qtyStatus = widget.group['qty_status'] as int? ?? visibleItems.length;
-    final currency =
-        (_viewRow?['currency'] ?? widget.group['currency'] ?? 'USD').toString();
+    final qtyStatus = visibleItems.length;
+    final currency = (_viewRow?['currency'] ??
+            (_items.isNotEmpty ? _items.first['currency']?.toString() : null) ??
+            widget.group['currency'] ??
+            'USD')
+        .toString();
 
     final qtyTotal = (_viewRow?['qty_total'] as num?) ?? qtyStatus;
     final totalWithFees = (_viewRow?['total_cost_with_fees'] as num?) ?? 0;
@@ -354,18 +511,18 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
     // ===== THEME LOCAL (cosmétique) =====
     final cs = Theme.of(context).colorScheme;
 
-    return Theme(
-      data: Theme.of(context).copyWith(
-        chipTheme: Theme.of(context).chipTheme.copyWith(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-              labelStyle: Theme.of(context)
-                  .textTheme
-                  .labelMedium
-                  ?.copyWith(fontWeight: FontWeight.w600),
-            ),
-      ),
+    return WillPopScope(
+      // ✅ renvoie le flag au parent quand on quitte
+      onWillPop: () async {
+        Navigator.pop(context, _dirty);
+        return false; // on consomme le pop
+      },
       child: Scaffold(
         appBar: AppBar(
+          leading: BackButton(
+            // ✅ même logique sur la flèche de l’AppBar
+            onPressed: () => Navigator.pop(context, _dirty),
+          ),
           title: Text(
             _title.isEmpty ? 'Détails' : _title,
             style: Theme.of(context)
@@ -565,7 +722,7 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
                                 .textTheme
                                 .titleMedium
                                 ?.copyWith(fontWeight: FontWeight.w700)),
-                        const SizedBox(width: 8),
+                        const SizedBox(height: 8),
                         IconButton(
                           tooltip: _showHistory ? 'Masquer' : 'Afficher',
                           icon: Icon(_showHistory
