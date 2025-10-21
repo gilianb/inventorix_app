@@ -115,7 +115,7 @@ class _MainInventoryPageState extends State<MainInventoryPage> {
         'qty_listed, qty_awaiting_payment, qty_sold, qty_shipped, qty_finalized, qty_collection, '
         // totaux coûts + KPI
         'total_cost, total_cost_with_fees, realized_revenue,'
-        'sum_shipping_fees, sum_commission_fees';
+        'sum_shipping_fees, sum_commission_fees, sum_grading_fees';
 
     final List<dynamic> raw = await _sb
         .from('v_items_by_status')
@@ -190,16 +190,19 @@ class _MainInventoryPageState extends State<MainInventoryPage> {
       final qtyTotal = (r['qty_total'] as num?) ?? 0;
       final totalWithFees = (r['total_cost_with_fees'] as num?) ?? 0;
 
-      // nouveaux agrégats (sur l’ensemble du groupe)
+      // agrégats supplémentaires de la vue
       final sumShipping = (r['sum_shipping_fees'] as num?) ?? 0;
       final sumCommission = (r['sum_commission_fees'] as num?) ?? 0;
+      final sumGrading = (r['sum_grading_fees'] as num?) ?? 0; // ← NOUVEAU
 
-      // coût /u = (coût+fees achat)/u + shipping/u + commission/u
+      // coût /u = (coût+fees achat)/u + shipping/u + commission/u + grading/u
       final perUnitBase = qtyTotal > 0 ? (totalWithFees / qtyTotal) : 0;
       final perUnitShipping = qtyTotal > 0 ? (sumShipping / qtyTotal) : 0;
       final perUnitCommission = qtyTotal > 0 ? (sumCommission / qtyTotal) : 0;
+      final perUnitGrading = qtyTotal > 0 ? (sumGrading / qtyTotal) : 0;
 
-      final unit = perUnitBase + perUnitShipping + perUnitCommission;
+      final unit =
+          perUnitBase + perUnitShipping + perUnitCommission + perUnitGrading;
 
       final q = (r['qty_status'] as int?) ?? 0;
       total += unit * q;
@@ -286,7 +289,8 @@ class _MainInventoryPageState extends State<MainInventoryPage> {
       'buyer_company',
       'notes',
       'grade_id',
-      'grading_submission_id',
+      'grading_note',
+      'grading_fees',
       'sale_date',
       'sale_price',
       'tracking',

@@ -25,8 +25,7 @@ class _NewStockPageState extends State<NewStockPage> {
   final _totalCostCtrl = TextEditingController(); // PRIX TOTAL (USD)
   final _qtyCtrl = TextEditingController(text: '1');
   final _feesCtrl = TextEditingController(text: '0'); // en USD
-  final _estimatedPriceCtrl =
-      TextEditingController(); // <- OBLIGATOIRE désormais
+  final _estimatedPriceCtrl = TextEditingController(); // optionnel
   String _initStatus = 'paid';
 
   // Plus d’options (repliable)
@@ -36,9 +35,11 @@ class _NewStockPageState extends State<NewStockPage> {
   final _docUrlCtrl = TextEditingController();
   final _notesCtrl = TextEditingController();
   final _gradeIdCtrl = TextEditingController();
+  final _gradingNoteCtrl = TextEditingController();
+  final _gradingFeesCtrl = TextEditingController();
   final _itemLocationCtrl = TextEditingController();
 
-  // --- NOUVEAUX CHAMPS vente/frais ---
+  // Vente/frais
   final _shippingFeesCtrl = TextEditingController();
   final _commissionFeesCtrl = TextEditingController();
   final _paymentTypeCtrl = TextEditingController();
@@ -52,7 +53,6 @@ class _NewStockPageState extends State<NewStockPage> {
 
   static const langs = ['EN', 'FR', 'JP'];
 
-  // Statuts cohérents (single / sealed) + 'collection'
   static const singleStatuses = [
     'ordered',
     'paid',
@@ -61,7 +61,7 @@ class _NewStockPageState extends State<NewStockPage> {
     'at_grader',
     'graded',
     'listed',
-    'awaiting_payment', // ⬅️ AJOUT
+    'awaiting_payment',
     'sold',
     'shipped',
     'finalized',
@@ -72,7 +72,7 @@ class _NewStockPageState extends State<NewStockPage> {
     'paid',
     'received',
     'listed',
-    'awaiting_payment', // ⬅️ AJOUT
+    'awaiting_payment',
     'sold',
     'shipped',
     'finalized',
@@ -108,7 +108,6 @@ class _NewStockPageState extends State<NewStockPage> {
   void _snack(String m) =>
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
 
-  // === Dialog d’erreur pour les uploads ===
   void _showUploadError(String message) {
     showDialog<void>(
       context: context,
@@ -146,7 +145,8 @@ class _NewStockPageState extends State<NewStockPage> {
     final qty = int.tryParse(_qtyCtrl.text.trim()) ?? 0;
     final totalCost = _num(_totalCostCtrl) ?? 0;
     final fees = _num(_feesCtrl) ?? 0;
-    final estPrice = _num(_estimatedPriceCtrl); // <- requis
+    final estPrice = _num(_estimatedPriceCtrl); // peut être null
+    final gradingFees = _num(_gradingFeesCtrl); // peut être null
 
     if (qty <= 0) {
       _snack('Quantité > 0 requise');
@@ -156,23 +156,21 @@ class _NewStockPageState extends State<NewStockPage> {
       _snack('Prix total invalide');
       return;
     }
-    if (_supplierNameCtrl.text.trim().isEmpty) {
-      _snack('Fournisseur requis');
-      return;
-    }
     if (_selectedGameId == null) {
       _snack('Choisis un jeu');
       return;
     }
-    if (estPrice == null || estPrice < 0) {
-      _snack('Prix estimé par unité requis (>= 0)');
+
+    // estimation requise uniquement si on liste directement
+    final mustHaveEstimated =
+        _initStatus == 'listed' || _initStatus == 'awaiting_payment';
+    if (mustHaveEstimated && (estPrice == null || estPrice < 0)) {
+      _snack('Prix estimé requis (>= 0) pour un statut de vente');
       return;
     }
 
     setState(() => _saving = true);
     try {
-      // (variable inutilisée, conservée si tu veux réutiliser plus tard)
-
       await _sb.rpc('fn_create_product_and_items', params: {
         'p_type': _type,
         'p_name': _nameCtrl.text.trim(),
@@ -187,8 +185,8 @@ class _NewStockPageState extends State<NewStockPage> {
         'p_qty': qty,
         'p_total_cost': totalCost,
         'p_fees': fees,
-        'p_init_status': _initStatus, // peut être 'collection'
-        'p_channel_id': null, // ou un int
+        'p_init_status': _initStatus,
+        'p_channel_id': null,
         'p_tracking': _trackingCtrl.text.trim().isNotEmpty
             ? _trackingCtrl.text.trim()
             : null,
@@ -197,12 +195,18 @@ class _NewStockPageState extends State<NewStockPage> {
             : null,
         'p_document_url':
             _docUrlCtrl.text.trim().isNotEmpty ? _docUrlCtrl.text.trim() : null,
-        'p_estimated_price': estPrice, // <- toujours envoyé (non null)
+
+        'p_estimated_price': estPrice, // null si vide
+
         'p_notes':
             _notesCtrl.text.trim().isNotEmpty ? _notesCtrl.text.trim() : null,
         'p_grade_id': _gradeIdCtrl.text.trim().isNotEmpty
             ? _gradeIdCtrl.text.trim()
             : null,
+        'p_grading_note': _gradingNoteCtrl.text.trim().isNotEmpty
+            ? _gradingNoteCtrl.text.trim()
+            : null,
+        'p_grading_fees': gradingFees, // ✅ nouveau: par unité, nullable
         'p_item_location': _itemLocationCtrl.text.trim().isNotEmpty
             ? _itemLocationCtrl.text.trim()
             : null,
@@ -255,6 +259,8 @@ class _NewStockPageState extends State<NewStockPage> {
     _commissionFeesCtrl.dispose();
     _paymentTypeCtrl.dispose();
     _buyerInfosCtrl.dispose();
+    _gradingNoteCtrl.dispose();
+    _gradingFeesCtrl.dispose();
 
     super.dispose();
   }
@@ -348,10 +354,7 @@ class _NewStockPageState extends State<NewStockPage> {
                       TextFormField(
                         controller: _supplierNameCtrl,
                         decoration: const InputDecoration(
-                            labelText: 'Fournisseur * (texte libre)'),
-                        validator: (v) => (v == null || v.trim().isEmpty)
-                            ? 'Fournisseur requis'
-                            : null,
+                            labelText: 'Fournisseur (texte libre)'),
                       ),
                       const SizedBox(height: 8),
                       TextFormField(
@@ -436,22 +439,14 @@ class _NewStockPageState extends State<NewStockPage> {
                         ),
                       ]),
                       const SizedBox(height: 8),
-                      // === Estimated price (OBLIGATOIRE) ===
+                      // Estimated price (OPTIONNEL)
                       TextFormField(
                         controller: _estimatedPriceCtrl,
                         keyboardType: const TextInputType.numberWithOptions(
                             decimal: true),
                         decoration: const InputDecoration(
-                          labelText: 'Prix de vente estimé par unité (USD) *',
+                          labelText: 'Prix de vente estimé par unité (USD)',
                         ),
-                        validator: (v) {
-                          final n = double.tryParse(
-                              (v ?? '').trim().replaceAll(',', '.'));
-                          if (n == null || n < 0) {
-                            return 'Prix estimé requis (>= 0)';
-                          }
-                          return null;
-                        },
                       ),
                     ],
                   ),
@@ -475,13 +470,32 @@ class _NewStockPageState extends State<NewStockPage> {
                     title: 'Options (facultatif)',
                     child: Column(
                       children: [
-                        // (Estimated price retiré d’ici)
                         Row(children: [
                           Expanded(
                             child: TextFormField(
                               controller: _gradeIdCtrl,
                               decoration: const InputDecoration(
                                   labelText: 'Grading ID'),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: TextFormField(
+                              controller: _gradingNoteCtrl,
+                              decoration: const InputDecoration(
+                                  labelText: 'Grading Note'),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: TextFormField(
+                              controller: _gradingFeesCtrl,
+                              keyboardType:
+                                  const TextInputType.numberWithOptions(
+                                      decimal: true),
+                              decoration: const InputDecoration(
+                                labelText: 'Grading Fees (USD) — par unité',
+                              ),
                             ),
                           ),
                           const SizedBox(width: 12),
@@ -509,14 +523,13 @@ class _NewStockPageState extends State<NewStockPage> {
                         StorageUploadTile(
                           label: 'Photo',
                           bucket: 'item-photos',
-                          objectPrefix:
-                              'items', // tu peux mettre 'items/${_selectedGameId ?? "gen"}'
+                          objectPrefix: 'items',
                           initialUrl: _photoUrlCtrl.text.isEmpty
                               ? null
                               : _photoUrlCtrl.text,
                           onUrlChanged: (u) => _photoUrlCtrl.text = u ?? '',
                           acceptImagesOnly: true,
-                          onError: _showUploadError, // <-- affiche dialog
+                          onError: _showUploadError,
                         ),
                         const SizedBox(height: 8),
                         StorageUploadTile(
@@ -528,7 +541,7 @@ class _NewStockPageState extends State<NewStockPage> {
                               : _docUrlCtrl.text,
                           onUrlChanged: (u) => _docUrlCtrl.text = u ?? '',
                           acceptDocsOnly: true,
-                          onError: _showUploadError, // <-- affiche dialog
+                          onError: _showUploadError,
                         ),
                         const SizedBox(height: 8),
                         TextFormField(

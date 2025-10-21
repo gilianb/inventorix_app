@@ -144,7 +144,8 @@ class InfoExtrasCard extends StatelessWidget {
       _kv(context, 'Item location', _txt(data['item_location'])),
       _kv(context, 'Tracking', _txt(data['tracking'])),
       _kv(context, 'Grade ID', _txt(data['grade_id'])),
-      _kv(context, 'Grading submission', _txt(data['grading_submission_id'])),
+      _kv(context, 'Grading note', _txt(data['grading_note'])),
+      _kv(context, 'Grading fees', _money(data['grading_fees'], currency)),
     ];
 
     final right = <Widget>[

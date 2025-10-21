@@ -21,6 +21,7 @@ const kAccentB = Color(0xFF00D1B2); // teal/menthe
 const kAccentC = Color(0xFFFFB545); // amber doux
 
 /// Colonnes disponibles dans la vue v_items_by_status (strict)
+/// ⚠️ NE PAS mettre grading_note / grading_fees ici car la vue ne les expose pas
 const List<String> kViewCols = [
   'product_id',
   'game_id',
@@ -44,6 +45,8 @@ const List<String> kViewCols = [
   'sum_estimated_price',
   'item_location',
   'channel_id',
+  'payment_type',
+  'buyer_infos',
   'qty_total',
   'qty_ordered',
   'qty_in_transit',
@@ -53,6 +56,7 @@ const List<String> kViewCols = [
   'qty_at_grader',
   'qty_graded',
   'qty_listed',
+  'qty_awaiting_payment',
   'qty_sold',
   'qty_shipped',
   'qty_finalized',
@@ -60,11 +64,10 @@ const List<String> kViewCols = [
   'total_cost',
   'total_cost_with_fees',
   'realized_revenue',
-  'payment_type',
-  'buyer_infos',
-  // === AJOUTS pour Investi(vue) enrichi ===
+  // agrégats pour Investi(vue) enrichi :
   'sum_shipping_fees',
   'sum_commission_fees',
+  'sum_grading_fees',
 ];
 
 class GroupDetailsPage extends StatefulWidget {
@@ -86,7 +89,7 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
   // Filtre local par statut (timeline / chips)
   String? _localStatusFilter;
 
-  // Toggles d’affichage (demandés)
+  // Toggles d’affichage
   bool _showItemsTable = true;
   bool _showHistory = true;
 
@@ -170,7 +173,8 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
       'unit_fees',
       'notes',
       'grade_id',
-      'grading_submission_id',
+      'grading_note', // <- champs table item
+      'grading_fees', // <-
       'sale_date',
       'sale_price',
       'tracking',
@@ -201,7 +205,8 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
       'buyer_company',
       'notes',
       'grade_id',
-      'grading_submission_id',
+      'grading_note',
+      'grading_fees',
       'sale_date',
       'sale_price',
       'tracking',
@@ -316,17 +321,21 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
     final currency =
         (_viewRow?['currency'] ?? widget.group['currency'] ?? 'USD').toString();
 
-    // === Investi(vue) enrichi avec shipping + commission ===
     final qtyTotal = (_viewRow?['qty_total'] as num?) ?? qtyStatus;
     final totalWithFees = (_viewRow?['total_cost_with_fees'] as num?) ?? 0;
     final sumShipping = (_viewRow?['sum_shipping_fees'] as num?) ?? 0;
     final sumCommission = (_viewRow?['sum_commission_fees'] as num?) ?? 0;
+    final sumGrading = (_viewRow?['sum_grading_fees'] as num?) ?? 0; // <<<
 
     final perUnitBase = qtyTotal > 0 ? (totalWithFees / qtyTotal) : 0;
     final perUnitShipping = qtyTotal > 0 ? (sumShipping / qtyTotal) : 0;
     final perUnitCommission = qtyTotal > 0 ? (sumCommission / qtyTotal) : 0;
-    final unitCost = perUnitBase + perUnitShipping + perUnitCommission;
+    final perUnitGrading = qtyTotal > 0 ? (sumGrading / qtyTotal) : 0; // <<<
 
+    final unitCost = perUnitBase +
+        perUnitShipping +
+        perUnitCommission +
+        perUnitGrading; // <<<
     final investedForView = unitCost * qtyStatus;
 
     // Σ estimated_price en traitant null comme 0
@@ -790,7 +799,9 @@ class _ItemsTable extends StatelessWidget {
             columns: const [
               DataColumn(label: Text('ID')),
               DataColumn(label: Text('Statut')),
-              DataColumn(label: Text('Grade')),
+              DataColumn(label: Text('Grade ID')),
+              DataColumn(label: Text('Grade note')), // <- AJOUT
+              DataColumn(label: Text('Grading fees')), // <- AJOUT
               DataColumn(label: Text('Est.')),
               DataColumn(label: Text('Sale')),
               DataColumn(label: Text('Tracking')),
@@ -817,6 +828,8 @@ class _ItemsTable extends StatelessWidget {
                     backgroundColor: _statusColor(s),
                   )),
                   DataCell(Text(_txt(r['grade_id']))),
+                  DataCell(Text(_txt(r['grading_note']))),
+                  DataCell(Text(_txt(r['grading_fees']))),
                   DataCell(Text(est == null ? '—' : '${_m(est)} $currency')),
                   DataCell(Text(sale == null ? '—' : '${_m(sale)} $currency')),
                   DataCell(Text(_txt(r['tracking']))),

@@ -76,6 +76,8 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
   // ======= FLAGS d'inclusion =======
   bool incStatus = false;
   bool incGradeId = false;
+  bool incGradingNote = false;
+  bool incGradingFees = false;
   bool incEstimatedPrice = false;
   bool incSalePrice = false;
   bool incSaleDate = false;
@@ -101,6 +103,8 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
   // ======= CONTRÔLEURS =======
   String _newStatus = '';
   final _gradeIdCtrl = TextEditingController();
+  final _gradingNoteCtrl = TextEditingController();
+  final _gradingFeesCtrl = TextEditingController();
   final _estimatedPriceCtrl = TextEditingController();
   final _salePriceCtrl = TextEditingController();
   DateTime? _saleDate;
@@ -159,6 +163,8 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
     _newStatus = widget.status;
 
     _gradeIdCtrl.text = (s['grade_id'] ?? '').toString();
+    _gradingNoteCtrl.text = (s['grading_note'] ?? '').toString();
+    _gradingFeesCtrl.text = _numToText(s['grading_fees']);
     // robustesse: si la vue renvoie null on met vide
     _estimatedPriceCtrl.text = _numToText(s['estimated_price']);
     _salePriceCtrl.text = _numToText(s['sale_price']);
@@ -228,6 +234,8 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
   @override
   void dispose() {
     _gradeIdCtrl.dispose();
+    _gradingNoteCtrl.dispose();
+    _gradingFeesCtrl.dispose();
     _estimatedPriceCtrl.dispose();
     _salePriceCtrl.dispose();
     _itemLocationCtrl.dispose();
@@ -276,6 +284,15 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
     if (incGradeId) {
       baseUpdates['grade_id'] =
           _gradeIdCtrl.text.trim().isEmpty ? null : _gradeIdCtrl.text.trim();
+    }
+
+    if (incGradingNote) {
+      baseUpdates['grading_note'] = _gradingNoteCtrl.text.trim().isEmpty
+          ? null
+          : _gradingNoteCtrl.text.trim();
+    }
+    if (incGradingFees) {
+      baseUpdates['grading_fees'] = _tryNum(_gradingFeesCtrl.text);
     }
     if (incEstimatedPrice) {
       baseUpdates['estimated_price'] = _tryNum(_estimatedPriceCtrl.text);
@@ -384,6 +401,8 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
         'buyer_company',
         'notes',
         'grade_id',
+        'grading_note',
+        'grading_fees',
         'sale_date',
         'sale_price',
         'tracking',
@@ -701,6 +720,28 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
                   decoration: const InputDecoration(
                       hintText: 'PSA serial number, etc.'),
                 ),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: checkRow(
+                value: incGradingNote,
+                onChanged: (v) => setState(() => incGradingNote = v ?? false),
+                label: "Grading Note",
+                field: TextField(
+                  controller: _gradingNoteCtrl,
+                  decoration: const InputDecoration(hintText: 'ex: Excellent'),
+                ),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: checkRow(
+                value: incGradingFees,
+                onChanged: (v) => setState(() => incGradingFees = v ?? false),
+                label: 'Grading Fees (USD)',
+                field:
+                    numberField(_gradingFeesCtrl, 'ex: 25.00', decimal: true),
               ),
             ),
             const SizedBox(width: 12),
