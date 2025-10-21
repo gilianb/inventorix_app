@@ -19,8 +19,8 @@ class _NewStockPageState extends State<NewStockPage> {
   String _lang = 'EN';
 
   // Achat
-  final _supplierNameCtrl = TextEditingController(); // texte libre
-  final _buyerCompanyCtrl = TextEditingController(); // société acheteuse
+  final _supplierNameCtrl = TextEditingController(); // optionnel
+  final _buyerCompanyCtrl = TextEditingController(); // optionnel
   DateTime _purchaseDate = DateTime.now();
   final _totalCostCtrl = TextEditingController(); // PRIX TOTAL (USD)
   final _qtyCtrl = TextEditingController(text: '1');
@@ -176,7 +176,11 @@ class _NewStockPageState extends State<NewStockPage> {
         'p_name': _nameCtrl.text.trim(),
         'p_language': _lang,
         'p_game_id': _selectedGameId,
-        'p_supplier_name': _supplierNameCtrl.text.trim(),
+
+        'p_supplier_name': _supplierNameCtrl.text.trim().isEmpty
+            ? null
+            : _supplierNameCtrl.text.trim(),
+
         'p_buyer_company': _buyerCompanyCtrl.text.trim().isEmpty
             ? null
             : _buyerCompanyCtrl.text.trim(),
@@ -206,7 +210,7 @@ class _NewStockPageState extends State<NewStockPage> {
         'p_grading_note': _gradingNoteCtrl.text.trim().isNotEmpty
             ? _gradingNoteCtrl.text.trim()
             : null,
-        'p_grading_fees': gradingFees, // ✅ nouveau: par unité, nullable
+        'p_grading_fees': gradingFees, // par unité, nullable
         'p_item_location': _itemLocationCtrl.text.trim().isNotEmpty
             ? _itemLocationCtrl.text.trim()
             : null,
@@ -321,16 +325,20 @@ class _NewStockPageState extends State<NewStockPage> {
                           ),
                         ),
                       ]),
+
                       const SizedBox(height: 8),
-                      TextFormField(
+
+                      // ===== (1) Nom du produit : une seule case + suggestions =====
+                      LookupAutocompleteField(
+                        tableName: 'product',
+                        label: 'Nom du produit',
                         controller: _nameCtrl,
-                        decoration: const InputDecoration(
-                            labelText: 'Nom du produit *'),
-                        validator: (v) => (v == null || v.trim().isEmpty)
-                            ? 'Nom requis'
-                            : null,
+                        requiredField: true,
+                        addDialogTitle: 'Nouveau produit',
                       ),
+
                       const SizedBox(height: 8),
+
                       DropdownButtonFormField<int>(
                         initialValue: _selectedGameId,
                         items: _games
@@ -346,23 +354,33 @@ class _NewStockPageState extends State<NewStockPage> {
                     ],
                   ),
                 ),
+
                 const SizedBox(height: 12),
+
                 _Section(
                   title: 'Achat (USD)',
                   child: Column(
                     children: [
-                      TextFormField(
+                      // ===== (2) Fournisseur : une seule case + suggestions =====
+                      LookupAutocompleteField(
+                        tableName: 'fournisseur',
+                        label: 'Fournisseur (optionnel)',
                         controller: _supplierNameCtrl,
-                        decoration: const InputDecoration(
-                            labelText: 'Fournisseur (texte libre)'),
+                        addDialogTitle: 'Nouveau fournisseur',
                       ),
+
                       const SizedBox(height: 8),
-                      TextFormField(
+
+                      // ===== (3) Société acheteuse : une seule case + suggestions =====
+                      LookupAutocompleteField(
+                        tableName: 'society',
+                        label: 'Société acheteuse (optionnel)',
                         controller: _buyerCompanyCtrl,
-                        decoration: const InputDecoration(
-                            labelText: 'Société acheteuse (optionnel)'),
+                        addDialogTitle: 'Nouvelle société',
                       ),
+
                       const SizedBox(height: 8),
+
                       Row(children: [
                         Expanded(
                           child: TextFormField(
@@ -392,7 +410,9 @@ class _NewStockPageState extends State<NewStockPage> {
                           ),
                         ),
                       ]),
+
                       const SizedBox(height: 8),
+
                       Row(children: [
                         Expanded(
                           child: _DateField(
@@ -416,7 +436,9 @@ class _NewStockPageState extends State<NewStockPage> {
                           ),
                         ),
                       ]),
+
                       const SizedBox(height: 8),
+
                       Row(children: [
                         Expanded(
                           child: TextFormField(
@@ -438,7 +460,9 @@ class _NewStockPageState extends State<NewStockPage> {
                           ),
                         ),
                       ]),
+
                       const SizedBox(height: 8),
+
                       // Estimated price (OPTIONNEL)
                       TextFormField(
                         controller: _estimatedPriceCtrl,
@@ -499,15 +523,20 @@ class _NewStockPageState extends State<NewStockPage> {
                             ),
                           ),
                           const SizedBox(width: 12),
+
+                          // ===== (4) Item Location : une seule case + suggestions =====
                           Expanded(
-                            child: TextFormField(
+                            child: LookupAutocompleteField(
+                              tableName: 'item_location',
+                              label: 'Item Location',
                               controller: _itemLocationCtrl,
-                              decoration: const InputDecoration(
-                                  labelText: "Item Location"),
+                              addDialogTitle: 'Nouvel emplacement',
                             ),
                           ),
                         ]),
+
                         const SizedBox(height: 8),
+
                         Row(children: [
                           Expanded(
                             child: TextFormField(
@@ -519,7 +548,9 @@ class _NewStockPageState extends State<NewStockPage> {
                           const SizedBox(width: 12),
                           const Expanded(child: SizedBox.shrink()),
                         ]),
+
                         const SizedBox(height: 8),
+
                         StorageUploadTile(
                           label: 'Photo',
                           bucket: 'item-photos',
@@ -531,7 +562,9 @@ class _NewStockPageState extends State<NewStockPage> {
                           acceptImagesOnly: true,
                           onError: _showUploadError,
                         ),
+
                         const SizedBox(height: 8),
+
                         StorageUploadTile(
                           label: 'Document',
                           bucket: 'item-docs',
@@ -543,14 +576,18 @@ class _NewStockPageState extends State<NewStockPage> {
                           acceptDocsOnly: true,
                           onError: _showUploadError,
                         ),
+
                         const SizedBox(height: 8),
+
                         TextFormField(
                           controller: _notesCtrl,
                           minLines: 2,
                           maxLines: 5,
                           decoration: const InputDecoration(labelText: 'Notes'),
                         ),
+
                         const SizedBox(height: 8),
+
                         Row(children: [
                           Expanded(
                             child: TextFormField(
@@ -574,7 +611,19 @@ class _NewStockPageState extends State<NewStockPage> {
                             ),
                           ),
                         ]),
+
                         const SizedBox(height: 8),
+
+                        // ===== (5) Type de paiement : une seule case + suggestions =====
+                        LookupAutocompleteField(
+                          tableName: 'payment_type',
+                          label: 'Type de paiement',
+                          controller: _paymentTypeCtrl,
+                          addDialogTitle: 'Nouveau type de paiement',
+                        ),
+
+                        const SizedBox(height: 8),
+
                         Row(children: [
                           Expanded(
                             child: TextFormField(
@@ -662,6 +711,264 @@ class _DateField extends StatelessWidget {
           child: Text('$label: $txt'),
         ),
       ),
+    );
+  }
+}
+
+/// ===================================================================
+/// Widget : UNE SEULE CASE texte + suggestions (overlay Autocomplete)
+/// + Entrée => ajoute la valeur s'il n'y a aucun résultat
+/// ===================================================================
+class LookupAutocompleteField extends StatefulWidget {
+  const LookupAutocompleteField({
+    super.key,
+    required this.tableName,
+    required this.label,
+    required this.controller,
+    this.addDialogTitle,
+    this.requiredField = false,
+    this.whereActiveOnly = true,
+    this.maxOptions = 10,
+    this.autoAddOnEnter = true,
+  });
+
+  final String tableName;
+  final String label;
+  final TextEditingController controller;
+  final String? addDialogTitle;
+  final bool requiredField;
+  final bool whereActiveOnly;
+  final int maxOptions;
+  final bool autoAddOnEnter;
+
+  @override
+  State<LookupAutocompleteField> createState() =>
+      _LookupAutocompleteFieldState();
+}
+
+class _LookupAutocompleteFieldState extends State<LookupAutocompleteField> {
+  final _sb = Supabase.instance.client;
+
+  final FocusNode _focusNode = FocusNode(); // appairé à RawAutocomplete
+  List<String> _all = [];
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  @override
+  void dispose() {
+    _focusNode.dispose();
+    super.dispose();
+  }
+
+  Future<void> _load() async {
+    setState(() => _loading = true);
+    try {
+      final base = _sb.from(widget.tableName).select('name');
+      List<dynamic> data;
+      if (widget.whereActiveOnly) {
+        try {
+          data = await base.eq('active', true).order('name');
+        } on PostgrestException {
+          data = await base.order('name');
+        }
+      } else {
+        data = await base.order('name');
+      }
+
+      _all = data
+          .map<String>((e) => (e as Map)['name']?.toString() ?? '')
+          .where((s) => s.isNotEmpty)
+          .toList();
+    } catch (e) {
+      _all = [];
+      debugPrint('LookupAutocompleteField load error: $e');
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  bool _hasAnyMatch(String q) {
+    final s = q.trim().toLowerCase();
+    if (s.isEmpty) return _all.isNotEmpty;
+    return _all.any((n) => n.toLowerCase().contains(s));
+  }
+
+  bool _hasExact(String q) {
+    final s = q.trim().toLowerCase();
+    if (s.isEmpty) return false;
+    return _all.any((n) => n.toLowerCase() == s);
+  }
+
+  Future<void> _addValue(String name) async {
+    final n = name.trim();
+    if (n.isEmpty) return;
+
+    // Évite doublons (case-insensitive)
+    if (_all.any((x) => x.toLowerCase() == n.toLowerCase())) {
+      widget.controller.text = n;
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Déjà présent: "$n"')),
+        );
+      }
+      return;
+    }
+
+    try {
+      // ✅ force le retour de la ligne insérée, et déclenche une erreur si RLS bloque
+      final inserted = await _sb
+          .from(widget.tableName)
+          .insert({'name': n})
+          .select('id, name')
+          .single();
+
+      if ((inserted['id'] != null)) {
+        // recharge la liste puis sélectionne la valeur
+        await _load();
+        widget.controller.text = n;
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Ajouté: "${inserted['name']}"')),
+          );
+        }
+      } else {
+        // cas improbable: pas de ligne renvoyée
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Insertion non confirmée.')),
+          );
+        }
+      }
+    } on PostgrestException catch (e) {
+      // ✅ tu verras l’erreur RLS ici (policy manquante…) ou colonne manquante
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Erreur INSERT: ${e.message}')),
+        );
+      }
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Erreur inconnue: $e')),
+        );
+      }
+    }
+  }
+
+  Future<void> _submitOrAdd(String currentText) async {
+    final t = currentText.trim();
+    if (t.isEmpty) return;
+
+    final anyMatch = _hasAnyMatch(t);
+    final exact = _hasExact(t);
+
+    if (exact) {
+      // rien à faire: on garde la valeur exacte
+      widget.controller.text = t;
+      return;
+    }
+
+    // S'il n'y a AUCUN résultat (liste vide pour cette requête) et que l'option est activée:
+    if (widget.autoAddOnEnter && !anyMatch) {
+      await _addValue(t);
+      // referme le clavier et l'overlay
+      _focusNode.unfocus();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final label = widget.requiredField ? '${widget.label} *' : widget.label;
+
+    if (_loading) {
+      return InputDecorator(
+        decoration: InputDecoration(labelText: label),
+        child: const SizedBox(
+          height: 48,
+          child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
+        ),
+      );
+    }
+
+    return RawAutocomplete<String>(
+      textEditingController: widget.controller,
+      focusNode: _focusNode,
+      optionsBuilder: (TextEditingValue tev) {
+        final q = tev.text.trim().toLowerCase();
+        if (q.isEmpty) return _all.take(widget.maxOptions);
+        return _all
+            .where((n) => n.toLowerCase().contains(q))
+            .take(widget.maxOptions);
+      },
+      displayStringForOption: (opt) => opt,
+      optionsViewBuilder: (context, onSelected, options) {
+        final input = widget.controller.text.trim();
+        final canAdd = input.isNotEmpty && !_hasExact(input);
+
+        // on montre "➕ Ajouter" seulement s'il n'existe pas déjà une valeur exacte
+        final merged = [
+          ...options,
+          if (canAdd) '___ADD___$input',
+        ];
+
+        return Align(
+          alignment: Alignment.topLeft,
+          child: Material(
+            elevation: 4,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 240, minWidth: 280),
+              child: ListView.builder(
+                padding: EdgeInsets.zero,
+                itemCount: merged.length,
+                itemBuilder: (ctx, i) {
+                  final v = merged[i];
+                  final isAdd = v.startsWith('___ADD___');
+                  final text = isAdd ? v.substring(9) : v;
+                  return ListTile(
+                    dense: true,
+                    title: isAdd
+                        ? Text('➕ Ajouter "$text"',
+                            overflow: TextOverflow.ellipsis)
+                        : Text(text, overflow: TextOverflow.ellipsis),
+                    onTap: () async {
+                      if (isAdd) {
+                        await _addValue(text);
+                        _focusNode.unfocus();
+                      } else {
+                        onSelected(text);
+                      }
+                    },
+                  );
+                },
+              ),
+            ),
+          ),
+        );
+      },
+      fieldViewBuilder: (context, textController, focusNode, onFieldSubmitted) {
+        // `textController` et `focusNode` sont ceux fournis au-dessus
+        return TextFormField(
+          controller: textController,
+          focusNode: focusNode,
+          decoration: InputDecoration(labelText: label),
+          onFieldSubmitted: (val) async {
+            // Entrée => si aucun résultat, on ajoute
+            await _submitOrAdd(val);
+            onFieldSubmitted(); // laisse RawAutocomplete gérer la fermeture
+          },
+          validator: (v) {
+            if (!widget.requiredField) return null;
+            if (v == null || v.trim().isEmpty) return 'Champ requis';
+            return null;
+          },
+        );
+      },
+      onSelected: (val) => widget.controller.text = val,
     );
   }
 }

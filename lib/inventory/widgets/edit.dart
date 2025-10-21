@@ -2,18 +2,13 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'storage_upload_tile.dart';
 
-/// Dialog d'édition en masse d'UN groupe strict (la ligne cliquée)
-/// - N'édite QUE les items correspondant exactement à la ligne (toutes clés identiques, NULL = NULL) + le statut courant
-/// - Permet de choisir la quantité à modifier (1..availableQty)
-/// - Permet de cocher les champs à mettre à jour et saisir les valeurs
-/// - Applique les modifs aux N items sélectionnés (par défaut: plus anciens id)
 class EditItemsDialog extends StatefulWidget {
   const EditItemsDialog({
     super.key,
     required this.productId,
     required this.status,
     required this.availableQty,
-    required this.initialSample, // la "ligne" cliquée (contient les clés du groupe)
+    required this.initialSample,
   });
 
   final int productId;
@@ -73,34 +68,7 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
   // appliquer sur les items les plus anciens (id ASC) ou récents (id DESC)
   bool _oldestFirst = true;
 
-  // ======= FLAGS d'inclusion =======
-  bool incStatus = false;
-  bool incGradeId = false;
-  bool incGradingNote = false;
-  bool incGradingFees = false;
-  bool incEstimatedPrice = false;
-  bool incSalePrice = false;
-  bool incSaleDate = false;
-  bool incItemLocation = false;
-  bool incTracking = false;
-  bool incChannelId = false;
-  bool incBuyerCompany = false;
-  bool incSupplierName = false;
-  bool incNotes = false;
-  bool incPhotoUrl = false;
-  bool incDocumentUrl = false;
-
-  // Nouveaux champs
-  bool incType = false;
-  bool incProductName = false;
-  bool incLanguage = false;
-  bool incGameId = false;
-  bool incShippingFees = false;
-  bool incCommissionFees = false;
-  bool incPaymentType = false;
-  bool incBuyerInfos = false;
-
-  // ======= CONTRÔLEURS =======
+  // ======= CONTRÔLEURS ======= (plus de cases à cocher)
   String _newStatus = '';
   final _gradeIdCtrl = TextEditingController();
   final _gradingNoteCtrl = TextEditingController();
@@ -132,7 +100,7 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
 
   bool _saving = false;
 
-  // Ajout du statut awaiting_payment
+  // Statuts
   static const List<String> kAllStatuses = [
     'ordered',
     'in_transit',
@@ -142,30 +110,28 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
     'at_grader',
     'graded',
     'listed',
-    'awaiting_payment', // ⬅︎ ajouté
+    'awaiting_payment',
     'sold',
     'shipped',
     'finalized',
     'collection',
   ];
 
-  static const Set<String> kSalePhase = {'sold', 'shipped', 'finalized'};
-
   static const langs = ['EN', 'FR', 'JP'];
   static const itemTypes = ['single', 'sealed'];
+
+  Map<String, dynamic> get _sample => (widget.initialSample ?? const {});
 
   @override
   void initState() {
     super.initState();
     _countToEdit = widget.availableQty.clamp(1, 999999);
-    // Pré-remplissage à partir de l'échantillon (la ligne cliquée)
-    final s = widget.initialSample ?? const {};
+    final s = _sample;
     _newStatus = widget.status;
 
     _gradeIdCtrl.text = (s['grade_id'] ?? '').toString();
     _gradingNoteCtrl.text = (s['grading_note'] ?? '').toString();
     _gradingFeesCtrl.text = _numToText(s['grading_fees']);
-    // robustesse: si la vue renvoie null on met vide
     _estimatedPriceCtrl.text = _numToText(s['estimated_price']);
     _salePriceCtrl.text = _numToText(s['sale_price']);
     _saleDate = _parseDate(s['sale_date']);
@@ -178,7 +144,6 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
     _photoUrlCtrl.text = (s['photo_url'] ?? '').toString();
     _documentUrlCtrl.text = (s['document_url'] ?? '').toString();
 
-    // Nouveaux champs
     _newType = (s['type'] ?? 'single').toString().isEmpty
         ? 'single'
         : (s['type'] ?? 'single').toString();
@@ -187,7 +152,7 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
         ? 'EN'
         : (s['language'] ?? 'EN').toString();
     _gameId = _asInt(s['game_id']);
-    _shippingFeesCtrl.text = _numToText(s['shipping_fees']); // si exposé
+    _shippingFeesCtrl.text = _numToText(s['shipping_fees']);
     _commissionFeesCtrl.text = _numToText(s['commission_fees']);
     _paymentTypeCtrl.text = (s['payment_type'] ?? '').toString();
     _buyerInfosCtrl.text = (s['buyer_infos'] ?? '').toString();
@@ -204,12 +169,9 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
             .map<Map<String, dynamic>>(
                 (e) => Map<String, dynamic>.from(e as Map))
             .toList();
-        // si pas de game défini, on prend le premier
         _gameId ??= _games.isNotEmpty ? _games.first['id'] as int : null;
       });
-    } catch (_) {
-      // silencieux
-    }
+    } catch (_) {}
   }
 
   int? _asInt(dynamic v) {
@@ -221,6 +183,7 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
   String _numToText(dynamic v) => v == null ? '' : v.toString();
   String _numToIntText(dynamic v) =>
       v == null ? '' : (v is num ? v.toInt().toString() : v.toString());
+
   DateTime? _parseDate(dynamic v) {
     if (v == null) return null;
     try {
@@ -255,17 +218,6 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
     super.dispose();
   }
 
-  Future<void> _pickSaleDate() async {
-    final now = DateTime.now();
-    final picked = await showDatePicker(
-      context: context,
-      firstDate: DateTime(now.year - 10),
-      lastDate: DateTime(now.year + 5),
-      initialDate: _saleDate ?? now,
-    );
-    if (picked != null) setState(() => _saleDate = picked);
-  }
-
   num? _tryNum(String s) {
     final t = s.trim().replaceAll(',', '.');
     if (t.isEmpty) return null;
@@ -278,116 +230,151 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
     return int.tryParse(t);
   }
 
-  Future<void> _apply() async {
-    // === 1) Construire l'update de façon SÛRE et ciblée ===
-    final baseUpdates = <String, dynamic>{};
-    if (incGradeId) {
-      baseUpdates['grade_id'] =
-          _gradeIdCtrl.text.trim().isEmpty ? null : _gradeIdCtrl.text.trim();
+  // === Helpers de comparaison "changement" ===
+  bool _changedText(String key, String current) {
+    final old = (_sample[key]?.toString() ?? '');
+    return (old.trim() != current.trim());
+  }
+
+  bool _changedNum(String key, String currentText) {
+    final oldRaw = _sample[key];
+    final old = oldRaw == null ? null : num.tryParse(oldRaw.toString());
+    final cur = _tryNum(currentText);
+    // change si diff ou si l’un est null et l’autre non
+    return old != cur;
+  }
+
+  bool _changedInt(String key, String currentText) {
+    final oldRaw = _sample[key];
+    final old = oldRaw == null ? null : int.tryParse(oldRaw.toString());
+    final cur = _tryInt(currentText);
+    return old != cur;
+  }
+
+  bool _changedDate(String key, DateTime? cur) {
+    final oldRaw = _sample[key];
+    DateTime? old;
+    if (oldRaw != null) {
+      final s = oldRaw.toString();
+      old = DateTime.tryParse(s.length > 10 ? s : '${s}T00:00:00');
+    }
+    // Compare yyyy-MM-dd
+    String? d(DateTime? x) => x?.toIso8601String().substring(0, 10);
+    return d(old) != d(cur);
+  }
+
+  bool _changedSimple(String key, Object? current) {
+    final old = _sample[key];
+    return old?.toString() != current?.toString();
+  }
+
+  // retourne une map pour item avec uniquement les champs modifiés
+  Map<String, dynamic> _buildItemUpdates() {
+    final m = <String, dynamic>{};
+
+    // Text -> NULL si vide (si différent)
+    void putText(String key, TextEditingController c) {
+      if (_changedText(key, c.text)) {
+        m[key] = c.text.trim().isEmpty ? null : c.text.trim();
+      }
     }
 
-    if (incGradingNote) {
-      baseUpdates['grading_note'] = _gradingNoteCtrl.text.trim().isEmpty
-          ? null
-          : _gradingNoteCtrl.text.trim();
-    }
-    if (incGradingFees) {
-      baseUpdates['grading_fees'] = _tryNum(_gradingFeesCtrl.text);
-    }
-    if (incEstimatedPrice) {
-      baseUpdates['estimated_price'] = _tryNum(_estimatedPriceCtrl.text);
-    }
-    if (incItemLocation) {
-      baseUpdates['item_location'] = _itemLocationCtrl.text.trim().isEmpty
-          ? null
-          : _itemLocationCtrl.text.trim();
-    }
-    if (incTracking) {
-      baseUpdates['tracking'] =
-          _trackingCtrl.text.trim().isEmpty ? null : _trackingCtrl.text.trim();
-    }
-    if (incChannelId) baseUpdates['channel_id'] = _tryInt(_channelIdCtrl.text);
-    if (incBuyerCompany) {
-      baseUpdates['buyer_company'] = _buyerCompanyCtrl.text.trim().isEmpty
-          ? null
-          : _buyerCompanyCtrl.text.trim();
-    }
-    if (incSupplierName) {
-      baseUpdates['supplier_name'] = _supplierNameCtrl.text.trim().isEmpty
-          ? null
-          : _supplierNameCtrl.text.trim();
-    }
-    if (incNotes) {
-      baseUpdates['notes'] =
-          _notesCtrl.text.trim().isEmpty ? null : _notesCtrl.text.trim();
-    }
-    if (incPhotoUrl) {
-      baseUpdates['photo_url'] =
-          _photoUrlCtrl.text.trim().isEmpty ? null : _photoUrlCtrl.text.trim();
-    }
-    if (incDocumentUrl) {
-      baseUpdates['document_url'] = _documentUrlCtrl.text.trim().isEmpty
-          ? null
-          : _documentUrlCtrl.text.trim();
+    // Num -> peut être NULL (effacé)
+    void putNum(String key, TextEditingController c) {
+      if (_changedNum(key, c.text)) {
+        m[key] = _tryNum(c.text);
+      }
     }
 
-    // Nouveaux champs (items)
-    if (incType) baseUpdates['type'] = _newType;
-    if (incLanguage) baseUpdates['language'] = _language;
-    if (incGameId) baseUpdates['game_id'] = _gameId;
-    if (incShippingFees) {
-      baseUpdates['shipping_fees'] = _tryNum(_shippingFeesCtrl.text);
+    // Int -> peut être NULL
+    void putInt(String key, TextEditingController c) {
+      if (_changedInt(key, c.text)) {
+        m[key] = _tryInt(c.text);
+      }
     }
-    if (incCommissionFees) {
-      baseUpdates['commission_fees'] = _tryNum(_commissionFeesCtrl.text);
+
+    putText('grade_id', _gradeIdCtrl);
+    putText('grading_note', _gradingNoteCtrl);
+    putNum('grading_fees', _gradingFeesCtrl);
+    putNum('estimated_price', _estimatedPriceCtrl);
+    putText('item_location', _itemLocationCtrl);
+    putText('tracking', _trackingCtrl);
+    putInt('channel_id', _channelIdCtrl);
+    putText('buyer_company', _buyerCompanyCtrl);
+    putText('supplier_name', _supplierNameCtrl);
+    putText('notes', _notesCtrl);
+    putText('photo_url', _photoUrlCtrl);
+    putText('document_url', _documentUrlCtrl);
+
+    // Nouveaux champs item
+    if (_changedSimple('type', _newType)) m['type'] = _newType;
+    if (_changedSimple('language', _language)) m['language'] = _language;
+    if (_changedSimple('game_id', _gameId)) m['game_id'] = _gameId;
+    if (_changedNum('shipping_fees', _shippingFeesCtrl.text)) {
+      m['shipping_fees'] = _tryNum(_shippingFeesCtrl.text);
     }
-    if (incPaymentType) {
-      baseUpdates['payment_type'] = _paymentTypeCtrl.text.trim().isEmpty
+    if (_changedNum('commission_fees', _commissionFeesCtrl.text)) {
+      m['commission_fees'] = _tryNum(_commissionFeesCtrl.text);
+    }
+    if (_changedText('payment_type', _paymentTypeCtrl.text)) {
+      m['payment_type'] = _paymentTypeCtrl.text.trim().isEmpty
           ? null
           : _paymentTypeCtrl.text.trim();
     }
-    if (incBuyerInfos) {
-      baseUpdates['buyer_infos'] = _buyerInfosCtrl.text.trim().isEmpty
+    if (_changedText('buyer_infos', _buyerInfosCtrl.text)) {
+      m['buyer_infos'] = _buyerInfosCtrl.text.trim().isEmpty
           ? null
           : _buyerInfosCtrl.text.trim();
     }
 
-    // Champs de vente (appliqués UNIQUEMENT sur les IDs ciblés)
-    final saleUpdates = <String, dynamic>{};
-    if (incSalePrice) saleUpdates['sale_price'] = _tryNum(_salePriceCtrl.text);
-    if (incSaleDate) {
-      saleUpdates['sale_date'] = _saleDate?.toIso8601String().substring(0, 10);
+    // Sale fields
+    if (_changedNum('sale_price', _salePriceCtrl.text)) {
+      m['sale_price'] = _tryNum(_salePriceCtrl.text);
+    }
+    if (_changedDate('sale_date', _saleDate)) {
+      m['sale_date'] = _saleDate?.toIso8601String().substring(0, 10);
     }
 
-    // Changement de statut
-    String? newStatus;
-    if (incStatus) newStatus = _newStatus;
-
-    // Mise à jour du produit (name/type)
-    final productUpdates = <String, dynamic>{};
-    if (incProductName) {
-      final n = _productNameCtrl.text.trim();
-      productUpdates['name'] = n.isEmpty ? null : n;
-    }
-    if (incType) {
-      // aligner product.type sur item.type
-      productUpdates['type'] = _newType;
+    // Status
+    final statusBefore = widget.status;
+    final statusAfter = (_newStatus.isNotEmpty ? _newStatus : statusBefore);
+    if (statusAfter != statusBefore) {
+      m['status'] = statusAfter;
     }
 
-    if (baseUpdates.isEmpty &&
-        saleUpdates.isEmpty &&
-        newStatus == null &&
-        productUpdates.isEmpty) {
-      _snack('Sélectionne au moins un champ à modifier.');
+    return m;
+  }
+
+  // mise à jour du produit si name/type changent
+  Map<String, dynamic> _buildProductUpdates() {
+    final m = <String, dynamic>{};
+    final oldName = (_sample['product_name'] ?? '').toString();
+    final newName = _productNameCtrl.text.trim();
+    if (oldName != newName) {
+      m['name'] = newName.isEmpty ? null : newName;
+    }
+    final oldType = (_sample['type'] ?? '').toString();
+    if (oldType != _newType) {
+      m['type'] = _newType;
+    }
+    return m;
+  }
+
+  Future<void> _apply() async {
+    final baseUpdates = _buildItemUpdates();
+    final productUpdates = _buildProductUpdates();
+
+    if (baseUpdates.isEmpty && productUpdates.isEmpty) {
+      _snack('Aucun changement détecté.');
       return;
     }
 
     setState(() => _saving = true);
     try {
-      final sample = (widget.initialSample ?? {})
+      final sample = Map<String, dynamic>.from(_sample)
         ..putIfAbsent('product_id', () => widget.productId);
 
-      // === 2) Sélectionner exactement N IDs, strictement ===
+      // === 1) IDs strictement du même groupe (NULL = NULL) ===
       PostgrestFilterBuilder idsQ = _sb.from('item').select('id');
 
       const keys = <String>{
@@ -410,25 +397,20 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
         'document_url',
         'item_location',
         'channel_id',
-        // 'unit_cost', 'unit_fees' si tu veux rendre encore plus strict
-        // NB: on n'utilise pas shipping/commission/payment/buyer_infos pour filtrer
-        // car ces champs peuvent être nouvellement ajoutés et souvent NULL.
       };
 
       for (final k in keys) {
         if (!sample.containsKey(k)) continue;
         final v = sample[k];
         if (v == null) {
-          idsQ = idsQ.filter(k, 'is', null); // NULL = NULL strict
+          idsQ = idsQ.filter(k, 'is', null);
         } else {
           idsQ = idsQ.eq(k, v);
         }
       }
 
-      // Statut EXACT de la ligne cliquée
       idsQ = idsQ.eq('status', widget.status);
 
-      // Tri + Limit APRÈS les filtres
       final idsRaw =
           await idsQ.order('id', ascending: _oldestFirst).limit(_countToEdit);
       final ids = idsRaw.map((e) => (e as Map)['id']).whereType<int>().toList();
@@ -438,24 +420,12 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
         return;
       }
 
-      // === 3) Construire l'update final et l'appliquer UNIQUEMENT aux IDs ===
-      final updatePayload = <String, dynamic>{};
-      updatePayload.addAll(baseUpdates);
-
-      if (newStatus != null) {
-        updatePayload['status'] = newStatus;
-      }
-
-      final goingToSale = newStatus != null && kSalePhase.contains(newStatus);
-      if (saleUpdates.isNotEmpty && (goingToSale || !incStatus)) {
-        updatePayload.addAll(saleUpdates);
-      }
-
-      // Application STRICTE aux IDs choisis (sans .in_(), on passe un IN string)
+      // === 2) Apply updates UNIQUEMENT aux IDs ===
       final idsCsv = '(${ids.join(",")})';
-      await _sb.from('item').update(updatePayload).filter('id', 'in', idsCsv);
+      if (baseUpdates.isNotEmpty) {
+        await _sb.from('item').update(baseUpdates).filter('id', 'in', idsCsv);
+      }
 
-      // Mise à jour Product (si demandé)
       if (productUpdates.isNotEmpty) {
         await _sb
             .from('product')
@@ -464,8 +434,7 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
       }
 
       if (mounted) {
-        _snack(
-            'Mise à jour effectuée (${ids.length} item(s)) sur la ligne sélectionnée.');
+        _snack('Mise à jour effectuée (${ids.length} item(s)).');
         Navigator.pop(context, true);
       }
     } on PostgrestException catch (e) {
@@ -483,53 +452,20 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
     messenger?.showSnackBar(SnackBar(content: Text(m)));
   }
 
-  // ====== popup d'erreur d'upload (nom de fichier invalide, etc.) ======
-  void _showUploadError(String message) {
-    showDialog<void>(
+  Future<void> _pickSaleDate() async {
+    final now = DateTime.now();
+    final picked = await showDatePicker(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Nom de fichier invalide'),
-        content: Text(
-          'Le nom du fichier ne doit pas contenir d’espaces ni de caractères spéciaux.\n\n'
-          'Détail : $message',
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.of(ctx).pop(),
-              child: const Text('OK')),
-        ],
-      ),
+      firstDate: DateTime(now.year - 10),
+      lastDate: DateTime(now.year + 5),
+      initialDate: _saleDate ?? now,
     );
+    if (picked != null) setState(() => _saleDate = picked);
   }
 
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-
-    Widget checkRow({
-      required bool value,
-      required ValueChanged<bool?> onChanged,
-      required String label,
-      required Widget field,
-    }) {
-      return Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Checkbox(value: value, onChanged: onChanged),
-          const SizedBox(width: 6),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(label, style: Theme.of(context).textTheme.labelLarge),
-                const SizedBox(height: 6),
-                field,
-              ],
-            ),
-          ),
-        ],
-      );
-    }
 
     Widget numberField(TextEditingController c, String hint,
         {bool decimal = true}) {
@@ -537,6 +473,17 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
         controller: c,
         keyboardType: TextInputType.numberWithOptions(decimal: decimal),
         decoration: InputDecoration(hintText: hint),
+      );
+    }
+
+    Widget labelWithField(String label, Widget field) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(label, style: Theme.of(context).textTheme.labelLarge),
+          const SizedBox(height: 6),
+          field,
+        ],
       );
     }
 
@@ -621,14 +568,12 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
           ]),
           const SizedBox(height: 8),
 
-          // ====== CHAMPS PRODUIT / ITEM DE TÊTE ======
+          // ====== PRODUIT / ITEM DE TÊTE ======
           Row(children: [
             Expanded(
-              child: checkRow(
-                value: incProductName,
-                onChanged: (v) => setState(() => incProductName = v ?? false),
-                label: 'Product name',
-                field: TextField(
+              child: labelWithField(
+                'Product name',
+                TextField(
                   controller: _productNameCtrl,
                   decoration: const InputDecoration(hintText: 'Nom du produit'),
                 ),
@@ -636,12 +581,10 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
             ),
             const SizedBox(width: 12),
             Expanded(
-              child: checkRow(
-                value: incType,
-                onChanged: (v) => setState(() => incType = v ?? false),
-                label: 'Type',
-                field: DropdownButtonFormField<String>(
-                  initialValue: _newType,
+              child: labelWithField(
+                'Type',
+                DropdownButtonFormField<String>(
+                  value: _newType,
                   items: itemTypes
                       .map((t) => DropdownMenuItem(value: t, child: Text(t)))
                       .toList(),
@@ -655,12 +598,10 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
 
           Row(children: [
             Expanded(
-              child: checkRow(
-                value: incLanguage,
-                onChanged: (v) => setState(() => incLanguage = v ?? false),
-                label: 'Language',
-                field: DropdownButtonFormField<String>(
-                  initialValue: _language,
+              child: labelWithField(
+                'Language',
+                DropdownButtonFormField<String>(
+                  value: _language,
                   items: langs
                       .map((l) => DropdownMenuItem(value: l, child: Text(l)))
                       .toList(),
@@ -671,12 +612,10 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
             ),
             const SizedBox(width: 12),
             Expanded(
-              child: checkRow(
-                value: incGameId,
-                onChanged: (v) => setState(() => incGameId = v ?? false),
-                label: 'Jeu',
-                field: DropdownButtonFormField<int>(
-                  initialValue: _gameId,
+              child: labelWithField(
+                'Jeu',
+                DropdownButtonFormField<int>(
+                  value: _gameId,
                   items: _games
                       .map((g) => DropdownMenuItem<int>(
                             value: g['id'] as int,
@@ -692,13 +631,10 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
           const SizedBox(height: 8),
 
           // ====== STATUS ======
-          checkRow(
-            value: incStatus,
-            onChanged: (v) => setState(() => incStatus = v ?? false),
-            label: 'Status',
-            field: DropdownButtonFormField<String>(
-              initialValue:
-                  (_newStatus.isNotEmpty ? _newStatus : widget.status),
+          labelWithField(
+            'Status',
+            DropdownButtonFormField<String>(
+              value: (_newStatus.isNotEmpty ? _newStatus : widget.status),
               items: kAllStatuses
                   .map((s) => DropdownMenuItem(value: s, child: Text(s)))
                   .toList(),
@@ -711,11 +647,9 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
           // ====== LIGNE 1 ======
           Row(children: [
             Expanded(
-              child: checkRow(
-                value: incGradeId,
-                onChanged: (v) => setState(() => incGradeId = v ?? false),
-                label: 'Grade ID',
-                field: TextField(
+              child: labelWithField(
+                'Grade ID',
+                TextField(
                   controller: _gradeIdCtrl,
                   decoration: const InputDecoration(
                       hintText: 'PSA serial number, etc.'),
@@ -724,11 +658,9 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
             ),
             const SizedBox(width: 12),
             Expanded(
-              child: checkRow(
-                value: incGradingNote,
-                onChanged: (v) => setState(() => incGradingNote = v ?? false),
-                label: "Grading Note",
-                field: TextField(
+              child: labelWithField(
+                'Grading Note',
+                TextField(
                   controller: _gradingNoteCtrl,
                   decoration: const InputDecoration(hintText: 'ex: Excellent'),
                 ),
@@ -736,21 +668,16 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
             ),
             const SizedBox(width: 12),
             Expanded(
-              child: checkRow(
-                value: incGradingFees,
-                onChanged: (v) => setState(() => incGradingFees = v ?? false),
-                label: 'Grading Fees (USD)',
-                field:
-                    numberField(_gradingFeesCtrl, 'ex: 25.00', decimal: true),
+              child: labelWithField(
+                'Grading Fees (USD)',
+                numberField(_gradingFeesCtrl, 'ex: 25.00', decimal: true),
               ),
             ),
             const SizedBox(width: 12),
             Expanded(
-              child: checkRow(
-                value: incItemLocation,
-                onChanged: (v) => setState(() => incItemLocation = v ?? false),
-                label: "Item Location",
-                field: TextField(
+              child: labelWithField(
+                'Item Location',
+                TextField(
                   controller: _itemLocationCtrl,
                   decoration:
                       const InputDecoration(hintText: 'ex: Paris / Dubai'),
@@ -763,22 +690,16 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
           // ====== LIGNE 2 ======
           Row(children: [
             Expanded(
-              child: checkRow(
-                value: incEstimatedPrice,
-                onChanged: (v) =>
-                    setState(() => incEstimatedPrice = v ?? false),
-                label: 'Estimated price per unit (USD)',
-                field: numberField(_estimatedPriceCtrl, 'ex: 125.00',
-                    decimal: true),
+              child: labelWithField(
+                'Estimated price per unit (USD)',
+                numberField(_estimatedPriceCtrl, 'ex: 125.00', decimal: true),
               ),
             ),
             const SizedBox(width: 12),
             Expanded(
-              child: checkRow(
-                value: incSalePrice,
-                onChanged: (v) => setState(() => incSalePrice = v ?? false),
-                label: 'Sale price',
-                field: numberField(_salePriceCtrl, 'ex: 145.00', decimal: true),
+              child: labelWithField(
+                'Sale price',
+                numberField(_salePriceCtrl, 'ex: 145.00', decimal: true),
               ),
             ),
           ]),
@@ -787,31 +708,41 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
           // ====== LIGNE 3 ======
           Row(children: [
             Expanded(
-              child: checkRow(
-                value: incSaleDate,
-                onChanged: (v) => setState(() => incSaleDate = v ?? false),
-                label: 'Sale date',
-                field: InkWell(
-                  onTap: _pickSaleDate,
-                  child: InputDecorator(
-                    decoration: const InputDecoration(hintText: 'YYYY-MM-DD'),
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 10),
-                      child: Text(_saleDate == null
-                          ? '—'
-                          : _saleDate!.toIso8601String().substring(0, 10)),
+              child: labelWithField(
+                'Sale date',
+                Row(
+                  children: [
+                    Expanded(
+                      child: InkWell(
+                        onTap: _pickSaleDate,
+                        child: InputDecorator(
+                          decoration:
+                              const InputDecoration(hintText: 'YYYY-MM-DD'),
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 10),
+                            child: Text(_saleDate == null
+                                ? '—'
+                                : _saleDate!
+                                    .toIso8601String()
+                                    .substring(0, 10)),
+                          ),
+                        ),
+                      ),
                     ),
-                  ),
+                    IconButton(
+                      tooltip: 'Effacer la date',
+                      onPressed: () => setState(() => _saleDate = null),
+                      icon: const Icon(Icons.clear),
+                    ),
+                  ],
                 ),
               ),
             ),
             const SizedBox(width: 12),
             Expanded(
-              child: checkRow(
-                value: incTracking,
-                onChanged: (v) => setState(() => incTracking = v ?? false),
-                label: 'Tracking',
-                field: TextField(
+              child: labelWithField(
+                'Tracking',
+                TextField(
                   controller: _trackingCtrl,
                   decoration: const InputDecoration(
                       hintText: 'ex: UPS 1Z... / DHL *****...'),
@@ -824,20 +755,16 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
           // ====== LIGNE 4 ======
           Row(children: [
             Expanded(
-              child: checkRow(
-                value: incChannelId,
-                onChanged: (v) => setState(() => incChannelId = v ?? false),
-                label: 'Endroit de vente (Channel ID)',
-                field: numberField(_channelIdCtrl, 'ex: 12', decimal: false),
+              child: labelWithField(
+                'Endroit de vente (Channel ID)',
+                numberField(_channelIdCtrl, 'ex: 12', decimal: false),
               ),
             ),
             const SizedBox(width: 12),
             Expanded(
-              child: checkRow(
-                value: incBuyerCompany,
-                onChanged: (v) => setState(() => incBuyerCompany = v ?? false),
-                label: 'Buyer company',
-                field: TextField(
+              child: labelWithField(
+                'Buyer company',
+                TextField(
                   controller: _buyerCompanyCtrl,
                   decoration:
                       const InputDecoration(hintText: 'Société acheteuse'),
@@ -850,11 +777,9 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
           // ====== LIGNE 5 ======
           Row(children: [
             Expanded(
-              child: checkRow(
-                value: incSupplierName,
-                onChanged: (v) => setState(() => incSupplierName = v ?? false),
-                label: 'Supplier name',
-                field: TextField(
+              child: labelWithField(
+                'Supplier name',
+                TextField(
                   controller: _supplierNameCtrl,
                   decoration: const InputDecoration(hintText: 'Fournisseur'),
                 ),
@@ -862,11 +787,9 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
             ),
             const SizedBox(width: 12),
             Expanded(
-              child: checkRow(
-                value: incNotes,
-                onChanged: (v) => setState(() => incNotes = v ?? false),
-                label: 'Notes',
-                field: TextField(
+              child: labelWithField(
+                'Notes',
+                TextField(
                   controller: _notesCtrl,
                   minLines: 1,
                   maxLines: 3,
@@ -880,23 +803,16 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
           // ====== LIGNE 6 (frais & paiements) ======
           Row(children: [
             Expanded(
-              child: checkRow(
-                value: incShippingFees,
-                onChanged: (v) => setState(() => incShippingFees = v ?? false),
-                label: 'Shipping fees (USD)',
-                field:
-                    numberField(_shippingFeesCtrl, 'ex: 12.50', decimal: true),
+              child: labelWithField(
+                'Shipping fees (USD)',
+                numberField(_shippingFeesCtrl, 'ex: 12.50', decimal: true),
               ),
             ),
             const SizedBox(width: 12),
             Expanded(
-              child: checkRow(
-                value: incCommissionFees,
-                onChanged: (v) =>
-                    setState(() => incCommissionFees = v ?? false),
-                label: 'Commission fees (USD)',
-                field:
-                    numberField(_commissionFeesCtrl, 'ex: 5.90', decimal: true),
+              child: labelWithField(
+                'Commission fees (USD)',
+                numberField(_commissionFeesCtrl, 'ex: 5.90', decimal: true),
               ),
             ),
           ]),
@@ -904,11 +820,9 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
 
           Row(children: [
             Expanded(
-              child: checkRow(
-                value: incPaymentType,
-                onChanged: (v) => setState(() => incPaymentType = v ?? false),
-                label: 'Payment type',
-                field: TextField(
+              child: labelWithField(
+                'Payment type',
+                TextField(
                   controller: _paymentTypeCtrl,
                   decoration: const InputDecoration(
                       hintText: 'e.g. PayPal / Bank / ...'),
@@ -917,11 +831,9 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
             ),
             const SizedBox(width: 12),
             Expanded(
-              child: checkRow(
-                value: incBuyerInfos,
-                onChanged: (v) => setState(() => incBuyerInfos = v ?? false),
-                label: 'Buyer infos',
-                field: TextField(
+              child: labelWithField(
+                'Buyer infos',
+                TextField(
                   controller: _buyerInfosCtrl,
                   minLines: 1,
                   maxLines: 3,
@@ -936,61 +848,37 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
           // ====== LIGNE 7 : Fichiers ======
           Row(children: [
             Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Checkbox(
-                          value: incPhotoUrl,
-                          onChanged: (v) =>
-                              setState(() => incPhotoUrl = v ?? false)),
-                      const SizedBox(width: 6),
-                      Text('Photo',
-                          style: Theme.of(context).textTheme.labelLarge),
-                    ],
-                  ),
-                  StorageUploadTile(
-                    label: 'Uploader / Voir photo',
-                    bucket: 'item-photos',
-                    objectPrefix: 'items/${widget.productId}',
-                    initialUrl:
-                        _photoUrlCtrl.text.isEmpty ? null : _photoUrlCtrl.text,
-                    onUrlChanged: (u) => _photoUrlCtrl.text = u ?? '',
-                    acceptImagesOnly: true,
-                    onError: (err) => _showUploadError(err),
-                  ),
-                ],
+              child: labelWithField(
+                'Photo',
+                StorageUploadTile(
+                  label: 'Uploader / Voir photo',
+                  bucket: 'item-photos',
+                  objectPrefix: 'items/${widget.productId}',
+                  initialUrl:
+                      _photoUrlCtrl.text.isEmpty ? null : _photoUrlCtrl.text,
+                  onUrlChanged: (u) =>
+                      setState(() => _photoUrlCtrl.text = u ?? ''),
+                  acceptImagesOnly: true,
+                  onError: (err) => _showUploadError(err),
+                ),
               ),
             ),
             const SizedBox(width: 12),
             Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Checkbox(
-                          value: incDocumentUrl,
-                          onChanged: (v) =>
-                              setState(() => incDocumentUrl = v ?? false)),
-                      const SizedBox(width: 6),
-                      Text('Document',
-                          style: Theme.of(context).textTheme.labelLarge),
-                    ],
-                  ),
-                  StorageUploadTile(
-                    label: 'Uploader / Ouvrir document',
-                    bucket: 'item-docs',
-                    objectPrefix: 'items/${widget.productId}',
-                    initialUrl: _documentUrlCtrl.text.isEmpty
-                        ? null
-                        : _documentUrlCtrl.text,
-                    onUrlChanged: (u) => _documentUrlCtrl.text = u ?? '',
-                    acceptDocsOnly: true,
-                    onError: (err) => _showUploadError(err),
-                  ),
-                ],
+              child: labelWithField(
+                'Document',
+                StorageUploadTile(
+                  label: 'Uploader / Ouvrir document',
+                  bucket: 'item-docs',
+                  objectPrefix: 'items/${widget.productId}',
+                  initialUrl: _documentUrlCtrl.text.isEmpty
+                      ? null
+                      : _documentUrlCtrl.text,
+                  onUrlChanged: (u) =>
+                      setState(() => _documentUrlCtrl.text = u ?? ''),
+                  acceptDocsOnly: true,
+                  onError: (err) => _showUploadError(err),
+                ),
               ),
             ),
           ]),
@@ -1031,6 +919,25 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
         const SizedBox(height: 8),
         actions,
       ],
+    );
+  }
+
+  // ====== popup d'erreur d'upload ======
+  void _showUploadError(String message) {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Nom de fichier invalide'),
+        content: Text(
+          'Le nom du fichier ne doit pas contenir d’espaces ni de caractères spéciaux.\n\n'
+          'Détail : $message',
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('OK')),
+        ],
+      ),
     );
   }
 }
