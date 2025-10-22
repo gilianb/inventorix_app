@@ -47,7 +47,6 @@ class StatusBreakdownPanel extends StatelessWidget {
     'purchase': 'Achat',
     'grading': 'Gradation',
     'sale': 'Vente',
-    'collection': 'Collection',
   };
 
   @override
@@ -262,12 +261,6 @@ class StatusBreakdownPanel extends StatelessWidget {
                     statuses: _sale, // ← contient awaiting_payment
                   ),
                   const SizedBox(width: 24),
-                  categoryColumn(
-                    id: 'collection',
-                    label: _groupLabels['collection']!,
-                    total: collectionTotal,
-                    statuses: const [_collection],
-                  ),
                 ],
               ),
             ),

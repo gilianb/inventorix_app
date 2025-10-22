@@ -13,6 +13,7 @@ import '../../inventory/widgets/edit.dart';
 import 'package:inventorix_app/new_stock_page.dart';
 import 'package:inventorix_app/sales_archive_page.dart';
 import 'package:inventorix_app/details/details_page.dart';
+import 'package:inventorix_app/collection_page.dart'; // ⬅️ NEW
 
 /// Accents (UI only)
 const kAccentA = Color(0xFF6C5CE7); // violet
@@ -25,7 +26,7 @@ const Map<String, List<String>> kGroupToStatuses = {
   'purchase': ['ordered', 'in_transit', 'paid', 'received'],
   'grading': ['sent_to_grader', 'at_grader', 'graded'],
   'sale': ['listed', 'awaiting_payment', 'sold', 'shipped', 'finalized'],
-  'collection': ['collection'],
+  // 'collection' est désormais hors de cette page
   'all': [
     'ordered',
     'in_transit',
@@ -39,7 +40,7 @@ const Map<String, List<String>> kGroupToStatuses = {
     'sold',
     'shipped',
     'finalized',
-    'collection',
+    // 'collection' retiré de "all"
   ],
 };
 
@@ -63,9 +64,13 @@ class _MainInventoryPageState extends State<MainInventoryPage> {
   // Données brutes (groupes venant de la VUE stricte v_items_by_status)
   List<Map<String, dynamic>> _groups = const [];
 
-  // KPI
-  num _kpiPotentialRevenue = 0; // Σ sum_estimated_price
-  num _kpiRealRevenue = 0; // Σ realized_revenue
+  // KPI (excluent désormais “collection”)
+  num _kpiPotentialRevenue = 0; // Σ estimated (hors collection)
+  num _kpiRealRevenue = 0; // Σ realized (hors collection)
+
+  bool get _isGilian =>
+      (_sb.auth.currentUser?.email ?? '').toLowerCase() ==
+      'gilian.bns@gmail.com';
 
   @override
   void initState() {
@@ -80,7 +85,7 @@ class _MainInventoryPageState extends State<MainInventoryPage> {
     setState(() => _loading = true);
     try {
       _groups = await _fetchGroupedFromView();
-      _recomputeKpis();
+      _recomputeKpis(); // recalcul avec exclusion “collection”
     } catch (e) {
       _snack('Erreur de chargement : $e');
     } finally {
@@ -88,13 +93,31 @@ class _MainInventoryPageState extends State<MainInventoryPage> {
     }
   }
 
+  /// Recalcule les KPI **hors collection**, en s’appuyant sur les lignes par statut
   void _recomputeKpis() {
-    _kpiPotentialRevenue = 0;
-    _kpiRealRevenue = 0;
-    for (final r in _groups) {
-      _kpiPotentialRevenue += (r['sum_estimated_price'] as num?) ?? 0;
-      _kpiRealRevenue += (r['realized_revenue'] as num?) ?? 0;
+    final lines =
+        _explodeLines(); // déjà filtrées de “collection” (voir plus bas)
+    // Potentiel estimé = Σ (estimated_price * qty_status) pour toutes lignes hors collection
+    num potential = 0;
+    num realized = 0;
+
+    for (final r in lines) {
+      final int qty = (r['qty_status'] as int?) ?? 0;
+      final String s = (r['status'] ?? '').toString();
+      final num estUnit = (r['estimated_price'] as num?) ?? 0;
+      final num saleUnit = (r['sale_price'] as num?) ?? 0;
+
+      // potentiel : prendre l’estimation * quantité (peu importe le statut, hors collection)
+      potential += estUnit * qty;
+
+      // réalisé : seulement sur sold/shipped/finalized
+      if (s == 'sold' || s == 'shipped' || s == 'finalized') {
+        realized += saleUnit * qty;
+      }
     }
+
+    _kpiPotentialRevenue = potential;
+    _kpiRealRevenue = realized;
   }
 
   /// Récupère les groupes depuis la vue stricte v_items_by_status
@@ -149,10 +172,12 @@ class _MainInventoryPageState extends State<MainInventoryPage> {
   }
 
   // Explose les groupes en lignes “par statut”
+  // ⬅️ ICI on **exclut** explicitement 'collection'
   List<Map<String, dynamic>> _explodeLines() {
     final out = <Map<String, dynamic>>[];
     for (final r in _groups) {
       for (final s in kStatusOrder) {
+        if (s == 'collection') continue; // ⛔️ exclus de la page principale
         final q = (r['qty_$s'] as int?) ?? 0;
         if (q > 0) {
           out.add({
@@ -163,7 +188,7 @@ class _MainInventoryPageState extends State<MainInventoryPage> {
         }
       }
     }
-    // filtre statut actif : accepte un statut ou un id de groupe
+    // filtre statut actif (mais 'collection' n’est pas proposé ici)
     if ((_statusFilter ?? '').isNotEmpty) {
       final f = _statusFilter!;
       final grouped = kGroupToStatuses[f];
@@ -178,24 +203,20 @@ class _MainInventoryPageState extends State<MainInventoryPage> {
     return out;
   }
 
-  // ===== KPIs (vue par statut) =====
-  int _kpiLinesCount(List<Map<String, dynamic>> lines) => lines.length;
-  int _kpiUnits(List<Map<String, dynamic>> lines) =>
-      lines.fold<int>(0, (p, e) => p + ((e['qty_status'] as int?) ?? 0));
-
-  /// Investi (vue) = Σ (Prix/unité estimé × Qté du statut)
+  // Investi (vue) = Σ (coût/u estimé × Qté du statut), hors collection
   num _kpiInvestedFromLines(List<Map<String, dynamic>> lines) {
     num total = 0;
     for (final r in lines) {
+      final status = (r['status'] ?? '').toString();
+      if (status == 'collection') continue; // ⛔️ exclu
+
       final qtyTotal = (r['qty_total'] as num?) ?? 0;
       final totalWithFees = (r['total_cost_with_fees'] as num?) ?? 0;
 
-      // agrégats supplémentaires de la vue
       final sumShipping = (r['sum_shipping_fees'] as num?) ?? 0;
       final sumCommission = (r['sum_commission_fees'] as num?) ?? 0;
-      final sumGrading = (r['sum_grading_fees'] as num?) ?? 0; // ← NOUVEAU
+      final sumGrading = (r['sum_grading_fees'] as num?) ?? 0;
 
-      // coût /u = (coût+fees achat)/u + shipping/u + commission/u + grading/u
       final perUnitBase = qtyTotal > 0 ? (totalWithFees / qtyTotal) : 0;
       final perUnitShipping = qtyTotal > 0 ? (sumShipping / qtyTotal) : 0;
       final perUnitCommission = qtyTotal > 0 ? (sumCommission / qtyTotal) : 0;
@@ -355,6 +376,15 @@ class _MainInventoryPageState extends State<MainInventoryPage> {
   Widget build(BuildContext context) {
     final lines = _explodeLines();
 
+    // Pour masquer complètement la “collection” dans le breakdown,
+    // on passe des groupes clonés avec qty_collection = 0.
+    final groupsForPanel = _groups
+        .map((r) => {
+              ...r,
+              'qty_collection': 0, // ⛔️ rien à afficher pour collection ici
+            })
+        .toList();
+
     final body = _loading
         ? const Center(child: CircularProgressIndicator())
         : RefreshIndicator(
@@ -426,8 +456,9 @@ class _MainInventoryPageState extends State<MainInventoryPage> {
                   const SizedBox(height: 8),
                   _OverviewKpis(
                     typeFilter: _typeFilter,
-                    linesCount: _kpiLinesCount(lines),
-                    units: _kpiUnits(lines),
+                    linesCount: lines.length,
+                    units: lines.fold<int>(
+                        0, (p, e) => p + ((e['qty_status'] as int?) ?? 0)),
                     investedView: _kpiInvestedFromLines(lines),
                     potentialRevenue: _kpiPotentialRevenue,
                     realRevenue: _kpiRealRevenue,
@@ -437,13 +468,17 @@ class _MainInventoryPageState extends State<MainInventoryPage> {
                   ),
                   const SizedBox(height: 12),
 
-                  // ⚠️ NE PAS TOUCHER: StatusBreakdownPanel (status liste)
+                  // StatusBreakdownPanel (sans collection)
                   StatusBreakdownPanel(
                     expanded: _breakdownExpanded,
                     onToggle: (v) => setState(() => _breakdownExpanded = v),
-                    groupRows: _groups,
+                    groupRows: groupsForPanel, // ⬅️ version “sans collection”
                     currentFilter: _statusFilter,
                     onTapStatus: (s) {
+                      if (s == 'collection') {
+                        // ignorer toute tentative de clic sur “collection”
+                        return;
+                      }
                       setState(() =>
                           _statusFilter = (_statusFilter == s ? null : s));
                     },
@@ -460,7 +495,7 @@ class _MainInventoryPageState extends State<MainInventoryPage> {
                   const SizedBox(height: 12),
                 ],
 
-                // ⚠️ NE PAS TOUCHER: libellé + table “lignes — vue par statut”
+                // libellé + table “lignes — vue par statut”
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 12),
                   child: Text('Lignes (${lines.length}) — vue par statut',
@@ -474,7 +509,7 @@ class _MainInventoryPageState extends State<MainInventoryPage> {
                   lines: lines,
                   onOpen: _openDetails,
                   onEdit: _openEdit,
-                  onDelete: _deleteLine, // ⇦ AJOUT : suppression
+                  onDelete: _deleteLine,
                 ),
                 const SizedBox(height: 48),
               ],
@@ -485,6 +520,16 @@ class _MainInventoryPageState extends State<MainInventoryPage> {
       appBar: AppBar(
         title: const Text('Inventorix — Inventaire'),
         actions: [
+          if (_isGilian)
+            IconButton(
+              tooltip: 'Collection',
+              icon: const Icon(Icons.collections_bookmark),
+              onPressed: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => const CollectionPage()),
+                );
+              },
+            ),
           IconButton(
             tooltip: 'Archive ventes',
             onPressed: () => Navigator.of(context).push(
@@ -615,7 +660,6 @@ class _OverviewKpis extends StatelessWidget {
   }
 
   @override
-  @override
   Widget build(BuildContext context) {
     final kpis = [
       _kpiCard(
@@ -623,7 +667,7 @@ class _OverviewKpis extends StatelessWidget {
         icon: Icons.savings,
         title: 'Investi (vue)',
         value: '${_money(investedView)} $currency',
-        subtitle: 'Σ (Qté × coût/u estimé)',
+        subtitle: 'Σ (Qté × coût/u estimé) — hors collection',
         gradient: [kAccentA.withOpacity(.12), kAccentB.withOpacity(.06)],
         iconBg: kAccentA,
       ),
@@ -632,7 +676,7 @@ class _OverviewKpis extends StatelessWidget {
         icon: Icons.trending_up,
         title: 'Revenu potentiel',
         value: '${_money(potentialRevenue)} $currency',
-        subtitle: 'Σ estimated_price (tous items)',
+        subtitle: 'Σ estimated — hors collection',
         gradient: [kAccentB.withOpacity(.12), kAccentC.withOpacity(.06)],
         iconBg: kAccentB,
       ),
@@ -641,7 +685,7 @@ class _OverviewKpis extends StatelessWidget {
         icon: Icons.payments,
         title: 'Revenu réel',
         value: '${_money(realRevenue)} $currency',
-        subtitle: 'Σ sale_price (sold/shipped/finalized)',
+        subtitle: 'Σ sale (sold/shipped/finalized)',
         gradient: [kAccentG.withOpacity(.14), kAccentB.withOpacity(.06)],
         iconBg: kAccentG,
       ),
@@ -655,7 +699,6 @@ class _OverviewKpis extends StatelessWidget {
           final isMedium = c.maxWidth > 680;
 
           if (isWide) {
-            // 3 cartes sur une seule ligne
             return Row(
               children: [
                 Expanded(child: kpis[0]),
@@ -666,7 +709,6 @@ class _OverviewKpis extends StatelessWidget {
               ],
             );
           } else if (isMedium) {
-            // 2 colonnes (2 + 1)
             return Column(
               children: [
                 Row(
@@ -681,7 +723,6 @@ class _OverviewKpis extends StatelessWidget {
               ],
             );
           } else {
-            // 1 colonne (mobile)
             return Column(
               children: [
                 kpis[0],

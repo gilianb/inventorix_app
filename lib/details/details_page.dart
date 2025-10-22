@@ -93,7 +93,7 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
   bool _showItemsTable = true;
   bool _showHistory = true;
 
-  // ✅ NEW: indique si un edit a modifié quelque chose
+  // indique si un edit a modifié quelque chose
   bool _dirty = false;
 
   // Helpers
@@ -120,124 +120,81 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
     _loadAll();
   }
 
-  /// Construit la clé de groupe STRICTE à partir d'un item "échantillon"
-  Map<String, dynamic> _groupKeyFromItem(Map<String, dynamic> it) {
-    // mêmes clés que la vue / filtres stricts
-    return <String, dynamic>{
-      'product_id': it['product_id'],
-      'game_id': it['game_id'],
-      'type': it['type'],
-      'language': it['language'],
-      'channel_id': it['channel_id'],
-      'purchase_date': it['purchase_date'],
-      'currency': it['currency'],
-      'supplier_name': it['supplier_name'],
-      'buyer_company': it['buyer_company'],
-      'notes': it['notes'],
-      'grade_id': it['grade_id'],
-      'grading_note': it['grading_note'],
-      'grading_fees': it['grading_fees'],
-      'sale_date': it['sale_date'],
-      'sale_price': it['sale_price'],
-      'tracking': it['tracking'],
-      'photo_url': it['photo_url'],
-      'document_url': it['document_url'],
-      'estimated_price': it['estimated_price'],
-      'item_location': it['item_location'],
-      'unit_cost': it['unit_cost'],
-      'unit_fees': it['unit_fees'],
-      'shipping_fees': it['shipping_fees'],
-      'commission_fees': it['commission_fees'],
-      'payment_type': it['payment_type'],
-      'buyer_infos': it['buyer_infos'],
-      // statut gardé à part pour filtrer la liste, pas dans la vue
-      'status': it['status'],
+  /// Construit une clé “strict group” : mêmes champs que la vue + quelques champs item
+  Map<String, dynamic> _groupKeyFromSource(Map<String, dynamic> src) {
+    // On copie uniquement les clés pertinentes si présentes.
+    const keys = <String>{
+      // clés de la vue
+      'product_id',
+      'game_id',
+      'type',
+      'language',
+      'channel_id',
+      'purchase_date',
+      'currency',
+      'supplier_name',
+      'buyer_company',
+      'notes',
+      'grade_id',
+      'sale_date',
+      'sale_price',
+      'tracking',
+      'photo_url',
+      'document_url',
+      'estimated_price',
+      'item_location',
+      'payment_type',
+      'buyer_infos',
+      // ajout côté items pouvant figurer dans la ligne “source étendue”
+      'unit_cost',
+      'unit_fees',
+      'shipping_fees',
+      'commission_fees',
     };
+    final m = <String, dynamic>{};
+    for (final k in keys) {
+      if (src.containsKey(k)) m[k] = src[k];
+    }
+    // statut gardé à part pour la liste items
+    if (src.containsKey('status')) m['status'] = src['status'];
+    return m;
   }
 
   Future<void> _loadAll() async {
     setState(() => _loading = true);
     try {
-      final productId = (widget.group['product_id'] as int?);
-      if (productId == null) {
-        setState(() {
-          _viewRow = null;
-          _items = [];
-          _movements = [];
-        });
-        return;
+      // 0) point de départ = EXACTEMENT la ligne cliquée (clé stricte)
+      final strictKey = _groupKeyFromSource(widget.group);
+
+      // 1) items stricts depuis la ligne
+      var strictItems = await _fetchGroupItems(strictKey);
+
+      // 2) si vide -> on réessaie en ignorant certaines clés “fragiles”
+      if (strictItems.isEmpty) {
+        strictItems = await _fetchGroupItems(
+          strictKey,
+          ignoreKeys: {
+            'sale_date', // date vs timestamp
+            'sale_price', // arrondis / formats
+            'tracking', // parfois vide vs null
+            'notes', // espaces / changements mineurs
+            'unit_cost', // ⬅️ FRAGILE (arrondis / conversion)
+            'unit_fees', // ⬅️ FRAGILE (arrondis / conversion)
+          },
+        );
       }
 
-      // Statut "préféré" (celui qui était affiché)
-      final preferredStatus =
-          (_localStatusFilter ?? widget.group['status'])?.toString();
-
-      // === 1) On tente d'abord avec le statut préféré
-      const itemCols = [
-        'id',
-        'product_id',
-        'game_id',
-        'type',
-        'language',
-        'status',
-        'channel_id',
-        'purchase_date',
-        'currency',
-        'supplier_name',
-        'buyer_company',
-        'unit_cost',
-        'unit_fees',
-        'notes',
-        'grade_id',
-        'grading_note',
-        'grading_fees',
-        'sale_date',
-        'sale_price',
-        'tracking',
-        'photo_url',
-        'document_url',
-        'created_at',
-        'estimated_price',
-        'item_location',
-        'shipping_fees',
-        'commission_fees',
-        'payment_type',
-        'buyer_infos',
-      ];
-
-      var q = _sb
-          .from('item')
-          .select(itemCols.join(','))
-          .eq('product_id', productId);
-      if ((preferredStatus ?? '').isNotEmpty) {
-        q = q.eq('status', preferredStatus as Object);
-      }
-      List<dynamic> looseRaw =
-          await q.order('id', ascending: true).limit(20000) as List<dynamic>;
-      List<Map<String, dynamic>> looseItems =
-          looseRaw.map((e) => Map<String, dynamic>.from(e as Map)).toList();
-
-      // === 2) Si aucun item avec le statut préféré -> retomber sur TOUS les items du produit
-      bool fellBackAllStatuses = false;
-      if (looseItems.isEmpty) {
-        fellBackAllStatuses = true;
-        final anyRaw = await _sb
-            .from('item')
-            .select(itemCols.join(','))
-            .eq('product_id', productId)
-            .order('id', ascending: true)
-            .limit(20000) as List<dynamic>;
-        looseItems =
-            anyRaw.map((e) => Map<String, dynamic>.from(e as Map)).toList();
-
-        // ⚠️ IMPORTANT : on recale le filtre local sur le *nouveau* statut trouvé
-        if (looseItems.isNotEmpty) {
-          _localStatusFilter = (looseItems.first['status'] ?? '').toString();
+      // 3) si toujours vide -> on tente “produit + statut” (fallback minimal)
+      if (strictItems.isEmpty) {
+        final productId = (widget.group['product_id'] as int?);
+        final status = (widget.group['status'] ?? '').toString();
+        if (productId != null && status.isNotEmpty) {
+          strictItems = await _fetchByProductAndStatus(productId, status);
         }
       }
 
-      if (looseItems.isEmpty) {
-        // Plus rien pour ce produit -> vider proprement
+      // 4) si toujours rien -> vider proprement
+      if (strictItems.isEmpty) {
         setState(() {
           _viewRow = null;
           _items = [];
@@ -246,30 +203,26 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
         return;
       }
 
-      // === 3) Construire la clé du groupe à partir d'un item "ancre"
-      final anchor = _groupKeyFromItem(looseItems.first);
+      // 5) recalage du statut local si nécessaire (ex: listed -> sold)
+      final detectedStatus =
+          (strictItems.first['status'] ?? widget.group['status'] ?? '')
+              .toString();
+      if ((_localStatusFilter ?? '').isEmpty ||
+          _localStatusFilter != detectedStatus) {
+        _localStatusFilter = detectedStatus;
+      }
 
-      // === 4) Recharger la vue avec CETTE clé (sans appliquer 'status' puisque la vue n'a pas de filtre statut)
+      // 6) vue : on reconstruit une clé “vue” sans les champs fragiles ignorés
+      final anchor = _groupKeyFromSource({
+        ...widget.group,
+        ...strictItems.first, // valeurs réelles
+      });
+
       final viewRow = await _fetchViewRow(anchor) ?? anchor;
 
-      // === 5) Recharger la liste stricte d'items à partir de la même clé
-      final strictItems = await _fetchGroupItems(anchor);
-
-      // === 6) Historique
+      // 7) mouvements
       final mvts = await _fetchMovementsFor(
           strictItems.map((e) => e['id'] as int).toList());
-
-      // === 7) Ajuster le filtre local sur le statut réellement présent
-      String? newStatusDetected = strictItems.isNotEmpty
-          ? (strictItems.first['status']?.toString())
-          : null;
-
-      // Si on a dû tomber en back (e.g. listed -> sold) OU si le statut réel diffère, on aligne
-      if (fellBackAllStatuses ||
-          (newStatusDetected != null &&
-              newStatusDetected != _localStatusFilter)) {
-        _localStatusFilter = newStatusDetected ?? _localStatusFilter;
-      }
 
       setState(() {
         _viewRow = viewRow;
@@ -289,6 +242,7 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
   Future<Map<String, dynamic>?> _fetchViewRow(
       Map<String, dynamic> group) async {
     var builder = _sb.from('v_items_by_status').select(kViewCols.join(','));
+    // on n’applique que les clés que la vue connaît
     for (final key in kViewCols) {
       if (group.containsKey(key) && group[key] != null) {
         builder = builder.eq(key, group[key]);
@@ -300,9 +254,11 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
     return list.isNotEmpty ? list.first : null;
   }
 
-  /// Items STRICTEMENT égaux à la ligne cliquée (NULL = NULL)
+  /// Items STRICTEMENT égaux à la "ligne" (NULL = NULL), avec option d’ignorer certaines clés
   Future<List<Map<String, dynamic>>> _fetchGroupItems(
-      Map<String, dynamic> source) async {
+    Map<String, dynamic> source, {
+    Set<String> ignoreKeys = const {},
+  }) async {
     const itemCols = [
       'id',
       'product_id',
@@ -319,8 +275,8 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
       'unit_fees',
       'notes',
       'grade_id',
-      'grading_note', // <- champs table item
-      'grading_fees', // <-
+      'grading_note',
+      'grading_fees',
       'sale_date',
       'sale_price',
       'tracking',
@@ -337,6 +293,7 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
 
     var q = _sb.from('item').select(itemCols.join(','));
 
+    // clés strictes utilisées pour filtrer
     const filterableKeys = <String>{
       'product_id',
       'game_id',
@@ -367,6 +324,7 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
     };
 
     for (final k in filterableKeys) {
+      if (ignoreKeys.contains(k)) continue;
       if (!source.containsKey(k)) continue;
       final v = source[k];
       if (v == null) {
@@ -376,7 +334,7 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
       }
     }
 
-    // 🔑 Statut : on prend celui du "source" s’il est renseigné, sinon le filtre local si présent
+    // statut (prioritaire)
     final srcStatus = (source['status'] ?? '').toString();
     if (srcStatus.isNotEmpty) {
       q = q.eq('status', srcStatus);
@@ -385,6 +343,54 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
     }
 
     final raw = await q.order('id', ascending: true).limit(20000);
+    return List<Map<String, dynamic>>.from(
+      (raw as List).map((e) => Map<String, dynamic>.from(e as Map)),
+    );
+  }
+
+  /// Fallback minimal : par produit + statut (sans strict)
+  Future<List<Map<String, dynamic>>> _fetchByProductAndStatus(
+      int productId, String status) async {
+    const itemCols = [
+      'id',
+      'product_id',
+      'game_id',
+      'type',
+      'language',
+      'status',
+      'channel_id',
+      'purchase_date',
+      'currency',
+      'supplier_name',
+      'buyer_company',
+      'unit_cost',
+      'unit_fees',
+      'notes',
+      'grade_id',
+      'grading_note',
+      'grading_fees',
+      'sale_date',
+      'sale_price',
+      'tracking',
+      'photo_url',
+      'document_url',
+      'created_at',
+      'estimated_price',
+      'item_location',
+      'shipping_fees',
+      'commission_fees',
+      'payment_type',
+      'buyer_infos',
+    ];
+
+    final raw = await _sb
+        .from('item')
+        .select(itemCols.join(','))
+        .eq('product_id', productId)
+        .eq('status', status)
+        .order('id', ascending: true)
+        .limit(20000);
+
     return List<Map<String, dynamic>>.from(
       (raw as List).map((e) => Map<String, dynamic>.from(e as Map)),
     );
@@ -409,16 +415,16 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
   }
 
   Future<void> _onEditGroup() async {
-    final qty = _viewRow?['qty_${_localStatusFilter ?? widget.group['status']}']
-            as int? ??
-        widget.group['qty_status'] as int? ??
-        _items.length;
-    final productId =
-        (_viewRow?['product_id'] ?? widget.group['product_id']) as int?;
-    final status =
+    final curStatus =
         (_localStatusFilter ?? widget.group['status'] ?? '').toString();
 
-    if (productId == null || status.isEmpty || qty <= 0) {
+    // quantité affichée = nombre d’items filtrés localement
+    final qty = _items.where((e) => (e['status'] ?? '') == curStatus).length;
+
+    final productId =
+        (_viewRow?['product_id'] ?? widget.group['product_id']) as int?;
+
+    if (productId == null || curStatus.isEmpty || qty <= 0) {
       _snack('Impossible d’éditer ce groupe.');
       return;
     }
@@ -426,7 +432,7 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
     final changed = await EditItemsDialog.show(
       context,
       productId: productId,
-      status: status,
+      status: curStatus,
       availableQty: qty,
       initialSample: {
         ...?_viewRow,
@@ -435,8 +441,8 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
     );
 
     if (changed == true) {
-      _dirty = true; // ✅ marque comme modifié
-      await _loadAll(); // ✅ refresh local immédiat
+      _dirty = true;
+      await _loadAll(); // refresh local
     }
   }
 
@@ -482,17 +488,15 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
     final totalWithFees = (_viewRow?['total_cost_with_fees'] as num?) ?? 0;
     final sumShipping = (_viewRow?['sum_shipping_fees'] as num?) ?? 0;
     final sumCommission = (_viewRow?['sum_commission_fees'] as num?) ?? 0;
-    final sumGrading = (_viewRow?['sum_grading_fees'] as num?) ?? 0; // <<<
+    final sumGrading = (_viewRow?['sum_grading_fees'] as num?) ?? 0;
 
     final perUnitBase = qtyTotal > 0 ? (totalWithFees / qtyTotal) : 0;
     final perUnitShipping = qtyTotal > 0 ? (sumShipping / qtyTotal) : 0;
     final perUnitCommission = qtyTotal > 0 ? (sumCommission / qtyTotal) : 0;
-    final perUnitGrading = qtyTotal > 0 ? (sumGrading / qtyTotal) : 0; // <<<
+    final perUnitGrading = qtyTotal > 0 ? (sumGrading / qtyTotal) : 0;
 
-    final unitCost = perUnitBase +
-        perUnitShipping +
-        perUnitCommission +
-        perUnitGrading; // <<<
+    final unitCost =
+        perUnitBase + perUnitShipping + perUnitCommission + perUnitGrading;
     final investedForView = unitCost * qtyStatus;
 
     // Σ estimated_price en traitant null comme 0
@@ -512,7 +516,7 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
     final cs = Theme.of(context).colorScheme;
 
     return WillPopScope(
-      // ✅ renvoie le flag au parent quand on quitte
+      // renvoie le flag au parent quand on quitte
       onWillPop: () async {
         Navigator.pop(context, _dirty);
         return false; // on consomme le pop
@@ -520,7 +524,6 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
       child: Scaffold(
         appBar: AppBar(
           leading: BackButton(
-            // ✅ même logique sur la flèche de l’AppBar
             onPressed: () => Navigator.pop(context, _dirty),
           ),
           title: Text(
@@ -957,8 +960,8 @@ class _ItemsTable extends StatelessWidget {
               DataColumn(label: Text('ID')),
               DataColumn(label: Text('Statut')),
               DataColumn(label: Text('Grade ID')),
-              DataColumn(label: Text('Grade note')), // <- AJOUT
-              DataColumn(label: Text('Grading fees')), // <- AJOUT
+              DataColumn(label: Text('Grade note')),
+              DataColumn(label: Text('Grading fees')),
               DataColumn(label: Text('Est.')),
               DataColumn(label: Text('Sale')),
               DataColumn(label: Text('Tracking')),
