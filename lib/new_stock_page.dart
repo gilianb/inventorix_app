@@ -44,7 +44,7 @@ class _NewStockPageState extends State<NewStockPage> {
   final _commissionFeesCtrl = TextEditingController();
   final _paymentTypeCtrl = TextEditingController();
   final _buyerInfosCtrl = TextEditingController();
-
+  final _salePriceCtrl = TextEditingController();
   // Jeux
   List<Map<String, dynamic>> _games = const [];
   int? _selectedGameId;
@@ -229,6 +229,9 @@ class _NewStockPageState extends State<NewStockPage> {
         'p_buyer_infos': _buyerInfosCtrl.text.trim().isEmpty
             ? null
             : _buyerInfosCtrl.text.trim(),
+        'p_sale_price': _salePriceCtrl.text.trim().isEmpty
+            ? null
+            : double.tryParse(_salePriceCtrl.text.trim().replaceAll(',', '.')),
       });
 
       _snack('Stock créé ($qty items)');
@@ -262,6 +265,7 @@ class _NewStockPageState extends State<NewStockPage> {
     _shippingFeesCtrl.dispose();
     _commissionFeesCtrl.dispose();
     _paymentTypeCtrl.dispose();
+    _salePriceCtrl.dispose();
     _buyerInfosCtrl.dispose();
     _gradingNoteCtrl.dispose();
     _gradingFeesCtrl.dispose();
@@ -616,10 +620,10 @@ class _NewStockPageState extends State<NewStockPage> {
 
                         // ===== (5) Type de paiement : une seule case + suggestions =====
                         LookupAutocompleteField(
-                          tableName: 'payment_type',
-                          label: 'Type de paiement',
-                          controller: _paymentTypeCtrl,
-                          addDialogTitle: 'Nouveau type de paiement',
+                          tableName: 'sale_prices',
+                          label: 'prix de vente',
+                          controller: _salePriceCtrl,
+                          addDialogTitle: 'Nouveau prix de vente',
                         ),
 
                         const SizedBox(height: 8),

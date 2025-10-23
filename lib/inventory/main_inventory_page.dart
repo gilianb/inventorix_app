@@ -128,7 +128,7 @@ class _MainInventoryPageState extends State<MainInventoryPage> {
         'product_name, game_code, game_label, '
         'purchase_date, currency, '
         // champs homogènes
-        'supplier_name, buyer_company, notes, grade_id, sale_date, sale_price, '
+        'supplier_name, buyer_company, notes, grade_id, grading_note, sale_date, sale_price, '
         'tracking, photo_url, document_url, estimated_price, sum_estimated_price, item_location, channel_id,  '
         'payment_type, buyer_infos, '
         // agrégats

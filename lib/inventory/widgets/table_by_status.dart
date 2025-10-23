@@ -1,125 +1,171 @@
+// lib/inventory/widgets/table_by_status.dart
 // ignore_for_file: deprecated_member_use
 
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../utils/status_utils.dart';
 import '../utils/format.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 class InventoryTableByStatus extends StatelessWidget {
   const InventoryTableByStatus({
     super.key,
     required this.lines,
     required this.onOpen,
-    this.onEdit, // bouton éditer
-    this.onDelete, // bouton supprimer
+    this.onEdit,
+    this.onDelete,
   });
 
-  /// Lignes déjà agrégées par statut :
-  /// - product_name, language, game_label, purchase_date, currency
-  /// - status (String), qty_status (int)
-  /// - total_cost_with_fees, qty_total  (pour calculer le coût total du statut)
-  /// - + opt : estimated_price, supplier_name, buyer_company, notes, grade_id,
-  ///           sale_date, sale_price, tracking, photo_url, document_url, item_location
   final List<Map<String, dynamic>> lines;
   final void Function(Map<String, dynamic>) onOpen;
   final void Function(Map<String, dynamic>)? onEdit;
   final void Function(Map<String, dynamic>)? onDelete;
 
+  // dimensions “fixes”
+  static const double _headH = 56;
+  static const double _rowH = 56;
+  static const double _sideW = 52;
+
   String _txt(dynamic v) =>
       (v == null || (v is String && v.trim().isEmpty)) ? '—' : v.toString();
 
+  // ---- TABLEAU CENTRAL (scrollé) ----
+  DataRow _centerRow(BuildContext context, Map<String, dynamic> r) {
+    final s = (r['status'] ?? '').toString();
+    final q = (r['qty_status'] as int?) ?? 0;
+
+    final qtyTotal = (r['qty_total'] as num?) ?? 0;
+    final totalWithFees = (r['total_cost_with_fees'] as num?) ?? 0;
+    final unit = qtyTotal > 0 ? (totalWithFees / qtyTotal) : 0;
+    final sumUnitTotal = unit * q;
+    final est = (r['estimated_price'] as num?);
+
+    // ✅ COULEUR DE LIGNE COMME AVANT
+    final lineColor = MaterialStateProperty.resolveWith<Color?>(
+      (_) => statusColor(context, s).withOpacity(0.06),
+    );
+
+    return DataRow(
+      color: lineColor,
+      onSelectChanged: (_) => onOpen(r),
+      cells: [
+        // Photo
+        DataCell(_FileCell(
+          url: r['photo_url']?.toString(),
+          isImagePreferred: true,
+        )),
+
+        // 👇 Grading note juste avant “Produit”
+        DataCell(Text(_txt(r['grading_note']))),
+
+        // Colonnes principales
+        DataCell(Text(r['product_name']?.toString() ?? '')),
+        DataCell(Text(r['language']?.toString() ?? '')),
+        DataCell(Text(r['game_label']?.toString() ?? '—')),
+        DataCell(Text(r['purchase_date']?.toString() ?? '')),
+
+        // Qté & statut
+        DataCell(Text('$q')),
+        DataCell(
+          Chip(
+            label: Text(s.toUpperCase()),
+            backgroundColor: statusColor(context, s).withOpacity(0.15),
+            side: BorderSide(color: statusColor(context, s).withOpacity(0.6)),
+          ),
+        ),
+
+        // Prix
+        DataCell(Text('${money(unit)} ${r['currency'] ?? 'USD'}')),
+        DataCell(Text('${money(sumUnitTotal)} ${r['currency'] ?? 'USD'}')),
+
+        // Estimated /u.
+        DataCell(Text(
+            est == null ? '—' : '${money(est)} ${r['currency'] ?? 'USD'}')),
+
+        // Divers
+        DataCell(Text(_txt(r['supplier_name']))),
+        DataCell(Text(_txt(r['buyer_company']))),
+        DataCell(Text(_txt(r['item_location']))),
+        DataCell(Text(_txt(r['grade_id']))),
+        DataCell(Text(_txt(r['sale_date']))),
+        DataCell(Text(_txt(r['sale_price']))),
+        DataCell(Text(_txt(r['tracking']))),
+
+        // Doc
+        DataCell(_FileCell(url: r['document_url']?.toString())),
+      ],
+    );
+  }
+
+  // Couleur de fond d’une ligne (pour colonnes fixes)
+  Color _rowBg(BuildContext ctx, Map<String, dynamic> r) {
+    final s = (r['status'] ?? '').toString();
+    return statusColor(ctx, s).withOpacity(0.06);
+  }
+
   @override
   Widget build(BuildContext context) {
-    DataRow row(Map<String, dynamic> r) {
-      final s = (r['status'] ?? '').toString();
-      final q = (r['qty_status'] as int?) ?? 0;
-
-      // coût total pour CE statut (fallback si la vue ne fournit pas sum_unit_total)
-      final qtyTotal = (r['qty_total'] as num?) ?? 0;
-      final totalWithFees = (r['total_cost_with_fees'] as num?) ?? 0;
-      final unit = qtyTotal > 0 ? (totalWithFees / qtyTotal) : 0;
-      final sumUnitTotal = unit * q;
-
-      final lineColor = WidgetStateProperty.resolveWith<Color?>(
-        (states) => statusColor(context, s).withOpacity(0.06),
-      );
-
-      final est = (r['estimated_price'] as num?);
-
-      return DataRow(
-        color: lineColor,
-        onSelectChanged: (_) => onOpen(r),
-        cells: [
-          // 1) Edit
-          DataCell(IconButton(
-            tooltip: 'Éditer ce listing',
-            icon: const Icon(Icons.edit),
-            onPressed: onEdit == null ? null : () => onEdit!(r),
-          )),
-
-          // 2) Photo (déplacé ici, juste après Edit)
-          DataCell(_FileCell(
-            url: r['photo_url']?.toString(),
-            isImagePreferred: true,
-          )),
-
-          // Colonnes principales
-          DataCell(Text(r['product_name']?.toString() ?? '')),
-          DataCell(Text(r['language']?.toString() ?? '')),
-          DataCell(Text(r['game_label']?.toString() ?? '—')),
-          DataCell(Text(r['purchase_date']?.toString() ?? '')),
-          DataCell(Text('$q')), // Qté de CE statut
-          DataCell(
-            Chip(
-              label: Text(s.toUpperCase()),
-              backgroundColor: statusColor(context, s).withOpacity(0.15),
-              side: BorderSide(color: statusColor(context, s).withOpacity(0.6)),
+    // ------ Colonne fixe gauche (✏️) ------
+    final fixedLeft = Column(
+      children: [
+        Container(
+          width: _sideW,
+          height: _headH,
+          alignment: Alignment.center,
+          color: Theme.of(context).colorScheme.surfaceVariant.withOpacity(.35),
+          child: const Icon(Icons.edit, size: 18, color: Colors.black45),
+        ),
+        for (final r in lines)
+          Container(
+            width: _sideW,
+            height: _rowH,
+            color: _rowBg(context, r), // ✅ même couleur que la ligne centrale
+            alignment: Alignment.center,
+            child: IconButton(
+              tooltip: 'Éditer ce listing',
+              icon: const Icon(Icons.edit, size: 18),
+              onPressed: onEdit == null ? null : () => onEdit!(r),
             ),
           ),
+      ],
+    );
 
-          // Prix / unité & Prix (Qté×u)
-          DataCell(Text('${money(unit)} ${r['currency'] ?? 'USD'}')),
-          DataCell(Text('${money(sumUnitTotal)} ${r['currency'] ?? 'USD'}')),
+    // ------ Colonne fixe droite (❌) ------
+    final fixedRight = Column(
+      children: [
+        Container(
+          width: _sideW,
+          height: _headH,
+          alignment: Alignment.center,
+          color: Theme.of(context).colorScheme.surfaceVariant.withOpacity(.35),
+          child: const Icon(Icons.close, size: 18, color: Colors.black45),
+        ),
+        for (final r in lines)
+          Container(
+            width: _sideW,
+            height: _rowH,
+            color: _rowBg(context, r), // ✅ même couleur
+            alignment: Alignment.center,
+            child: IconButton(
+              tooltip: 'Supprimer cette ligne',
+              icon: const Icon(Icons.close, size: 18, color: Colors.redAccent),
+              onPressed: onDelete == null ? null : () => onDelete!(r),
+            ),
+          ),
+      ],
+    );
 
-          // Estimated price /u.
-          DataCell(Text(
-            est == null ? '—' : '${money(est)} ${r['currency'] ?? 'USD'}',
-          )),
-
-          // Nouveaux / additionnels
-          DataCell(Text(_txt(r['supplier_name']))),
-          DataCell(Text(_txt(r['buyer_company']))),
-
-          // ======== NOUVELLE COLONNE ========
-          DataCell(Text(_txt(r['item_location']))), // <= Item location
-          // ==================================
-
-          DataCell(Text(_txt(r['grade_id']))),
-          DataCell(Text(_txt(r['sale_date']))),
-          DataCell(Text(_txt(r['sale_price']))),
-          DataCell(Text(_txt(r['tracking']))),
-
-          // Doc (la Photo est désormais au début)
-          DataCell(_FileCell(url: r['document_url']?.toString())),
-
-          // Delete
-          DataCell(IconButton(
-            tooltip: 'Supprimer cette ligne',
-            icon: const Icon(Icons.close),
-            color: Colors.redAccent,
-            onPressed: onDelete == null ? null : () => onDelete!(r),
-          )),
-        ],
-      );
-    }
-
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
+    // ------ Tableau central (scroll horizontal “groupé”) ------
+    final centerTable = DataTableTheme(
+      data: const DataTableThemeData(
+        headingRowHeight: _headH,
+        dataRowMinHeight: _rowH,
+        dataRowMaxHeight: _rowH,
+      ),
       child: DataTable(
         showCheckboxColumn: false,
         columns: const [
-          DataColumn(label: Icon(Icons.edit)), // 1) Edit
-          DataColumn(label: Text('Photo')), // 2) Photo (déplacée ici)
+          DataColumn(label: Text('Photo')),
+          DataColumn(label: Text('Grading note')), // 👈 ajouté
           DataColumn(label: Text('Produit')),
           DataColumn(label: Text('Langue')),
           DataColumn(label: Text('Jeu')),
@@ -131,19 +177,42 @@ class InventoryTableByStatus extends StatelessWidget {
           DataColumn(label: Text('Estimated /u.')),
           DataColumn(label: Text('Supplier')),
           DataColumn(label: Text('Buyer')),
-          DataColumn(label: Text('Item location')), // <= NOUVELLE COLONNE
+          DataColumn(label: Text('Item location')),
           DataColumn(label: Text('Grade ID')),
           DataColumn(label: Text('Sale date')),
           DataColumn(label: Text('Sale price')),
           DataColumn(label: Text('Tracking')),
           DataColumn(label: Text('Doc')),
-          DataColumn(label: Icon(Icons.close)), // Delete
         ],
-        rows: lines.map(row).toList(),
+        rows: lines.map((r) => _centerRow(context, r)).toList(),
+      ),
+    );
+
+    return Card(
+      margin: const EdgeInsets.symmetric(horizontal: 12),
+      elevation: 1,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(14),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            fixedLeft, // ✏️
+            Expanded(
+              child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: centerTable, // ⇦ scroll groupé pour toutes les lignes
+              ),
+            ),
+            fixedRight, // ❌
+          ],
+        ),
       ),
     );
   }
 }
+
+/* ============== Cellule fichier/photo ============== */
 
 class _FileCell extends StatelessWidget {
   const _FileCell({this.url, this.isImagePreferred = false});

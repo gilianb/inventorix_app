@@ -1,3 +1,4 @@
+// lib/collection_page.dart
 // ignore_for_file: deprecated_member_use
 
 import 'dart:async';
@@ -6,6 +7,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../inventory/widgets/table_by_status.dart';
 import '../../inventory/widgets/edit.dart';
+import '../../inventory/widgets/search_and_filters.dart'; // ⬅️ barre de recherche + filtre jeu
 import 'package:inventorix_app/details/details_page.dart';
 import 'package:inventorix_app/new_stock_page.dart';
 
@@ -25,7 +27,12 @@ class _CollectionPageState extends State<CollectionPage> {
   final _sb = Supabase.instance.client;
 
   bool _loading = true;
+
+  // Filtres/UI (alignés avec la page principale)
+  final _searchCtrl = TextEditingController();
+  String? _gameFilter;
   String _typeFilter = 'single'; // 'single' | 'sealed'
+
   List<Map<String, dynamic>> _groups = const [];
 
   // KPIs (collection uniquement)
@@ -47,6 +54,12 @@ class _CollectionPageState extends State<CollectionPage> {
     _refresh();
   }
 
+  @override
+  void dispose() {
+    _searchCtrl.dispose();
+    super.dispose();
+  }
+
   void _snack(String m) =>
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
 
@@ -62,15 +75,24 @@ class _CollectionPageState extends State<CollectionPage> {
     }
   }
 
+  /// Récupère les groupes depuis la vue stricte v_items_by_status
+  /// + applique les filtres “search” et “game” (comme la page principale)
   Future<List<Map<String, dynamic>>> _fetchGroupedFromView() async {
-    const cols = 'product_id, game_id, type, language, '
-        'product_name, game_code, game_label, purchase_date, currency, '
-        'supplier_name, buyer_company, notes, grade_id, sale_date, sale_price, '
+    const cols =
+        // dimensions
+        'product_id, game_id, type, language, '
+        'product_name, game_code, game_label, '
+        'purchase_date, currency, '
+        // champs homogènes
+        'supplier_name, buyer_company, notes, grade_id, grading_note, sale_date, sale_price, '
         'tracking, photo_url, document_url, estimated_price, sum_estimated_price, item_location, channel_id, '
         'payment_type, buyer_infos, '
-        'qty_total, qty_ordered, qty_in_transit, qty_paid, qty_received, '
+        // agrégats
+        'qty_total, '
+        'qty_ordered, qty_in_transit, qty_paid, qty_received, '
         'qty_sent_to_grader, qty_at_grader, qty_graded, '
         'qty_listed, qty_awaiting_payment, qty_sold, qty_shipped, qty_finalized, qty_collection, '
+        // totaux coûts + KPI
         'total_cost, total_cost_with_fees, realized_revenue, '
         'sum_shipping_fees, sum_commission_fees, sum_grading_fees';
 
@@ -81,9 +103,28 @@ class _CollectionPageState extends State<CollectionPage> {
         .order('purchase_date', ascending: false)
         .limit(1000);
 
-    return raw
+    var rows = raw
         .map<Map<String, dynamic>>((e) => Map<String, dynamic>.from(e as Map))
         .toList();
+
+    // filtre texte local (nom produit / langue / jeu / fournisseur)
+    final q = _searchCtrl.text.trim().toLowerCase();
+    if (q.isNotEmpty) {
+      rows = rows.where((r) {
+        final n = (r['product_name'] ?? '').toString().toLowerCase();
+        final l = (r['language'] ?? '').toString().toLowerCase();
+        final g = (r['game_label'] ?? '').toString().toLowerCase();
+        final s = (r['supplier_name'] ?? '').toString().toLowerCase();
+        return n.contains(q) || l.contains(q) || g.contains(q) || s.contains(q);
+      }).toList();
+    }
+
+    // filtre jeu local
+    if ((_gameFilter ?? '').isNotEmpty) {
+      rows = rows.where((r) => (r['game_label'] ?? '') == _gameFilter).toList();
+    }
+
+    return rows;
   }
 
   // Explose uniquement la collection
@@ -141,7 +182,7 @@ class _CollectionPageState extends State<CollectionPage> {
     );
 
     if (changed == true) {
-      _refresh(); // ⇦ recharge la page principale au retour
+      _refresh(); // ⇦ recharge au retour
     }
   }
 
@@ -205,7 +246,7 @@ class _CollectionPageState extends State<CollectionPage> {
   Future<List<int>> _collectItemIdsForLine(Map<String, dynamic> line) async {
     PostgrestFilterBuilder q = _sb.from('item').select('id');
 
-    // Clés strictes pour isoler la ligne (inclut les champs fragiles unit_cost/unit_fees)
+    // Clés strictes (mêmes que le reste de l’app)
     const keys = <String>{
       'product_id',
       'game_id',
@@ -257,12 +298,11 @@ class _CollectionPageState extends State<CollectionPage> {
   }
 
   Future<void> _deleteLine(Map<String, dynamic> line) async {
-    if (!_isGilian) return; // sécurité supplémentaire côté UI
+    if (!_isGilian) return; // sécurité supplémentaire UI
     final ok = await _confirmDeleteDialog(line);
     if (!ok) return;
 
     try {
-      // 1) Récupérer les ids d’items strictement de cette ligne
       final ids = await _collectItemIdsForLine(line);
       if (ids.isEmpty) {
         _snack('Aucun item trouvé pour cette ligne de collection.');
@@ -271,7 +311,6 @@ class _CollectionPageState extends State<CollectionPage> {
 
       final idsCsv = '(${ids.join(",")})';
 
-      // 2) Supprimer les mouvements liés puis les items (sans .in_())
       await _sb.from('movement').delete().filter('item_id', 'in', idsCsv);
       await _sb.from('item').delete().filter('id', 'in', idsCsv);
 
@@ -288,6 +327,14 @@ class _CollectionPageState extends State<CollectionPage> {
   Widget build(BuildContext context) {
     final lines = _collectionLines();
 
+    // jeux distincts pour le dropdown (comme la page principale)
+    final gamesForFilter = _groups
+        .map((r) => (r['game_label'] ?? '') as String)
+        .where((s) => s.isNotEmpty)
+        .toSet()
+        .toList()
+      ..sort();
+
     final body = _loading
         ? const Center(child: CircularProgressIndicator())
         : RefreshIndicator(
@@ -295,7 +342,7 @@ class _CollectionPageState extends State<CollectionPage> {
             child: ListView(
               padding: const EdgeInsets.only(bottom: 24),
               children: [
-                // Tabs type (single / sealed)
+                // === Encart: Recherche + Tabs type ===
                 Padding(
                   padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
                   child: Card(
@@ -303,12 +350,40 @@ class _CollectionPageState extends State<CollectionPage> {
                     shadowColor: kAccentA.withOpacity(.18),
                     shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(16)),
-                    child: Padding(
-                      padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
-                      child: Row(
-                        children: [
-                          Expanded(
-                            child: SegmentedButton<String>(
+                    child: Container(
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(16),
+                        gradient: LinearGradient(
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                          colors: [
+                            kAccentA.withOpacity(.06),
+                            kAccentB.withOpacity(.05),
+                          ],
+                        ),
+                        border: Border.all(
+                          color: kAccentA.withOpacity(.15),
+                          width: 0.8,
+                        ),
+                      ),
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
+                        child: Column(
+                          children: [
+                            // ⬇️ Barre de recherche + filtre jeu
+                            SearchAndGameFilter(
+                              searchCtrl: _searchCtrl,
+                              games: gamesForFilter,
+                              selectedGame: _gameFilter,
+                              onGameChanged: (v) {
+                                setState(() => _gameFilter = v);
+                                _refresh();
+                              },
+                              onSearch: _refresh,
+                            ),
+                            const SizedBox(height: 8),
+                            // ⬇️ Tabs single / sealed
+                            SegmentedButton<String>(
                               segments: const [
                                 ButtonSegment(
                                     value: 'single', label: Text('Single')),
@@ -321,8 +396,8 @@ class _CollectionPageState extends State<CollectionPage> {
                                 _refresh();
                               },
                             ),
-                          ),
-                        ],
+                          ],
+                        ),
                       ),
                     ),
                   ),
@@ -352,12 +427,15 @@ class _CollectionPageState extends State<CollectionPage> {
                           ?.copyWith(fontWeight: FontWeight.w700)),
                 ),
                 const SizedBox(height: 4),
+
+                // Tableau
                 InventoryTableByStatus(
                   lines: lines,
                   onOpen: _openDetails,
                   onEdit: _openEdit,
-                  onDelete: _isGilian ? _deleteLine : null, // ✅ activation
+                  onDelete: _isGilian ? _deleteLine : null,
                 ),
+
                 const SizedBox(height: 48),
               ],
             ),

@@ -123,12 +123,32 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
 
   Map<String, dynamic> get _sample => (widget.initialSample ?? const {});
 
+  // Helpers de coercition (assure une valeur valide dans les dropdowns)
+  String _coerceString(String? value, List<String> allowed, String fallback) {
+    final v = (value ?? '').trim();
+    return allowed.contains(v) ? v : fallback;
+  }
+
+  List<DropdownMenuItem<String>> _stringItems(List<String> allowed,
+      {String? extra}) {
+    final seen = <String>{...allowed};
+    final out = <DropdownMenuItem<String>>[
+      for (final s in allowed) DropdownMenuItem(value: s, child: Text(s)),
+    ];
+    if (extra != null && extra.isNotEmpty && !seen.contains(extra)) {
+      out.insert(0, DropdownMenuItem(value: extra, child: Text(extra)));
+    }
+    return out;
+  }
+
   @override
   void initState() {
     super.initState();
     _countToEdit = widget.availableQty.clamp(1, 999999);
     final s = _sample;
-    _newStatus = widget.status;
+
+    // Coercition pour éviter des valeurs hors liste
+    _newStatus = _coerceString(widget.status, kAllStatuses, kAllStatuses.first);
 
     _gradeIdCtrl.text = (s['grade_id'] ?? '').toString();
     _gradingNoteCtrl.text = (s['grading_note'] ?? '').toString();
@@ -146,13 +166,10 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
     _documentUrlCtrl.text = (s['document_url'] ?? '').toString();
     _unitCostCtrl.text = _numToText(s['unit_cost']);
 
-    _newType = (s['type'] ?? 'single').toString().isEmpty
-        ? 'single'
-        : (s['type'] ?? 'single').toString();
+    _newType =
+        _coerceString((s['type'] ?? 'single').toString(), itemTypes, 'single');
     _productNameCtrl.text = (s['product_name'] ?? '').toString();
-    _language = (s['language'] ?? 'EN').toString().isEmpty
-        ? 'EN'
-        : (s['language'] ?? 'EN').toString();
+    _language = _coerceString((s['language'] ?? 'EN').toString(), langs, 'EN');
     _gameId = _asInt(s['game_id']);
     _shippingFeesCtrl.text = _numToText(s['shipping_fees']);
     _commissionFeesCtrl.text = _numToText(s['commission_fees']);
@@ -167,11 +184,27 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
       final raw =
           await _sb.from('games').select('id, code, label').order('label');
       setState(() {
-        _games = raw
+        final list = raw
             .map<Map<String, dynamic>>(
                 (e) => Map<String, dynamic>.from(e as Map))
             .toList();
-        _gameId ??= _games.isNotEmpty ? _games.first['id'] as int : null;
+
+        // Si le game_id du sample n'existe plus en DB, on l'injecte comme placeholder
+        final sampleGameId = _asInt(_sample['game_id']);
+        if (sampleGameId != null && !list.any((g) => g['id'] == sampleGameId)) {
+          list.insert(0, {
+            'id': sampleGameId,
+            'label': 'Game #$sampleGameId',
+          });
+        }
+
+        _games = list;
+
+        if (sampleGameId != null) {
+          _gameId = sampleGameId;
+        } else {
+          _gameId ??= _games.isNotEmpty ? _games.first['id'] as int : null;
+        }
       });
     } catch (_) {}
   }
@@ -243,7 +276,6 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
     final oldRaw = _sample[key];
     final old = oldRaw == null ? null : num.tryParse(oldRaw.toString());
     final cur = _tryNum(currentText);
-    // change si diff ou si l’un est null et l’autre non
     return old != cur;
   }
 
@@ -261,7 +293,6 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
       final s = oldRaw.toString();
       old = DateTime.tryParse(s.length > 10 ? s : '${s}T00:00:00');
     }
-    // Compare yyyy-MM-dd
     String? d(DateTime? x) => x?.toIso8601String().substring(0, 10);
     return d(old) != d(cur);
   }
@@ -590,9 +621,7 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
                 'Type',
                 DropdownButtonFormField<String>(
                   value: _newType,
-                  items: itemTypes
-                      .map((t) => DropdownMenuItem(value: t, child: Text(t)))
-                      .toList(),
+                  items: _stringItems(itemTypes, extra: _newType),
                   onChanged: (v) => setState(() => _newType = v ?? 'single'),
                   decoration: const InputDecoration(hintText: 'Type'),
                 ),
@@ -607,9 +636,7 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
                 'Language',
                 DropdownButtonFormField<String>(
                   value: _language,
-                  items: langs
-                      .map((l) => DropdownMenuItem(value: l, child: Text(l)))
-                      .toList(),
+                  items: _stringItems(langs, extra: _language),
                   onChanged: (v) => setState(() => _language = v ?? 'EN'),
                   decoration: const InputDecoration(hintText: 'Langue'),
                 ),
@@ -640,9 +667,8 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
             'Status',
             DropdownButtonFormField<String>(
               value: (_newStatus.isNotEmpty ? _newStatus : widget.status),
-              items: kAllStatuses
-                  .map((s) => DropdownMenuItem(value: s, child: Text(s)))
-                  .toList(),
+              items: _stringItems(kAllStatuses,
+                  extra: _newStatus.isNotEmpty ? _newStatus : widget.status),
               onChanged: (v) => setState(() => _newStatus = v ?? widget.status),
               decoration: const InputDecoration(hintText: 'Choisir un statut'),
             ),
@@ -696,6 +722,13 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
           Row(children: [
             Expanded(
               child: labelWithField(
+                'Unit cost (USD)',
+                numberField(_unitCostCtrl, 'ex: 95.00', decimal: true),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: labelWithField(
                 'Estimated price per unit (USD)',
                 numberField(_estimatedPriceCtrl, 'ex: 125.00', decimal: true),
               ),
@@ -724,11 +757,13 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
                               const InputDecoration(hintText: 'YYYY-MM-DD'),
                           child: Padding(
                             padding: const EdgeInsets.symmetric(vertical: 10),
-                            child: Text(_saleDate == null
-                                ? '—'
-                                : _saleDate!
-                                    .toIso8601String()
-                                    .substring(0, 10)),
+                            child: Text(
+                              _saleDate == null
+                                  ? '—'
+                                  : _saleDate!
+                                      .toIso8601String()
+                                      .substring(0, 10),
+                            ),
                           ),
                         ),
                       ),
