@@ -84,6 +84,7 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
   final _notesCtrl = TextEditingController();
   final _photoUrlCtrl = TextEditingController();
   final _documentUrlCtrl = TextEditingController();
+  final _unitCostCtrl = TextEditingController();
 
   // Nouveaux contrôleurs
   String _newType = 'single'; // 'single' | 'sealed'
@@ -143,6 +144,7 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
     _notesCtrl.text = (s['notes'] ?? '').toString();
     _photoUrlCtrl.text = (s['photo_url'] ?? '').toString();
     _documentUrlCtrl.text = (s['document_url'] ?? '').toString();
+    _unitCostCtrl.text = _numToText(s['unit_cost']);
 
     _newType = (s['type'] ?? 'single').toString().isEmpty
         ? 'single'
@@ -209,6 +211,7 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
     _notesCtrl.dispose();
     _photoUrlCtrl.dispose();
     _documentUrlCtrl.dispose();
+    _unitCostCtrl.dispose();
 
     _productNameCtrl.dispose();
     _shippingFeesCtrl.dispose();
@@ -305,6 +308,7 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
     putText('notes', _notesCtrl);
     putText('photo_url', _photoUrlCtrl);
     putText('document_url', _documentUrlCtrl);
+    putNum('unit_cost', _unitCostCtrl); // 👈 ajout
 
     // Nouveaux champs item
     if (_changedSimple('type', _newType)) m['type'] = _newType;
@@ -397,6 +401,7 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
         'document_url',
         'item_location',
         'channel_id',
+        'unit_cost', // 👈 ajout
       };
 
       for (final k in keys) {
@@ -703,7 +708,6 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
               ),
             ),
           ]),
-          const SizedBox(height: 8),
 
           // ====== LIGNE 3 ======
           Row(children: [

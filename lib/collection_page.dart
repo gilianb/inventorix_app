@@ -7,6 +7,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../inventory/widgets/table_by_status.dart';
 import '../../inventory/widgets/edit.dart';
 import 'package:inventorix_app/details/details_page.dart';
+import 'package:inventorix_app/new_stock_page.dart';
 
 const kAccentA = Color(0xFF6C5CE7);
 const kAccentB = Color(0xFF00D1B2);
@@ -131,10 +132,17 @@ class _CollectionPageState extends State<CollectionPage> {
     _potential = potential;
   }
 
-  void _openDetails(Map<String, dynamic> line) {
-    Navigator.of(context).push(MaterialPageRoute(
-      builder: (_) => GroupDetailsPage(group: Map<String, dynamic>.from(line)),
-    ));
+  void _openDetails(Map<String, dynamic> line) async {
+    final changed = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(
+        builder: (_) =>
+            GroupDetailsPage(group: Map<String, dynamic>.from(line)),
+      ),
+    );
+
+    if (changed == true) {
+      _refresh(); // ⇦ recharge la page principale au retour
+    }
   }
 
   void _openEdit(Map<String, dynamic> line) async {
@@ -157,6 +165,122 @@ class _CollectionPageState extends State<CollectionPage> {
 
     if (changed == true) {
       _refresh();
+    }
+  }
+
+  // ======= SUPPRESSION D'UNE LIGNE (collection) =======
+
+  Future<bool> _confirmDeleteDialog(Map<String, dynamic> line) async {
+    final name = (line['product_name'] ?? '').toString();
+    final status = (line['status'] ?? '').toString();
+    return await showDialog<bool>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('Supprimer cette ligne de la collection ?'),
+            content: Text(
+              'Produit : $name\nStatut : $status\n\n'
+              'Cette action supprimera définitivement tous les items et mouvements '
+              'associés STRICTEMENT à cette ligne de la collection.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('Annuler'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                style: FilledButton.styleFrom(
+                  backgroundColor: Colors.redAccent,
+                  foregroundColor: Colors.white,
+                ),
+                child: const Text('Supprimer'),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+  }
+
+  /// Récupère les IDs d'items appartenant STRICTEMENT à la "ligne"
+  Future<List<int>> _collectItemIdsForLine(Map<String, dynamic> line) async {
+    PostgrestFilterBuilder q = _sb.from('item').select('id');
+
+    // Clés strictes pour isoler la ligne (inclut les champs fragiles unit_cost/unit_fees)
+    const keys = <String>{
+      'product_id',
+      'game_id',
+      'type',
+      'language',
+      'channel_id',
+      'purchase_date',
+      'currency',
+      'supplier_name',
+      'buyer_company',
+      'notes',
+      'grade_id',
+      'grading_note',
+      'grading_fees',
+      'sale_date',
+      'sale_price',
+      'tracking',
+      'photo_url',
+      'document_url',
+      'estimated_price',
+      'item_location',
+      'unit_cost',
+      'unit_fees',
+      'shipping_fees',
+      'commission_fees',
+      'payment_type',
+      'buyer_infos',
+    };
+
+    for (final k in keys) {
+      if (!line.containsKey(k)) continue;
+      final v = line[k];
+      if (v == null) {
+        q = q.filter(k, 'is', null);
+      } else {
+        q = q.eq(k, v);
+      }
+    }
+
+    // statut EXACT de la ligne
+    q = q.eq('status', (line['status'] ?? '').toString());
+
+    final List<dynamic> raw = await q.order('id', ascending: true).limit(20000);
+
+    return raw
+        .map((e) => (e as Map)['id'])
+        .whereType<int>()
+        .toList(growable: false);
+  }
+
+  Future<void> _deleteLine(Map<String, dynamic> line) async {
+    if (!_isGilian) return; // sécurité supplémentaire côté UI
+    final ok = await _confirmDeleteDialog(line);
+    if (!ok) return;
+
+    try {
+      // 1) Récupérer les ids d’items strictement de cette ligne
+      final ids = await _collectItemIdsForLine(line);
+      if (ids.isEmpty) {
+        _snack('Aucun item trouvé pour cette ligne de collection.');
+        return;
+      }
+
+      final idsCsv = '(${ids.join(",")})';
+
+      // 2) Supprimer les mouvements liés puis les items (sans .in_())
+      await _sb.from('movement').delete().filter('item_id', 'in', idsCsv);
+      await _sb.from('item').delete().filter('id', 'in', idsCsv);
+
+      _snack('Ligne supprimée (${ids.length} item(s) + mouvements).');
+      _refresh();
+    } on PostgrestException catch (e) {
+      _snack('Erreur Supabase: ${e.message}');
+    } catch (e) {
+      _snack('Erreur: $e');
     }
   }
 
@@ -232,7 +356,7 @@ class _CollectionPageState extends State<CollectionPage> {
                   lines: lines,
                   onOpen: _openDetails,
                   onEdit: _openEdit,
-                  onDelete: null, // par défaut pas de suppression rapide ici
+                  onDelete: _isGilian ? _deleteLine : null, // ✅ activation
                 ),
                 const SizedBox(height: 48),
               ],
@@ -254,6 +378,18 @@ class _CollectionPageState extends State<CollectionPage> {
         ),
       ),
       body: body,
+      floatingActionButton: FloatingActionButton.extended(
+        backgroundColor: kAccentA,
+        foregroundColor: Colors.white,
+        onPressed: () async {
+          final changed = await Navigator.of(context).push<bool>(
+            MaterialPageRoute(builder: (_) => const NewStockPage()),
+          );
+          if (changed == true) _refresh();
+        },
+        icon: const Icon(Icons.add),
+        label: const Text('Nouveau stock'),
+      ),
     );
   }
 }

@@ -174,12 +174,13 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
         strictItems = await _fetchGroupItems(
           strictKey,
           ignoreKeys: {
-            'sale_date', // date vs timestamp
-            'sale_price', // arrondis / formats
-            'tracking', // parfois vide vs null
-            'notes', // espaces / changements mineurs
-            'unit_cost', // ⬅️ FRAGILE (arrondis / conversion)
-            'unit_fees', // ⬅️ FRAGILE (arrondis / conversion)
+            'status', // ⬅️ IMPORTANT : on n'impose plus l'ancien statut
+            'sale_date',
+            'sale_price',
+            'tracking',
+            'notes',
+            'unit_cost',
+            'unit_fees',
           },
         );
       }
@@ -334,12 +335,14 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
       }
     }
 
-    // statut (prioritaire)
+    // statut (prioritaire, sauf si on l'ignore)
     final srcStatus = (source['status'] ?? '').toString();
-    if (srcStatus.isNotEmpty) {
-      q = q.eq('status', srcStatus);
-    } else if ((_localStatusFilter ?? '').isNotEmpty) {
-      q = q.eq('status', _localStatusFilter as Object);
+    if (!ignoreKeys.contains('status')) {
+      if (srcStatus.isNotEmpty) {
+        q = q.eq('status', srcStatus);
+      } else if ((_localStatusFilter ?? '').isNotEmpty) {
+        q = q.eq('status', _localStatusFilter as Object);
+      }
     }
 
     final raw = await q.order('id', ascending: true).limit(20000);

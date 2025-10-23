@@ -231,10 +231,17 @@ class _MainInventoryPageState extends State<MainInventoryPage> {
     return total;
   }
 
-  void _openDetails(Map<String, dynamic> line) {
-    Navigator.of(context).push(MaterialPageRoute(
-      builder: (_) => GroupDetailsPage(group: Map<String, dynamic>.from(line)),
-    ));
+  void _openDetails(Map<String, dynamic> line) async {
+    final changed = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(
+        builder: (_) =>
+            GroupDetailsPage(group: Map<String, dynamic>.from(line)),
+      ),
+    );
+
+    if (changed == true) {
+      _refresh(); // ⇦ recharge la page principale au retour
+    }
   }
 
   void _openEdit(Map<String, dynamic> line) async {
