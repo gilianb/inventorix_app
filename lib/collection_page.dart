@@ -48,6 +48,7 @@ class _CollectionPageState extends State<CollectionPage> {
     super.initState();
     // contrôle d’accès basique
     if (!_isGilian) {
+      // ignore: use_build_context_synchronously
       Future.microtask(() => Navigator.of(context).pop());
       return;
     }

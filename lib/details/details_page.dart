@@ -11,6 +11,7 @@ import 'widgets/history_list.dart';
 import 'widgets/finance_summary.dart';
 import 'widgets/info_extras_card.dart';
 import 'widgets/info_banner.dart';
+import 'widgets/marge.dart'; // ⬅️ nouveau
 
 /// Clé d'image par défaut si `photo_url` est vide ou invalide
 const String kDefaultPhoto = 'https://placehold.co/600x400?text=No+Photo';
@@ -70,6 +71,43 @@ const List<String> kViewCols = [
   'sum_grading_fees',
 ];
 
+/// ⚠️ CLE DE REGROUPEMENT STRICTE — IDENTIQUE A MainInventoryPage._collectItemIdsForLine
+const Set<String> kStrictLineKeys = {
+  'product_id',
+  'game_id',
+  'type',
+  'language',
+  'channel_id',
+  'purchase_date',
+  'currency',
+  'supplier_name',
+  'buyer_company',
+  'notes',
+  'grade_id',
+  'grading_note',
+  'grading_fees',
+  'sale_date',
+  'sale_price',
+  'tracking',
+  'photo_url',
+  'document_url',
+  'estimated_price',
+  'item_location',
+  'unit_cost',
+  'unit_fees',
+};
+
+/// Sous-ensemble “volatils” que l’on peut ignorer en fallback si strict=vide
+const Set<String> kVolatileKeys = {
+  'notes',
+  'sale_date',
+  'sale_price',
+  'tracking',
+  'photo_url',
+  'document_url',
+  'estimated_price',
+};
+
 class GroupDetailsPage extends StatefulWidget {
   const GroupDetailsPage({super.key, required this.group});
   final Map<String, dynamic> group;
@@ -120,114 +158,53 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
     _loadAll();
   }
 
-  /// Construit une clé “strict group” : mêmes champs que la vue + quelques champs item
-  Map<String, dynamic> _groupKeyFromSource(Map<String, dynamic> src) {
-    // On copie uniquement les clés pertinentes si présentes.
-    const keys = <String>{
-      // clés de la vue
-      'product_id',
-      'game_id',
-      'type',
-      'language',
-      'channel_id',
-      'purchase_date',
-      'currency',
-      'supplier_name',
-      'buyer_company',
-      'notes',
-      'grade_id',
-      'sale_date',
-      'sale_price',
-      'tracking',
-      'photo_url',
-      'document_url',
-      'estimated_price',
-      'item_location',
-      'payment_type',
-      'buyer_infos',
-      // ajout côté items pouvant figurer dans la ligne “source étendue”
-      'unit_cost',
-      'unit_fees',
-      'shipping_fees',
-      'commission_fees',
-    };
-    final m = <String, dynamic>{};
-    for (final k in keys) {
-      if (src.containsKey(k)) m[k] = src[k];
-    }
-    // statut gardé à part pour la liste items
-    if (src.containsKey('status')) m['status'] = src['status'];
-    return m;
-  }
-
   Future<void> _loadAll() async {
     setState(() => _loading = true);
     try {
-      // 0) point de départ = EXACTEMENT la ligne cliquée (clé stricte)
-      final strictKey = _groupKeyFromSource(widget.group);
+      // === 1) Items STRICTS : mêmes clés que MainInventory + statut cliqué ===
+      final strictItems = await _fetchItemsByLineKey(
+        widget.group,
+        ignoreKeys: const {},
+      );
 
-      // 1) items stricts depuis la ligne
-      var strictItems = await _fetchGroupItems(strictKey);
+      List<Map<String, dynamic>> items = strictItems;
 
-      // 2) si vide -> on réessaie en ignorant certaines clés “fragiles”
-      if (strictItems.isEmpty) {
-        strictItems = await _fetchGroupItems(
-          strictKey,
-          ignoreKeys: {
-            'status', // ⬅️ IMPORTANT : on n'impose plus l'ancien statut
-            'sale_date',
-            'sale_price',
-            'tracking',
-            'notes',
-            'unit_cost',
-            'unit_fees',
-          },
+      // === 2) Fallback doux si strict vide : on ignore seulement les clés volatiles ===
+      if (items.isEmpty) {
+        items = await _fetchItemsByLineKey(
+          widget.group,
+          ignoreKeys: kVolatileKeys,
         );
       }
 
-      // 3) si toujours vide -> on tente “produit + statut” (fallback minimal)
-      if (strictItems.isEmpty) {
-        final productId = (widget.group['product_id'] as int?);
-        final status = (widget.group['status'] ?? '').toString();
-        if (productId != null && status.isNotEmpty) {
-          strictItems = await _fetchByProductAndStatus(productId, status);
-        }
-      }
-
-      // 4) si toujours rien -> vider proprement
-      if (strictItems.isEmpty) {
+      // === 3) Si encore vide, on arrête proprement (pas d’infos fantômes) ===
+      if (items.isEmpty) {
         setState(() {
           _viewRow = null;
-          _items = [];
-          _movements = [];
+          _items = const [];
+          _movements = const [];
         });
         return;
       }
 
-      // 5) recalage du statut local si nécessaire (ex: listed -> sold)
+      // Statut actif (utilise celui cliqué si fourni)
       final detectedStatus =
-          (strictItems.first['status'] ?? widget.group['status'] ?? '')
-              .toString();
+          (widget.group['status'] ?? items.first['status'] ?? '').toString();
       if ((_localStatusFilter ?? '').isEmpty ||
           _localStatusFilter != detectedStatus) {
         _localStatusFilter = detectedStatus;
       }
 
-      // 6) vue : on reconstruit une clé “vue” sans les champs fragiles ignorés
-      final anchor = _groupKeyFromSource({
-        ...widget.group,
-        ...strictItems.first, // valeurs réelles
-      });
+      // === 4) Récupère la ligne de vue EXACTE qu’on a cliquée ===
+      final viewRow = await _fetchViewRow(widget.group) ?? widget.group;
 
-      final viewRow = await _fetchViewRow(anchor) ?? anchor;
-
-      // 7) mouvements
-      final mvts = await _fetchMovementsFor(
-          strictItems.map((e) => e['id'] as int).toList());
+      // === 5) Mouvements des items trouvés ===
+      final mvts =
+          await _fetchMovementsFor(items.map((e) => e['id'] as int).toList());
 
       setState(() {
         _viewRow = viewRow;
-        _items = strictItems;
+        _items = items;
         _movements = mvts;
       });
     } catch (e) {
@@ -255,10 +232,11 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
     return list.isNotEmpty ? list.first : null;
   }
 
-  /// Items STRICTEMENT égaux à la "ligne" (NULL = NULL), avec option d’ignorer certaines clés
-  Future<List<Map<String, dynamic>>> _fetchGroupItems(
+  /// Construit une requête items basée sur la même clé de regroupement que MainInventory,
+  /// + le statut cliqué. Si [ignoreKeys] contient des clés, elles ne seront pas utilisées.
+  Future<List<Map<String, dynamic>>> _fetchItemsByLineKey(
     Map<String, dynamic> source, {
-    Set<String> ignoreKeys = const {},
+    required Set<String> ignoreKeys,
   }) async {
     const itemCols = [
       'id',
@@ -290,110 +268,31 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
       'commission_fees',
       'payment_type',
       'buyer_infos',
+      'marge',
     ];
 
     var q = _sb.from('item').select(itemCols.join(','));
 
-    // clés strictes utilisées pour filtrer
-    const filterableKeys = <String>{
-      'product_id',
-      'game_id',
-      'type',
-      'language',
-      'channel_id',
-      'purchase_date',
-      'currency',
-      'supplier_name',
-      'buyer_company',
-      'notes',
-      'grade_id',
-      'grading_note',
-      'grading_fees',
-      'sale_date',
-      'sale_price',
-      'tracking',
-      'photo_url',
-      'document_url',
-      'estimated_price',
-      'item_location',
-      'unit_cost',
-      'unit_fees',
-      'shipping_fees',
-      'commission_fees',
-      'payment_type',
-      'buyer_infos',
-    };
-
-    for (final k in filterableKeys) {
+    for (final k in kStrictLineKeys) {
       if (ignoreKeys.contains(k)) continue;
       if (!source.containsKey(k)) continue;
       final v = source[k];
       if (v == null) {
         q = q.filter(k, 'is', null);
       } else {
-        q = q.eq(k, v);
+        q = q.filter(k, 'eq', v);
       }
     }
 
-    // statut (prioritaire, sauf si on l'ignore)
-    final srcStatus = (source['status'] ?? '').toString();
-    if (!ignoreKeys.contains('status')) {
-      if (srcStatus.isNotEmpty) {
-        q = q.eq('status', srcStatus);
-      } else if ((_localStatusFilter ?? '').isNotEmpty) {
-        q = q.eq('status', _localStatusFilter as Object);
-      }
+    // Statut = ligne cliquée (source de vérité)
+    final clickedStatus = (source['status'] ?? '').toString();
+    if (clickedStatus.isNotEmpty) {
+      q = q.eq('status', clickedStatus);
+    } else if ((_localStatusFilter ?? '').isNotEmpty) {
+      q = q.eq('status', _localStatusFilter as Object);
     }
 
     final raw = await q.order('id', ascending: true).limit(20000);
-    return List<Map<String, dynamic>>.from(
-      (raw as List).map((e) => Map<String, dynamic>.from(e as Map)),
-    );
-  }
-
-  /// Fallback minimal : par produit + statut (sans strict)
-  Future<List<Map<String, dynamic>>> _fetchByProductAndStatus(
-      int productId, String status) async {
-    const itemCols = [
-      'id',
-      'product_id',
-      'game_id',
-      'type',
-      'language',
-      'status',
-      'channel_id',
-      'purchase_date',
-      'currency',
-      'supplier_name',
-      'buyer_company',
-      'unit_cost',
-      'unit_fees',
-      'notes',
-      'grade_id',
-      'grading_note',
-      'grading_fees',
-      'sale_date',
-      'sale_price',
-      'tracking',
-      'photo_url',
-      'document_url',
-      'created_at',
-      'estimated_price',
-      'item_location',
-      'shipping_fees',
-      'commission_fees',
-      'payment_type',
-      'buyer_infos',
-    ];
-
-    final raw = await _sb
-        .from('item')
-        .select(itemCols.join(','))
-        .eq('product_id', productId)
-        .eq('status', status)
-        .order('id', ascending: true)
-        .limit(20000);
-
     return List<Map<String, dynamic>>.from(
       (raw as List).map((e) => Map<String, dynamic>.from(e as Map)),
     );
@@ -466,6 +365,62 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
     return s;
   }
 
+  num? _asNum(dynamic v) {
+    if (v == null) return null;
+    if (v is num) return v;
+    return num.tryParse(v.toString());
+  }
+
+  String _saleGroupKey(Map<String, dynamic> r) {
+    // Clé “vente/commande” : modifie/élargis si nécessaire
+    final sd = (r['sale_date'] ?? '').toString();
+    final buyer = (r['buyer_company'] ?? '').toString();
+    final trk = (r['tracking'] ?? '').toString();
+    final ch = (r['channel_id'] ?? '').toString();
+    // Si tout est vide -> on retournera '' (=pas de regroupement)
+    return [sd, buyer, trk, ch].join('|').trim();
+  }
+
+  /// Somme Investi basée sur les ITEMS VISIBLES, en ne comptant les
+  /// frais “par commande” (shipping/commission/grading) qu’une seule fois par commande.
+  num _investedFromItems(List<Map<String, dynamic>> items) {
+    num base = 0;
+    final Map<String, List<Map<String, dynamic>>> groups = {};
+
+    for (final r in items) {
+      base += (_asNum(r['unit_cost']) ?? 0) + (_asNum(r['unit_fees']) ?? 0);
+      final key = _saleGroupKey(r);
+      (groups[key] ??= <Map<String, dynamic>>[]).add(r);
+    }
+
+    num groupFees = 0;
+    groups.forEach((key, list) {
+      // Pas de clés -> on considère que les frais sont bien "par item"
+      if (key.isEmpty) {
+        for (final r in list) {
+          groupFees += (_asNum(r['shipping_fees']) ?? 0) +
+              (_asNum(r['commission_fees']) ?? 0) +
+              (_asNum(r['grading_fees']) ?? 0);
+        }
+      } else {
+        // Heuristique "une seule fois par commande"
+        // on prend le MAX (et pas la somme) sur le groupe
+        num maxShip = 0, maxComm = 0, maxGrad = 0;
+        for (final r in list) {
+          final s = _asNum(r['shipping_fees']) ?? 0;
+          final c = _asNum(r['commission_fees']) ?? 0;
+          final g = _asNum(r['grading_fees']) ?? 0;
+          if (s > maxShip) maxShip = s;
+          if (c > maxComm) maxComm = c;
+          if (g > maxGrad) maxGrad = g;
+        }
+        groupFees += maxShip + maxComm + maxGrad;
+      }
+    });
+
+    return base + groupFees;
+  }
+
   bool _isRealized(String s) =>
       s == 'sold' || s == 'shipped' || s == 'finalized';
 
@@ -479,6 +434,16 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
         .toString();
 
     final visibleItems = _filteredItems();
+    // marge moyenne (sur les items visibles qui ont une marge calculée)
+    final soldMargins = visibleItems
+        .map((e) => e['marge'] as num?)
+        .where((m) => m != null)
+        .cast<num>()
+        .toList();
+
+    final num? headerMargin = soldMargins.isEmpty
+        ? null
+        : (soldMargins.reduce((a, b) => a + b) / soldMargins.length);
 
     final qtyStatus = visibleItems.length;
     final currency = (_viewRow?['currency'] ??
@@ -493,14 +458,7 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
     final sumCommission = (_viewRow?['sum_commission_fees'] as num?) ?? 0;
     final sumGrading = (_viewRow?['sum_grading_fees'] as num?) ?? 0;
 
-    final perUnitBase = qtyTotal > 0 ? (totalWithFees / qtyTotal) : 0;
-    final perUnitShipping = qtyTotal > 0 ? (sumShipping / qtyTotal) : 0;
-    final perUnitCommission = qtyTotal > 0 ? (sumCommission / qtyTotal) : 0;
-    final perUnitGrading = qtyTotal > 0 ? (sumGrading / qtyTotal) : 0;
-
-    final unitCost =
-        perUnitBase + perUnitShipping + perUnitCommission + perUnitGrading;
-    final investedForView = unitCost * qtyStatus;
+    final investedForView = _investedFromItems(visibleItems);
 
     // Σ estimated_price en traitant null comme 0
     final potential =
@@ -572,6 +530,7 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
                       onStatusSelected: (s) =>
                           setState(() => _localStatusFilter = s),
                       activeStatus: _localStatusFilter,
+                      margin: headerMargin,
                     ),
                     const SizedBox(height: 12),
 
@@ -758,6 +717,7 @@ class _Header extends StatelessWidget {
     required this.qty,
     required this.onStatusSelected,
     required this.activeStatus,
+    this.margin,
   });
 
   final String title;
@@ -766,6 +726,7 @@ class _Header extends StatelessWidget {
   final int qty;
   final ValueChanged<String?> onStatusSelected;
   final String? activeStatus;
+  final num? margin;
 
   @override
   Widget build(BuildContext context) {
@@ -833,6 +794,11 @@ class _Header extends StatelessWidget {
                         label: Text('Qté : $qty',
                             style: const TextStyle(color: Colors.white)),
                         backgroundColor: kAccentC,
+                      ),
+                      Tooltip(
+                        message:
+                            margin == null ? 'Not sold yet' : 'Marge moyenne',
+                        child: MarginChip(marge: margin),
                       ),
                     ],
                   ),
@@ -967,6 +933,7 @@ class _ItemsTable extends StatelessWidget {
               DataColumn(label: Text('Grading fees')),
               DataColumn(label: Text('Est.')),
               DataColumn(label: Text('Sale')),
+              DataColumn(label: Text('Marge')), // ⬅️ nouveau
               DataColumn(label: Text('Tracking')),
               DataColumn(label: Text('Buyer')),
               DataColumn(label: Text('Supplier')),
@@ -977,6 +944,8 @@ class _ItemsTable extends StatelessWidget {
               final r = items[i];
               final est = (r['estimated_price'] as num?);
               final sale = (r['sale_price'] as num?);
+              final marge = (r['marge'] as num?);
+
               final s = (r['status'] ?? '').toString();
               final photo = (r['photo_url'] ?? '').toString();
               final doc = (r['document_url'] ?? '').toString();
@@ -995,6 +964,7 @@ class _ItemsTable extends StatelessWidget {
                   DataCell(Text(_txt(r['grading_fees']))),
                   DataCell(Text(est == null ? '—' : '${_m(est)} $currency')),
                   DataCell(Text(sale == null ? '—' : '${_m(sale)} $currency')),
+                  DataCell(MarginChip(marge: marge)), // ⬅️ nouveau
                   DataCell(Text(_txt(r['tracking']))),
                   DataCell(Text(_txt(r['buyer_company']))),
                   DataCell(Text(_txt(r['supplier_name']))),

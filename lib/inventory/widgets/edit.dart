@@ -620,7 +620,7 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
               child: labelWithField(
                 'Type',
                 DropdownButtonFormField<String>(
-                  value: _newType,
+                  initialValue: _newType,
                   items: _stringItems(itemTypes, extra: _newType),
                   onChanged: (v) => setState(() => _newType = v ?? 'single'),
                   decoration: const InputDecoration(hintText: 'Type'),
@@ -635,7 +635,7 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
               child: labelWithField(
                 'Language',
                 DropdownButtonFormField<String>(
-                  value: _language,
+                  initialValue: _language,
                   items: _stringItems(langs, extra: _language),
                   onChanged: (v) => setState(() => _language = v ?? 'EN'),
                   decoration: const InputDecoration(hintText: 'Langue'),
@@ -647,7 +647,7 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
               child: labelWithField(
                 'Jeu',
                 DropdownButtonFormField<int>(
-                  value: _gameId,
+                  initialValue: _gameId,
                   items: _games
                       .map((g) => DropdownMenuItem<int>(
                             value: g['id'] as int,
@@ -666,7 +666,8 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
           labelWithField(
             'Status',
             DropdownButtonFormField<String>(
-              value: (_newStatus.isNotEmpty ? _newStatus : widget.status),
+              initialValue:
+                  (_newStatus.isNotEmpty ? _newStatus : widget.status),
               items: _stringItems(kAllStatuses,
                   extra: _newStatus.isNotEmpty ? _newStatus : widget.status),
               onChanged: (v) => setState(() => _newStatus = v ?? widget.status),

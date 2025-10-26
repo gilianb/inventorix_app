@@ -120,6 +120,7 @@ class _RefLookupDropdownState extends State<RefLookupDropdown> {
       widget.bindController?.text = name;
     } catch (e) {
       if (context.mounted) {
+        // ignore: use_build_context_synchronously
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Erreur ajout: $e')),
         );
@@ -157,7 +158,7 @@ class _RefLookupDropdownState extends State<RefLookupDropdown> {
         value: addSentinel, child: Text('➕ Ajouter…')));
 
     return DropdownButtonFormField<int?>(
-      value: _selectedId,
+      initialValue: _selectedId,
       items: items,
       onChanged: widget.enabled
           ? (v) async {

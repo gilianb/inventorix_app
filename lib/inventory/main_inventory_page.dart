@@ -13,7 +13,9 @@ import '../../inventory/widgets/edit.dart';
 import 'package:inventorix_app/new_stock_page.dart';
 import 'package:inventorix_app/sales_archive_page.dart';
 import 'package:inventorix_app/details/details_page.dart';
-import 'package:inventorix_app/collection_page.dart'; // ⬅️ NEW
+import 'package:inventorix_app/collection_page.dart';
+
+import '../top_sold_page.dart'; // ⬅️ Top Sold tab
 
 /// Accents (UI only)
 const kAccentA = Color(0xFF6C5CE7); // violet
@@ -26,7 +28,6 @@ const Map<String, List<String>> kGroupToStatuses = {
   'purchase': ['ordered', 'in_transit', 'paid', 'received'],
   'grading': ['sent_to_grader', 'at_grader', 'graded'],
   'sale': ['listed', 'awaiting_payment', 'sold', 'shipped', 'finalized'],
-  // 'collection' est désormais hors de cette page
   'all': [
     'ordered',
     'in_transit',
@@ -40,7 +41,6 @@ const Map<String, List<String>> kGroupToStatuses = {
     'sold',
     'shipped',
     'finalized',
-    // 'collection' retiré de "all"
   ],
 };
 
@@ -50,7 +50,8 @@ class MainInventoryPage extends StatefulWidget {
   State<MainInventoryPage> createState() => _MainInventoryPageState();
 }
 
-class _MainInventoryPageState extends State<MainInventoryPage> {
+class _MainInventoryPageState extends State<MainInventoryPage>
+    with SingleTickerProviderStateMixin {
   final _sb = Supabase.instance.client;
 
   // UI state
@@ -61,31 +62,51 @@ class _MainInventoryPageState extends State<MainInventoryPage> {
   String _typeFilter = 'single'; // 'single' | 'sealed'
   String? _statusFilter; // filtre de la liste
 
-  // Données brutes (groupes venant de la VUE stricte v_items_by_status)
-  List<Map<String, dynamic>> _groups = const [];
+  /// NEW: filtre de période (sur purchase_date)
+  /// 'all' | 'month' (30j) | 'week' (7j)
+  String _dateFilter = 'all';
 
-  // KPI (excluent désormais “collection”)
+  late final TabController _tabCtrl;
+
+  // Données
+  List<Map<String, dynamic>> _groups = const [];
   num _kpiPotentialRevenue = 0; // Σ estimated (hors collection)
   num _kpiRealRevenue = 0; // Σ realized (hors collection)
-
-  bool get _isGilian =>
-      (_sb.auth.currentUser?.email ?? '').toLowerCase() ==
-      'gilian.bns@gmail.com';
 
   @override
   void initState() {
     super.initState();
+    _tabCtrl = TabController(length: 3, vsync: this);
     _refresh();
+  }
+
+  @override
+  void dispose() {
+    _tabCtrl.dispose();
+    super.dispose();
   }
 
   void _snack(String m) =>
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
 
+  /// Helper pour la date de début selon le _dateFilter
+  DateTime? _purchaseDateStart() {
+    final now = DateTime.now();
+    switch (_dateFilter) {
+      case 'week':
+        return now.subtract(const Duration(days: 7));
+      case 'month':
+        return now.subtract(const Duration(days: 30));
+      default:
+        return null; // all time
+    }
+  }
+
   Future<void> _refresh() async {
     setState(() => _loading = true);
     try {
       _groups = await _fetchGroupedFromView();
-      _recomputeKpis(); // recalcul avec exclusion “collection”
+      _recomputeKpis();
     } catch (e) {
       _snack('Erreur de chargement : $e');
     } finally {
@@ -93,11 +114,8 @@ class _MainInventoryPageState extends State<MainInventoryPage> {
     }
   }
 
-  /// Recalcule les KPI **hors collection**, en s’appuyant sur les lignes par statut
   void _recomputeKpis() {
-    final lines =
-        _explodeLines(); // déjà filtrées de “collection” (voir plus bas)
-    // Potentiel estimé = Σ (estimated_price * qty_status) pour toutes lignes hors collection
+    final lines = _explodeLines(); // hors collection
     num potential = 0;
     num realized = 0;
 
@@ -107,10 +125,7 @@ class _MainInventoryPageState extends State<MainInventoryPage> {
       final num estUnit = (r['estimated_price'] as num?) ?? 0;
       final num saleUnit = (r['sale_price'] as num?) ?? 0;
 
-      // potentiel : prendre l’estimation * quantité (peu importe le statut, hors collection)
       potential += estUnit * qty;
-
-      // réalisé : seulement sur sold/shipped/finalized
       if (s == 'sold' || s == 'shipped' || s == 'finalized') {
         realized += saleUnit * qty;
       }
@@ -120,32 +135,33 @@ class _MainInventoryPageState extends State<MainInventoryPage> {
     _kpiRealRevenue = realized;
   }
 
-  /// Récupère les groupes depuis la vue stricte v_items_by_status
   Future<List<Map<String, dynamic>>> _fetchGroupedFromView() async {
-    const cols =
-        // dimensions
-        'product_id, game_id, type, language, '
+    const cols = 'product_id, game_id, type, language, '
         'product_name, game_code, game_label, '
         'purchase_date, currency, '
-        // champs homogènes
         'supplier_name, buyer_company, notes, grade_id, grading_note, sale_date, sale_price, '
-        'tracking, photo_url, document_url, estimated_price, sum_estimated_price, item_location, channel_id,  '
+        'tracking, photo_url, document_url, estimated_price, sum_estimated_price, item_location, channel_id, '
         'payment_type, buyer_infos, '
-        // agrégats
         'qty_total, '
         'qty_ordered, qty_in_transit, qty_paid, qty_received, '
         'qty_sent_to_grader, qty_at_grader, qty_graded, '
         'qty_listed, qty_awaiting_payment, qty_sold, qty_shipped, qty_finalized, qty_collection, '
-        // totaux coûts + KPI
-        'total_cost, total_cost_with_fees, realized_revenue,'
+        'total_cost, total_cost_with_fees, realized_revenue, '
         'sum_shipping_fees, sum_commission_fees, sum_grading_fees';
 
-    final List<dynamic> raw = await _sb
-        .from('v_items_by_status')
-        .select(cols)
-        .eq('type', _typeFilter)
-        .order('purchase_date', ascending: false)
-        .limit(500);
+    // Base query
+    var query =
+        _sb.from('v_items_by_status').select(cols).eq('type', _typeFilter);
+
+    // NEW: filtre période sur purchase_date
+    final after = _purchaseDateStart();
+    if (after != null) {
+      final afterStr = after.toIso8601String().split('T').first; // 'YYYY-MM-DD'
+      query = query.gte('purchase_date', afterStr);
+    }
+
+    final List<dynamic> raw =
+        await query.order('purchase_date', ascending: false).limit(500);
 
     var rows = raw
         .map<Map<String, dynamic>>((e) => Map<String, dynamic>.from(e as Map))
@@ -171,24 +187,18 @@ class _MainInventoryPageState extends State<MainInventoryPage> {
     return rows;
   }
 
-  // Explose les groupes en lignes “par statut”
-  // ⬅️ ICI on **exclut** explicitement 'collection'
+  // Lignes par statut (hors collection)
   List<Map<String, dynamic>> _explodeLines() {
     final out = <Map<String, dynamic>>[];
     for (final r in _groups) {
       for (final s in kStatusOrder) {
-        if (s == 'collection') continue; // ⛔️ exclus de la page principale
+        if (s == 'collection') continue;
         final q = (r['qty_$s'] as int?) ?? 0;
         if (q > 0) {
-          out.add({
-            ...r,
-            'status': s,
-            'qty_status': q,
-          });
+          out.add({...r, 'status': s, 'qty_status': q});
         }
       }
     }
-    // filtre statut actif (mais 'collection' n’est pas proposé ici)
     if ((_statusFilter ?? '').isNotEmpty) {
       final f = _statusFilter!;
       final grouped = kGroupToStatuses[f];
@@ -203,16 +213,11 @@ class _MainInventoryPageState extends State<MainInventoryPage> {
     return out;
   }
 
-  // Investi (vue) = Σ (coût/u estimé × Qté du statut), hors collection
   num _kpiInvestedFromLines(List<Map<String, dynamic>> lines) {
     num total = 0;
     for (final r in lines) {
-      final status = (r['status'] ?? '').toString();
-      if (status == 'collection') continue; // ⛔️ exclu
-
       final qtyTotal = (r['qty_total'] as num?) ?? 0;
       final totalWithFees = (r['total_cost_with_fees'] as num?) ?? 0;
-
       final sumShipping = (r['sum_shipping_fees'] as num?) ?? 0;
       final sumCommission = (r['sum_commission_fees'] as num?) ?? 0;
       final sumGrading = (r['sum_grading_fees'] as num?) ?? 0;
@@ -224,7 +229,6 @@ class _MainInventoryPageState extends State<MainInventoryPage> {
 
       final unit =
           perUnitBase + perUnitShipping + perUnitCommission + perUnitGrading;
-
       final q = (r['qty_status'] as int?) ?? 0;
       total += unit * q;
     }
@@ -234,13 +238,11 @@ class _MainInventoryPageState extends State<MainInventoryPage> {
   void _openDetails(Map<String, dynamic> line) async {
     final changed = await Navigator.of(context).push<bool>(
       MaterialPageRoute(
-        builder: (_) =>
-            GroupDetailsPage(group: Map<String, dynamic>.from(line)),
-      ),
+          builder: (_) =>
+              GroupDetailsPage(group: Map<String, dynamic>.from(line))),
     );
-
     if (changed == true) {
-      _refresh(); // ⇦ recharge la page principale au retour
+      _refresh();
     }
   }
 
@@ -261,13 +263,10 @@ class _MainInventoryPageState extends State<MainInventoryPage> {
       availableQty: qty,
       initialSample: line,
     );
-
     if (changed == true) {
       _refresh();
     }
   }
-
-  // ======= SUPPRESSION D'UNE LIGNE (et données associées) =======
 
   Future<bool> _confirmDeleteDialog(Map<String, dynamic> line) async {
     final name = (line['product_name'] ?? '').toString();
@@ -283,15 +282,13 @@ class _MainInventoryPageState extends State<MainInventoryPage> {
             ),
             actions: [
               TextButton(
-                onPressed: () => Navigator.pop(ctx, false),
-                child: const Text('Annuler'),
-              ),
+                  onPressed: () => Navigator.pop(ctx, false),
+                  child: const Text('Annuler')),
               FilledButton(
                 onPressed: () => Navigator.pop(ctx, true),
                 style: FilledButton.styleFrom(
-                  backgroundColor: Colors.redAccent,
-                  foregroundColor: Colors.white,
-                ),
+                    backgroundColor: Colors.redAccent,
+                    foregroundColor: Colors.white),
                 child: const Text('Supprimer'),
               ),
             ],
@@ -300,11 +297,9 @@ class _MainInventoryPageState extends State<MainInventoryPage> {
         false;
   }
 
-  /// Récupère les IDs d'items appartenant STRICTEMENT à la "ligne" (même logique que l’édition)
   Future<List<int>> _collectItemIdsForLine(Map<String, dynamic> line) async {
-    PostgrestFilterBuilder q = _sb.from('item').select('id');
+    var q = _sb.from('item').select('id');
 
-    // Clés strictes pour isoler la ligne
     const keys = <String>{
       'product_id',
       'game_id',
@@ -336,15 +331,13 @@ class _MainInventoryPageState extends State<MainInventoryPage> {
       if (v == null) {
         q = q.filter(k, 'is', null);
       } else {
-        q = q.eq(k, v);
+        q = q.filter(k, 'eq', v);
       }
     }
 
-    // statut EXACT de la ligne
-    q = q.eq('status', (line['status'] ?? '').toString());
+    q = q.filter('status', 'eq', (line['status'] ?? '').toString());
 
     final List<dynamic> raw = await q.order('id', ascending: true).limit(20000);
-
     return raw
         .map((e) => (e as Map)['id'])
         .whereType<int>()
@@ -356,7 +349,6 @@ class _MainInventoryPageState extends State<MainInventoryPage> {
     if (!ok) return;
 
     try {
-      // 1) Récupérer les ids d’items strictement de cette ligne
       final ids = await _collectItemIdsForLine(line);
       if (ids.isEmpty) {
         _snack('Aucun item trouvé pour cette ligne.');
@@ -364,10 +356,7 @@ class _MainInventoryPageState extends State<MainInventoryPage> {
       }
 
       final idsCsv = '(${ids.join(",")})';
-
-      // 2) Supprimer les mouvements liés puis les items (sans .in_())
       await _sb.from('movement').delete().filter('item_id', 'in', idsCsv);
-
       await _sb.from('item').delete().filter('id', 'in', idsCsv);
 
       _snack('Ligne supprimée (${ids.length} item(s) + mouvements).');
@@ -383,23 +372,14 @@ class _MainInventoryPageState extends State<MainInventoryPage> {
   Widget build(BuildContext context) {
     final lines = _explodeLines();
 
-    // Pour masquer complètement la “collection” dans le breakdown,
-    // on passe des groupes clonés avec qty_collection = 0.
-    final groupsForPanel = _groups
-        .map((r) => {
-              ...r,
-              'qty_collection': 0, // ⛔️ rien à afficher pour collection ici
-            })
-        .toList();
-
-    final body = _loading
+    final inventoryBody = _loading
         ? const Center(child: CircularProgressIndicator())
         : RefreshIndicator(
             onRefresh: _refresh,
             child: ListView(
               padding: const EdgeInsets.only(bottom: 24),
               children: [
-                // === Encart coloré: Recherche & Filtres ===
+                // Recherche & Filtres
                 Padding(
                   padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
                   child: Card(
@@ -415,13 +395,11 @@ class _MainInventoryPageState extends State<MainInventoryPage> {
                           end: Alignment.bottomRight,
                           colors: [
                             kAccentA.withOpacity(.06),
-                            kAccentB.withOpacity(.05),
+                            kAccentB.withOpacity(.05)
                           ],
                         ),
                         border: Border.all(
-                          color: kAccentA.withOpacity(.15),
-                          width: 0.8,
-                        ),
+                            color: kAccentA.withOpacity(.15), width: 0.8),
                       ),
                       child: Padding(
                         padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
@@ -443,12 +421,38 @@ class _MainInventoryPageState extends State<MainInventoryPage> {
                               onSearch: _refresh,
                             ),
                             const SizedBox(height: 8),
-                            TypeTabs(
-                              typeFilter: _typeFilter,
-                              onTypeChanged: (t) {
-                                setState(() => _typeFilter = t);
-                                _refresh();
-                              },
+                            // Ligne de filtres: Type + Période
+                            Wrap(
+                              spacing: 8,
+                              runSpacing: 8,
+                              crossAxisAlignment: WrapCrossAlignment.center,
+                              children: [
+                                TypeTabs(
+                                  typeFilter: _typeFilter,
+                                  onTypeChanged: (t) {
+                                    setState(() => _typeFilter = t);
+                                    _refresh();
+                                  },
+                                ),
+                                // NEW: filtre période (purchase_date)
+                                SegmentedButton<String>(
+                                  segments: const [
+                                    ButtonSegment(
+                                        value: 'all', label: Text('All time')),
+                                    ButtonSegment(
+                                        value: 'month',
+                                        label: Text('Last month')),
+                                    ButtonSegment(
+                                        value: 'week',
+                                        label: Text('Last week')),
+                                  ],
+                                  selected: {_dateFilter},
+                                  onSelectionChanged: (s) {
+                                    setState(() => _dateFilter = s.first);
+                                    _refresh();
+                                  },
+                                ),
+                              ],
                             ),
                           ],
                         ),
@@ -474,35 +478,28 @@ class _MainInventoryPageState extends State<MainInventoryPage> {
                         : 'USD',
                   ),
                   const SizedBox(height: 12),
-
-                  // StatusBreakdownPanel (sans collection)
                   StatusBreakdownPanel(
                     expanded: _breakdownExpanded,
                     onToggle: (v) => setState(() => _breakdownExpanded = v),
-                    groupRows: groupsForPanel, // ⬅️ version “sans collection”
+                    groupRows: _groups
+                        .map((r) => {...r, 'qty_collection': 0})
+                        .toList(),
                     currentFilter: _statusFilter,
                     onTapStatus: (s) {
-                      if (s == 'collection') {
-                        // ignorer toute tentative de clic sur “collection”
-                        return;
-                      }
+                      if (s == 'collection') return;
                       setState(() =>
                           _statusFilter = (_statusFilter == s ? null : s));
                     },
                   ),
                   const SizedBox(height: 12),
-
                   ActiveStatusFilterBar(
                     statusFilter: _statusFilter,
                     linesCount: lines.length,
-                    onClear: () {
-                      setState(() => _statusFilter = null);
-                    },
+                    onClear: () => setState(() => _statusFilter = null),
                   ),
                   const SizedBox(height: 12),
                 ],
 
-                // libellé + table “lignes — vue par statut”
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 12),
                   child: Text('Lignes (${lines.length}) — vue par statut',
@@ -525,18 +522,16 @@ class _MainInventoryPageState extends State<MainInventoryPage> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Inventorix — Inventaire'),
+        title: const Text('Inventorix'),
+        bottom: TabBar(
+          controller: _tabCtrl,
+          tabs: const [
+            Tab(icon: Icon(Icons.inventory_2), text: 'Inventaire'),
+            Tab(icon: Icon(Icons.trending_up), text: 'Top Sold'),
+            Tab(icon: Icon(Icons.collections_bookmark), text: 'Collection'),
+          ],
+        ),
         actions: [
-          if (_isGilian)
-            IconButton(
-              tooltip: 'Collection',
-              icon: const Icon(Icons.collections_bookmark),
-              onPressed: () {
-                Navigator.of(context).push(
-                  MaterialPageRoute(builder: (_) => const CollectionPage()),
-                );
-              },
-            ),
           IconButton(
             tooltip: 'Archive ventes',
             onPressed: () => Navigator.of(context).push(
@@ -545,7 +540,6 @@ class _MainInventoryPageState extends State<MainInventoryPage> {
             icon: const Icon(Icons.receipt_long),
           ),
         ],
-        // Dégradé d’appBar
         flexibleSpace: Container(
           decoration: const BoxDecoration(
             gradient: LinearGradient(
@@ -556,18 +550,48 @@ class _MainInventoryPageState extends State<MainInventoryPage> {
           ),
         ),
       ),
-      body: body,
-      floatingActionButton: FloatingActionButton.extended(
-        backgroundColor: kAccentA,
-        foregroundColor: Colors.white,
-        onPressed: () async {
-          final changed = await Navigator.of(context).push<bool>(
-            MaterialPageRoute(builder: (_) => const NewStockPage()),
+      body: TabBarView(
+        controller: _tabCtrl,
+        children: [
+          // Onglet 0 : Inventaire
+          inventoryBody,
+          // Onglet 1 : Top Sold
+          TopSoldPage(
+            onOpenDetails: (itemRow) {
+              final status = (itemRow['status'] ?? 'sold').toString();
+              final productId = itemRow['product_id'] as int?;
+              if (productId != null) {
+                _openDetails({
+                  'product_id': productId,
+                  'status': status,
+                  'currency': itemRow['currency'],
+                  'photo_url': itemRow['photo_url'],
+                });
+              }
+            },
+          ),
+          // Onglet 2 : Collection
+          const CollectionPage(),
+        ],
+      ),
+      // FAB visible uniquement sur l’onglet Inventaire
+      floatingActionButton: AnimatedBuilder(
+        animation: _tabCtrl,
+        builder: (context, _) {
+          if (_tabCtrl.index != 0) return const SizedBox.shrink();
+          return FloatingActionButton.extended(
+            backgroundColor: kAccentA,
+            foregroundColor: Colors.white,
+            onPressed: () async {
+              final changed = await Navigator.of(context).push<bool>(
+                MaterialPageRoute(builder: (_) => const NewStockPage()),
+              );
+              if (changed == true) _refresh();
+            },
+            icon: const Icon(Icons.add),
+            label: const Text('Nouveau stock'),
           );
-          if (changed == true) _refresh();
         },
-        icon: const Icon(Icons.add),
-        label: const Text('Nouveau stock'),
       ),
     );
   }
@@ -628,9 +652,7 @@ class _OverviewKpis extends StatelessWidget {
               Container(
                 padding: const EdgeInsets.all(10),
                 decoration: BoxDecoration(
-                  color: (iconBg ?? kAccentA),
-                  shape: BoxShape.circle,
-                ),
+                    color: (iconBg ?? kAccentA), shape: BoxShape.circle),
                 child: Icon(icon, size: 20, color: Colors.white),
               ),
               const SizedBox(width: 12),
@@ -644,13 +666,11 @@ class _OverviewKpis extends StatelessWidget {
                             .labelMedium
                             ?.copyWith(color: cs.onSurfaceVariant)),
                     const SizedBox(height: 2),
-                    Text(
-                      value,
-                      style: Theme.of(context)
-                          .textTheme
-                          .headlineSmall
-                          ?.copyWith(fontWeight: FontWeight.w800),
-                    ),
+                    Text(value,
+                        style: Theme.of(context)
+                            .textTheme
+                            .headlineSmall
+                            ?.copyWith(fontWeight: FontWeight.w800)),
                     if (subtitle != null) ...[
                       const SizedBox(height: 2),
                       Text(subtitle,
@@ -718,27 +738,23 @@ class _OverviewKpis extends StatelessWidget {
           } else if (isMedium) {
             return Column(
               children: [
-                Row(
-                  children: [
-                    Expanded(child: kpis[0]),
-                    const SizedBox(width: 12),
-                    Expanded(child: kpis[1]),
-                  ],
-                ),
+                Row(children: [
+                  Expanded(child: kpis[0]),
+                  const SizedBox(width: 12),
+                  Expanded(child: kpis[1])
+                ]),
                 const SizedBox(height: 12),
                 Row(children: [Expanded(child: kpis[2])]),
               ],
             );
           } else {
-            return Column(
-              children: [
-                kpis[0],
-                const SizedBox(height: 12),
-                kpis[1],
-                const SizedBox(height: 12),
-                kpis[2],
-              ],
-            );
+            return Column(children: [
+              kpis[0],
+              const SizedBox(height: 12),
+              kpis[1],
+              const SizedBox(height: 12),
+              kpis[2]
+            ]);
           }
         },
       ),
