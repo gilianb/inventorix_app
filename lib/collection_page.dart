@@ -245,10 +245,23 @@ class _CollectionPageState extends State<CollectionPage> {
 
   /// Récupère les IDs d'items appartenant STRICTEMENT à la "ligne"
   Future<List<int>> _collectItemIdsForLine(Map<String, dynamic> line) async {
-    PostgrestFilterBuilder q = _sb.from('item').select('id');
+    // --- Helpers de normalisation ---
+    dynamic _norm(dynamic v) {
+      if (v == null) return null;
+      if (v is String && v.trim().isEmpty) return null; // '' -> NULL
+      return v;
+    }
 
-    // Clés strictes (mêmes que le reste de l’app)
-    const keys = <String>{
+    String? _dateStr(dynamic v) {
+      if (v == null) return null;
+      if (v is DateTime)
+        return v.toIso8601String().split('T').first; // YYYY-MM-DD
+      if (v is String) return v; // supposé déjà au bon format
+      return v.toString();
+    }
+
+    // 1) Clés raisonnables (on RETIRE photo_url / document_url)
+    const primaryKeys = <String>{
       'product_id',
       'game_id',
       'type',
@@ -258,15 +271,12 @@ class _CollectionPageState extends State<CollectionPage> {
       'currency',
       'supplier_name',
       'buyer_company',
-      'notes',
       'grade_id',
       'grading_note',
       'grading_fees',
       'sale_date',
       'sale_price',
       'tracking',
-      'photo_url',
-      'document_url',
       'estimated_price',
       'item_location',
       'unit_cost',
@@ -277,25 +287,60 @@ class _CollectionPageState extends State<CollectionPage> {
       'buyer_infos',
     };
 
-    for (final k in keys) {
-      if (!line.containsKey(k)) continue;
-      final v = line[k];
-      if (v == null) {
-        q = q.filter(k, 'is', null);
-      } else {
-        q = q.eq(k, v);
+    Future<List<int>> _runQuery(Set<String> keys) async {
+      var q = _sb.from('item').select('id');
+
+      for (final k in keys) {
+        if (!line.containsKey(k)) continue;
+        var v = _norm(line[k]);
+
+        if (v == null) {
+          q = q.filter(k, 'is', null);
+          continue;
+        }
+
+        if (k == 'purchase_date' || k == 'sale_date') {
+          final ds = _dateStr(v);
+          if (ds == null) {
+            q = q.filter(k, 'is', null);
+          } else {
+            q = q.eq(k, ds);
+          }
+        } else {
+          q = q.eq(k, v);
+        }
       }
+
+      // statut EXACT de la ligne
+      q = q.eq('status', (line['status'] ?? '').toString());
+
+      final List<dynamic> raw =
+          await q.order('id', ascending: true).limit(20000);
+      return raw
+          .map((e) => (e as Map)['id'])
+          .whereType<int>()
+          .toList(growable: false);
     }
 
-    // statut EXACT de la ligne
-    q = q.eq('status', (line['status'] ?? '').toString());
+    // 2) Essai avec l’ensemble “primary”
+    var ids = await _runQuery(primaryKeys);
+    if (ids.isNotEmpty) return ids;
 
-    final List<dynamic> raw = await q.order('id', ascending: true).limit(20000);
-
-    return raw
-        .map((e) => (e as Map)['id'])
-        .whereType<int>()
-        .toList(growable: false);
+    // 3) Fallback : ne garder que des clés “fortes”
+    const strongKeys = <String>{
+      'product_id',
+      'type',
+      'language',
+      'game_id',
+      'channel_id',
+      'purchase_date',
+      'supplier_name',
+      'buyer_company',
+      'item_location',
+      'tracking',
+    };
+    ids = await _runQuery(strongKeys);
+    return ids;
   }
 
   Future<void> _deleteLine(Map<String, dynamic> line) async {

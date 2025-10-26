@@ -298,9 +298,22 @@ class _MainInventoryPageState extends State<MainInventoryPage>
   }
 
   Future<List<int>> _collectItemIdsForLine(Map<String, dynamic> line) async {
-    var q = _sb.from('item').select('id');
+    // Helpers de normalisation
+    dynamic _norm(dynamic v) {
+      if (v == null) return null;
+      if (v is String && v.trim().isEmpty) return null;
+      return v;
+    }
 
-    const keys = <String>{
+    String? _dateStr(dynamic v) {
+      if (v == null) return null;
+      if (v is DateTime) return v.toIso8601String().split('T').first;
+      if (v is String) return v; // supposé déjà 'YYYY-MM-DD'
+      return v.toString();
+    }
+
+    // 1) Sélection des clés raisonnables (on supprime photo_url/document_url)
+    const primaryKeys = <String>{
       'product_id',
       'game_id',
       'type',
@@ -310,38 +323,81 @@ class _MainInventoryPageState extends State<MainInventoryPage>
       'currency',
       'supplier_name',
       'buyer_company',
-      'notes',
       'grade_id',
       'grading_note',
       'grading_fees',
       'sale_date',
       'sale_price',
       'tracking',
-      'photo_url',
-      'document_url',
       'estimated_price',
       'item_location',
       'unit_cost',
       'unit_fees',
+      'shipping_fees',
+      'commission_fees',
+      'payment_type',
+      'buyer_infos',
     };
 
-    for (final k in keys) {
-      if (!line.containsKey(k)) continue;
-      final v = line[k];
-      if (v == null) {
-        q = q.filter(k, 'is', null);
-      } else {
-        q = q.filter(k, 'eq', v);
+    // Construit la requête avec normalisation NULL/vides et dates
+    Future<List<int>> _runQuery(Set<String> keys) async {
+      var q = _sb.from('item').select('id');
+
+      for (final k in keys) {
+        if (!line.containsKey(k)) continue;
+        var v = line[k];
+
+        // normalisation
+        v = _norm(v);
+        if (v == null) {
+          q = q.filter(k, 'is', null);
+          continue;
+        }
+
+        // dates -> 'YYYY-MM-DD'
+        if (k == 'purchase_date' || k == 'sale_date') {
+          final ds = _dateStr(v);
+          if (ds == null) {
+            q = q.filter(k, 'is', null);
+          } else {
+            q = q.eq(k, ds);
+          }
+        } else {
+          q = q.eq(k, v);
+        }
       }
+
+      // statut toujours requis
+      q = q.eq('status', (line['status'] ?? '').toString());
+
+      final List<dynamic> raw =
+          await q.order('id', ascending: true).limit(20000);
+      return raw
+          .map((e) => (e as Map)['id'])
+          .whereType<int>()
+          .toList(growable: false);
     }
 
-    q = q.filter('status', 'eq', (line['status'] ?? '').toString());
+    // 2) essai avec l’ensemble “primary”
+    var ids = await _runQuery(primaryKeys);
+    if (ids.isNotEmpty) return ids;
 
-    final List<dynamic> raw = await q.order('id', ascending: true).limit(20000);
-    return raw
-        .map((e) => (e as Map)['id'])
-        .whereType<int>()
-        .toList(growable: false);
+    // 3) Fallback : ne garder que les champs "forts"
+    const strongKeys = <String>{
+      'product_id',
+      'status', // géré à part mais on le garde conceptuellement
+      'type',
+      'language',
+      'game_id',
+      'channel_id',
+      'purchase_date',
+      'supplier_name',
+      'buyer_company',
+      'item_location',
+      'tracking',
+    };
+    ids = await _runQuery(strongKeys);
+    return ids;
   }
 
   Future<void> _deleteLine(Map<String, dynamic> line) async {

@@ -39,6 +39,33 @@ class _TopSoldPageState extends State<TopSoldPage> {
     'collection'
   ];
 
+  /// ⚠️ Clé de regroupement STRICTE — IDENTIQUE à MainInventoryPage._collectItemIdsForLine
+  static const Set<String> _strictLineKeys = {
+    'product_id',
+    'game_id',
+    'type',
+    'language',
+    'channel_id',
+    'purchase_date',
+    'currency',
+    'supplier_name',
+    'buyer_company',
+    'notes',
+    'grade_id',
+    'grading_note',
+    'grading_fees',
+    'sale_date',
+    'sale_price',
+    'tracking',
+    'photo_url',
+    'document_url',
+    'estimated_price',
+    'item_location',
+    'unit_cost',
+    'unit_fees',
+    // le statut est filtré/attaché séparément juste en-dessous
+  };
+
   @override
   void initState() {
     super.initState();
@@ -75,38 +102,42 @@ class _TopSoldPageState extends State<TopSoldPage> {
             id, product_id, type, language, game_id,
             status, sale_date, sale_price, currency, marge,
             unit_cost, unit_fees, shipping_fees, commission_fees, grading_fees,
-            photo_url, buyer_company, supplier_name, purchase_date
+            photo_url, buyer_company, supplier_name, purchase_date,
+            channel_id, notes, grade_id, grading_note, document_url,
+            estimated_price, item_location
           ''');
 
       if (_typeFilter != 'all') {
         q = q.filter('type', 'eq', _typeFilter);
       }
 
-      // NEW: filtre période sur purchase_date (côté base)
+      // Filtre période sur purchase_date (côté base)
       final after = _purchaseDateStart();
       if (after != null) {
         final afterStr = after.toIso8601String().split('T').first; // YYYY-MM-DD
         q = q.gte('purchase_date', afterStr);
       }
 
-      q = q.order('sale_date', ascending: false).limit(2000);
+      q = q.order('sale_date', ascending: false).limit(5000);
 
       final List<dynamic> raw = await q;
-      var rows = raw
+      var items = raw
           .map<Map<String, dynamic>>((e) => Map<String, dynamic>.from(e as Map))
           .toList();
 
       // 2) Filtre statuts côté client
-      rows = rows.where((r) {
+      items = items.where((r) {
         final s = (r['status'] ?? '').toString();
-        return _wantedStatuses.contains(s);
+        final hasSale = r['sale_price'] != null; // <- clé: vente existante
+
+        return _wantedStatuses.contains(s) && hasSale;
       }).toList();
 
-      // 3) Lookups product & games
+      // 3) Lookups product & games (pour nom/sku/jeu)
       final productIds =
-          rows.map((r) => r['product_id']).whereType<int>().toSet().toList();
+          items.map((r) => r['product_id']).whereType<int>().toSet().toList();
       final gameIds =
-          rows.map((r) => r['game_id']).whereType<int>().toSet().toList();
+          items.map((r) => r['game_id']).whereType<int>().toSet().toList();
 
       Map<int, Map<String, dynamic>> productById = {};
       Map<int, Map<String, dynamic>> gameById = {};
@@ -136,7 +167,7 @@ class _TopSoldPageState extends State<TopSoldPage> {
       // 4) Filtre jeu + recherche locale (product.name / product.sku)
       final qtxt = _searchCtrl.text.trim().toLowerCase();
       if ((_gameFilter ?? '').isNotEmpty || qtxt.isNotEmpty) {
-        rows = rows.where((r) {
+        items = items.where((r) {
           final p = productById[r['product_id'] as int?] ?? const {};
           final g = gameById[r['game_id'] as int?] ?? const {};
 
@@ -151,7 +182,107 @@ class _TopSoldPageState extends State<TopSoldPage> {
         }).toList();
       }
 
-      // 5) Tri final marge desc (NULL en bas)
+      // 5) REGROUPEMENT STRICT (mêmes clés que l'inventaire) + statut
+      Map<String, Map<String, dynamic>> groups = {}; // key -> aggregate map
+
+      String _keyOf(Map<String, dynamic> r) {
+        final buf = StringBuffer();
+        for (final k in _strictLineKeys) {
+          final v = r.containsKey(k) ? r[k] : null;
+          buf.write('$k=');
+          if (v == null) {
+            buf.write('∅|');
+          } else {
+            // normalisation simple
+            buf.write('${v.toString()}|');
+          }
+        }
+        // statut fait partie de la ligne
+        buf.write('status=${(r['status'] ?? '').toString()}|');
+        return buf.toString();
+      }
+
+      for (final r in items) {
+        final key = _keyOf(r);
+        final g = groups.putIfAbsent(key, () {
+          // base du groupe = copier toutes les clés strictes + statut
+          final base = <String, dynamic>{};
+          for (final k in _strictLineKeys) {
+            base[k] = r[k];
+          }
+          base['status'] = r['status'];
+          base['product_id'] = r['product_id'];
+          base['game_id'] = r['game_id'];
+          base['_count'] = 0;
+          base['_sum_marge'] = 0.0;
+          base['_sum_sale'] = 0.0;
+          base['_sum_ucost'] = 0.0;
+          base['_sum_ufees'] = 0.0;
+          base['_sum_ship'] = 0.0;
+          base['_sum_comm'] = 0.0;
+          base['_sum_grad'] = 0.0;
+          // pour l'affichage: on garde aussi une photo non vide si possible
+          base['_any_photo'] = (r['photo_url'] ?? '').toString();
+          return base;
+        });
+
+        g['_count'] = (g['_count'] as int) + 1;
+        g['_sum_marge'] = (g['_sum_marge'] as num).toDouble() +
+            (_asNum(r['marge']) ?? 0).toDouble();
+        g['_sum_sale'] =
+            (g['_sum_sale'] as num).toDouble() + (_asNum(r['sale_price']) ?? 0);
+        g['_sum_ucost'] =
+            (g['_sum_ucost'] as num).toDouble() + (_asNum(r['unit_cost']) ?? 0);
+        g['_sum_ufees'] =
+            (g['_sum_ufees'] as num).toDouble() + (_asNum(r['unit_fees']) ?? 0);
+        g['_sum_ship'] = (g['_sum_ship'] as num).toDouble() +
+            (_asNum(r['shipping_fees']) ?? 0);
+        g['_sum_comm'] = (g['_sum_comm'] as num).toDouble() +
+            (_asNum(r['commission_fees']) ?? 0);
+        g['_sum_grad'] = (g['_sum_grad'] as num).toDouble() +
+            (_asNum(r['grading_fees']) ?? 0);
+
+        final curPhoto = (g['_any_photo'] ?? '').toString();
+        if (curPhoto.isEmpty) {
+          final cand = (r['photo_url'] ?? '').toString();
+          if (cand.isNotEmpty) g['_any_photo'] = cand;
+        }
+      }
+
+      // 6) Construction des lignes d’affichage (moyennes par groupe)
+      final rows = <Map<String, dynamic>>[];
+      for (final g in groups.values) {
+        final cnt = (g['_count'] as int);
+        num avg(num sum) => cnt == 0 ? 0 : sum / cnt;
+
+        final product = productById[g['product_id'] as int?] ?? const {};
+        final game = gameById[g['game_id'] as int?] ?? const {};
+
+        rows.add({
+          // clés strictes + statut -> permettront d'ouvrir Détails correctement
+          for (final k in _strictLineKeys) k: g[k],
+          'status': g['status'],
+          // pour la tuile
+          'product_id': g['product_id'],
+          'game_id': g['game_id'],
+          'product': product,
+          'game': game,
+          'photo_url': (g['_any_photo'] ?? '').toString(),
+          'currency': g['currency'] ?? 'USD',
+          // agrégats affichés (moyennes)
+          'marge': avg((g['_sum_marge'] as num)),
+          'sale_price': avg((g['_sum_sale'] as num)),
+          'unit_cost': avg((g['_sum_ucost'] as num)),
+          'unit_fees': avg((g['_sum_ufees'] as num)),
+          'shipping_fees': avg((g['_sum_ship'] as num)),
+          'commission_fees': avg((g['_sum_comm'] as num)),
+          'grading_fees': avg((g['_sum_grad'] as num)),
+          // (optionnel) quantité du groupe - pas affichée mais utile
+          'qty': cnt,
+        });
+      }
+
+      // 7) Tri final marge desc (NULL en bas)
       rows.sort((a, b) {
         final ma = a['marge'] as num?;
         final mb = b['marge'] as num?;
@@ -161,14 +292,7 @@ class _TopSoldPageState extends State<TopSoldPage> {
         return mb.compareTo(ma);
       });
 
-      // 6) Fusion pour rendu (anti-NPE clé manquante)
-      _rows = rows
-          .map((r) => {
-                ...r,
-                'product': productById[r['product_id'] as int?] ?? const {},
-                'game': gameById[r['game_id'] as int?] ?? const {},
-              })
-          .toList();
+      _rows = rows;
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -352,7 +476,19 @@ class _TopSoldPageState extends State<TopSoldPage> {
                               borderRadius: BorderRadius.circular(14)),
                           child: InkWell(
                             borderRadius: BorderRadius.circular(14),
-                            onTap: () => widget.onOpenDetails?.call(r),
+                            onTap: () {
+                              // On passe la CLÉ STRICTE + statut pour ouvrir Détails au bon groupe
+                              final payload = <String, dynamic>{
+                                for (final k in _strictLineKeys) k: r[k],
+                                'status': status,
+                                // petits extras utiles (non requis par la clé)
+                                'product_id': r['product_id'],
+                                'game_id': r['game_id'],
+                                'currency': r['currency'],
+                                'photo_url': r['photo_url'],
+                              };
+                              widget.onOpenDetails?.call(payload);
+                            },
                             child: Padding(
                               padding: const EdgeInsets.all(12),
                               child: Row(
