@@ -219,8 +219,23 @@ class _FileCell extends StatelessWidget {
   final String? url;
   final bool isImagePreferred;
 
-  bool get _isImage =>
-      (url ?? '').toLowerCase().contains(RegExp(r'\.(png|jpe?g|gif|webp)$'));
+  bool get _isImage {
+    final u = url ?? '';
+    if (u.isEmpty) return false;
+    try {
+      final path =
+          Uri.parse(u).path.toLowerCase(); // ignore la query ?token=...
+      return path.endsWith('.png') ||
+          path.endsWith('.jpg') ||
+          path.endsWith('.jpeg') ||
+          path.endsWith('.gif') ||
+          path.endsWith('.webp');
+    } catch (_) {
+      // Fallback: accepte l'extension avant une éventuelle query
+      final lu = u.toLowerCase();
+      return RegExp(r'\.(png|jpe?g|gif|webp)(\?.*)?$').hasMatch(lu);
+    }
+  }
 
   Future<void> _open() async {
     final u = url;
@@ -238,19 +253,59 @@ class _FileCell extends StatelessWidget {
     final showImage = isImagePreferred && _isImage;
 
     if (showImage) {
+      // URL corrigée/encodée pour éviter les erreurs d'affichage (espaces, (), etc.)
+      final imgUrl = () {
+        final u = url!;
+        try {
+          final uri = Uri.parse(u);
+          final fixed = Uri(
+            scheme: uri.scheme,
+            userInfo: uri.userInfo.isEmpty ? null : uri.userInfo,
+            host: uri.host,
+            port: uri.hasPort ? uri.port : null,
+            path: uri.path, // Uri re-encode proprement dans toString()
+            query: uri.query.isEmpty ? null : uri.query,
+            fragment: uri.fragment.isEmpty ? null : uri.fragment,
+          ).toString();
+          return fixed;
+        } catch (_) {
+          return Uri.encodeFull(u);
+        }
+      }();
+
       return InkWell(
         onTap: _open,
         child: ClipRRect(
           borderRadius: BorderRadius.circular(4),
           child: Image.network(
-            url!,
+            imgUrl,
             height: 32,
             width: 32,
             fit: BoxFit.cover,
-            errorBuilder: (_, __, ___) => IconButton(
-              icon: const Icon(Icons.photo),
-              onPressed: _open,
-              tooltip: 'Ouvrir la photo',
+            // améliore le rendu/perf des petites vignettes
+            gaplessPlayback: true,
+            filterQuality: FilterQuality.low,
+            cacheWidth: 64,
+            // loader pendant le fetch
+            loadingBuilder: (ctx, child, progress) {
+              if (progress == null) return child;
+              return const SizedBox(
+                height: 32,
+                width: 32,
+                child: Center(
+                  child: SizedBox(
+                    height: 14,
+                    width: 14,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                ),
+              );
+            },
+            // fallback si échec
+            errorBuilder: (_, __, ___) => const SizedBox(
+              height: 32,
+              width: 32,
+              child: Icon(Icons.broken_image, size: 18),
             ),
           ),
         ),

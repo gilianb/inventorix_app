@@ -3,6 +3,7 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../inventory/widgets/storage_upload_tile.dart';
+import 'searchbar.dart'; // <— garde ton chemin actuel
 
 class NewStockPage extends StatefulWidget {
   const NewStockPage({super.key});
@@ -20,17 +21,22 @@ class _NewStockPageState extends State<NewStockPage> {
   final _nameCtrl = TextEditingController();
   String _lang = 'EN';
 
+  // Sélection catalogue (externe)
+  Map<String, dynamic>? _selectedCatalogCard; // blueprint complet
+  int? _selectedBlueprintId; // blueprints.id (externe)
+  String? _selectedCatalogDisplay; // libellé complet affiché
+
   // Achat
   final _supplierNameCtrl = TextEditingController(); // optionnel
   final _buyerCompanyCtrl = TextEditingController(); // optionnel
   DateTime _purchaseDate = DateTime.now();
-  final _totalCostCtrl = TextEditingController(); // PRIX TOTAL (USD)
+  final _totalCostCtrl = TextEditingController(); // USD (total)
   final _qtyCtrl = TextEditingController(text: '1');
-  final _feesCtrl = TextEditingController(text: '0'); // en USD
+  final _feesCtrl = TextEditingController(text: '0'); // USD
   final _estimatedPriceCtrl = TextEditingController(); // optionnel
   String _initStatus = 'paid';
 
-  // Plus d’options (repliable)
+  // Plus d’options
   bool _showMore = false;
   final _trackingCtrl = TextEditingController();
   final _photoUrlCtrl = TextEditingController();
@@ -47,6 +53,7 @@ class _NewStockPageState extends State<NewStockPage> {
   final _paymentTypeCtrl = TextEditingController();
   final _buyerInfosCtrl = TextEditingController();
   final _salePriceCtrl = TextEditingController();
+
   // Jeux
   List<Map<String, dynamic>> _games = const [];
   int? _selectedGameId;
@@ -96,9 +103,7 @@ class _NewStockPageState extends State<NewStockPage> {
             .map<Map<String, dynamic>>(
                 (e) => Map<String, dynamic>.from(e as Map))
             .toList();
-        if (_games.isNotEmpty) {
-          _selectedGameId = _games.first['id'] as int;
-        }
+        if (_games.isNotEmpty) _selectedGameId = _games.first['id'] as int;
       });
     } on PostgrestException catch (e) {
       _snack('Erreur Supabase (games) : ${e.message}');
@@ -118,7 +123,7 @@ class _NewStockPageState extends State<NewStockPage> {
         content: Text(message),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(ctx), child: const Text('OK')),
+              onPressed: () => Navigator.pop(ctx), child: const Text('OK'))
         ],
       ),
     );
@@ -141,14 +146,170 @@ class _NewStockPageState extends State<NewStockPage> {
     return double.tryParse(s);
   }
 
+  String _composeProductNameFromBlueprint(Map<String, dynamic> bp) {
+    final name = (bp['name'] as String?)?.trim() ?? '';
+
+    final parts = <String>[];
+    final exName = (bp['expansion_name'] as String?)?.trim() ?? '';
+    final exCode = (bp['expansion_code'] as String?)?.trim() ?? '';
+    final number = (bp['collector_number'] as String?)?.trim() ?? '';
+    final rarity = (bp['rarity_text'] as String?)?.trim() ?? '';
+    final version = (bp['version'] as String?)?.trim() ?? '';
+
+    // ex: "Dark Magician — Legend of Blue Eyes (LOB) — No. 005 — Ver. Ultra Rare — v1"
+    if (exName.isNotEmpty && exCode.isNotEmpty) {
+      parts.add('$exName ($exCode)');
+    } else if (exName.isNotEmpty) {
+      parts.add(exName);
+    } else if (exCode.isNotEmpty) {
+      parts.add(exCode);
+    }
+    if (number.isNotEmpty) parts.add('No. $number');
+    if (rarity.isNotEmpty) parts.add('Ver. $rarity');
+    if (version.isNotEmpty) parts.add('v$version');
+
+    if (parts.isEmpty) return name;
+    if (name.isEmpty) return parts.join(' — ');
+    return '$name — ${parts.join(' — ')}';
+  }
+
+  Future<int> _ensureProductFromBlueprint({
+    required Map<String, dynamic> bp,
+    required int gameId,
+    required String type,
+    required String language,
+  }) async {
+    final blueprintId = (bp['id'] as num).toInt();
+
+    final existing = await _sb
+        .from('product')
+        .select('id')
+        .eq('blueprint_id', blueprintId)
+        .maybeSingle();
+
+    if (existing != null && existing['id'] != null) {
+      return (existing['id'] as num).toInt();
+    }
+
+    final String? photo =
+        (bp['image_url'] as String?)?.trim().isNotEmpty == true
+            ? (bp['image_url'] as String)
+            : (_photoUrlCtrl.text.trim().isNotEmpty
+                ? _photoUrlCtrl.text.trim()
+                : null);
+
+    final insert = {
+      'type': type,
+      'name': _composeProductNameFromBlueprint(bp),
+      'language': language,
+      'game_id': gameId,
+      'blueprint_id': blueprintId,
+      'version': bp['version'],
+      'collector_number': bp['collector_number'],
+      'expansion_code': bp['expansion_code'],
+      'expansion_name': bp['expansion_name'],
+      'rarity_text': bp['rarity_text'],
+      'scryfall_id': bp['scryfall_id'],
+      'tcg_player_id': bp['tcg_player_id'],
+      'card_market_ids': bp['card_market_ids'],
+      'image_storage': bp['image_storage'],
+      'photo_url': photo,
+      'fixed_properties': bp['fixed_properties'],
+      'editable_properties': bp['editable_properties'],
+      'data': bp['data'],
+    };
+
+    final inserted =
+        await _sb.from('product').insert(insert).select('id').single();
+    return (inserted['id'] as num).toInt();
+  }
+
+  Future<void> _saveWithExternalCard(Map<String, dynamic> bp) async {
+    final qty = int.tryParse(_qtyCtrl.text.trim()) ?? 0;
+    final totalCost = _num(_totalCostCtrl) ?? 0;
+    final fees = _num(_feesCtrl) ?? 0;
+    final estPrice = _num(_estimatedPriceCtrl);
+    final gradingFees = _num(_gradingFeesCtrl);
+    final perUnitCost = qty > 0 ? (totalCost / qty) : 0;
+    final perUnitFees = qty > 0 ? (fees / qty) : 0;
+
+    final String? photo = (bp['image_url'] as String?)?.isNotEmpty == true
+        ? bp['image_url']
+        : null;
+
+    final productId = await _ensureProductFromBlueprint(
+      bp: bp,
+      gameId: _selectedGameId!,
+      type: _type,
+      language: _lang,
+    );
+
+    final items = List.generate(qty, (_) {
+      return {
+        'product_id': productId,
+        'game_id': _selectedGameId,
+        'type': _type,
+        'language': _lang,
+        'status': _initStatus,
+        'purchase_date': _purchaseDate.toIso8601String().substring(0, 10),
+        'currency': 'USD',
+        'supplier_name': _supplierNameCtrl.text.trim().isEmpty
+            ? null
+            : _supplierNameCtrl.text.trim(),
+        'buyer_company': _buyerCompanyCtrl.text.trim().isEmpty
+            ? null
+            : _buyerCompanyCtrl.text.trim(),
+        'unit_cost': perUnitCost,
+        'unit_fees': perUnitFees,
+        'notes': _notesCtrl.text.trim().isEmpty ? null : _notesCtrl.text.trim(),
+        'grade_id':
+            _gradeIdCtrl.text.trim().isEmpty ? null : _gradeIdCtrl.text.trim(),
+        'grading_note': _gradingNoteCtrl.text.trim().isEmpty
+            ? null
+            : _gradingNoteCtrl.text.trim(),
+        'sale_date': null,
+        'sale_price': _salePriceCtrl.text.trim().isEmpty
+            ? null
+            : double.tryParse(_salePriceCtrl.text.trim().replaceAll(',', '.')),
+        'tracking': _trackingCtrl.text.trim().isEmpty
+            ? null
+            : _trackingCtrl.text.trim(),
+        'photo_url': (_photoUrlCtrl.text.trim().isNotEmpty)
+            ? _photoUrlCtrl.text.trim()
+            : (photo ?? null),
+        'document_url':
+            _docUrlCtrl.text.trim().isEmpty ? null : _docUrlCtrl.text.trim(),
+        'estimated_price': estPrice,
+        'item_location': _itemLocationCtrl.text.trim().isEmpty
+            ? null
+            : _itemLocationCtrl.text.trim(),
+        'shipping_fees': (_shippingFeesCtrl.text.trim().isEmpty)
+            ? null
+            : double.tryParse(
+                _shippingFeesCtrl.text.trim().replaceAll(',', '.')),
+        'commission_fees': (_commissionFeesCtrl.text.trim().isEmpty)
+            ? null
+            : double.tryParse(
+                _commissionFeesCtrl.text.trim().replaceAll(',', '.')),
+        'payment_type': _paymentTypeCtrl.text.trim().isEmpty
+            ? null
+            : _paymentTypeCtrl.text.trim(),
+        'buyer_infos': _buyerInfosCtrl.text.trim().isEmpty
+            ? null
+            : _buyerInfosCtrl.text.trim(),
+        'grading_fees': gradingFees,
+      };
+    });
+
+    await _sb.from('item').insert(items);
+  }
+
   Future<void> _save() async {
     if (!_formKey.currentState!.validate()) return;
 
     final qty = int.tryParse(_qtyCtrl.text.trim()) ?? 0;
     final totalCost = _num(_totalCostCtrl) ?? 0;
-    final fees = _num(_feesCtrl) ?? 0;
-    final estPrice = _num(_estimatedPriceCtrl); // peut être null
-    final gradingFees = _num(_gradingFeesCtrl); // peut être null
+    final estPrice = _num(_estimatedPriceCtrl);
 
     if (qty <= 0) {
       _snack('Quantité > 0 requise');
@@ -163,7 +324,6 @@ class _NewStockPageState extends State<NewStockPage> {
       return;
     }
 
-    // estimation requise uniquement si on liste directement
     final mustHaveEstimated =
         _initStatus == 'listed' || _initStatus == 'awaiting_payment';
     if (mustHaveEstimated && (estPrice == null || estPrice < 0)) {
@@ -173,70 +333,78 @@ class _NewStockPageState extends State<NewStockPage> {
 
     setState(() => _saving = true);
     try {
-      await _sb.rpc('fn_create_product_and_items', params: {
-        'p_type': _type,
-        'p_name': _nameCtrl.text.trim(),
-        'p_language': _lang,
-        'p_game_id': _selectedGameId,
+      if (_selectedBlueprintId != null && _selectedCatalogCard != null) {
+        await _saveWithExternalCard(_selectedCatalogCard!);
+      } else if (_nameCtrl.text.trim().isNotEmpty) {
+        // texte tapé sans sélection effective
+        _snack('Sélectionne une fiche du catalogue dans la liste.');
+        setState(() => _saving = false);
+        return;
+      } else {
+        // Fallback RPC si tu veux créer un produit libre (rare)
+        final fees = _num(_feesCtrl) ?? 0;
+        final gradingFees = _num(_gradingFeesCtrl);
+        await _sb.rpc('fn_create_product_and_items', params: {
+          'p_type': _type,
+          'p_name': _nameCtrl.text.trim(),
+          'p_language': _lang,
+          'p_game_id': _selectedGameId,
+          'p_supplier_name': _supplierNameCtrl.text.trim().isNotEmpty
+              ? _supplierNameCtrl.text.trim()
+              : null,
+          'p_buyer_company': _buyerCompanyCtrl.text.trim().isNotEmpty
+              ? _buyerCompanyCtrl.text.trim()
+              : null,
+          'p_purchase_date': _purchaseDate.toIso8601String().substring(0, 10),
+          'p_currency': 'USD',
+          'p_qty': qty,
+          'p_total_cost': totalCost,
+          'p_fees': fees,
+          'p_init_status': _initStatus,
+          'p_channel_id': null,
+          'p_tracking': _trackingCtrl.text.trim().isNotEmpty
+              ? _trackingCtrl.text.trim()
+              : null,
+          'p_photo_url': _photoUrlCtrl.text.trim().isNotEmpty
+              ? _photoUrlCtrl.text.trim()
+              : null,
+          'p_document_url': _docUrlCtrl.text.trim().isNotEmpty
+              ? _docUrlCtrl.text.trim()
+              : null,
+          'p_estimated_price': estPrice,
+          'p_notes':
+              _notesCtrl.text.trim().isNotEmpty ? _notesCtrl.text.trim() : null,
+          'p_grade_id': _gradeIdCtrl.text.trim().isNotEmpty
+              ? _gradeIdCtrl.text.trim()
+              : null,
+          'p_grading_note': _gradingNoteCtrl.text.trim().isNotEmpty
+              ? _gradingNoteCtrl.text.trim()
+              : null,
+          'p_grading_fees': gradingFees,
+          'p_item_location': _itemLocationCtrl.text.trim().isNotEmpty
+              ? _itemLocationCtrl.text.trim()
+              : null,
+          'p_shipping_fees': (_shippingFeesCtrl.text.trim().isEmpty)
+              ? null
+              : double.tryParse(
+                  _shippingFeesCtrl.text.trim().replaceAll(',', '.')),
+          'p_commission_fees': (_commissionFeesCtrl.text.trim().isEmpty)
+              ? null
+              : double.tryParse(
+                  _commissionFeesCtrl.text.trim().replaceAll(',', '.')),
+          'p_payment_type': _paymentTypeCtrl.text.trim().isEmpty
+              ? null
+              : _paymentTypeCtrl.text.trim(),
+          'p_buyer_infos':
+              _buyerInfosCtrl.text.trim().isEmpty ? null : _buyerInfosCtrl.text,
+          'p_sale_price': _salePriceCtrl.text.trim().isEmpty
+              ? null
+              : double.tryParse(
+                  _salePriceCtrl.text.trim().replaceAll(',', '.')),
+        });
+      }
 
-        'p_supplier_name': _supplierNameCtrl.text.trim().isEmpty
-            ? null
-            : _supplierNameCtrl.text.trim(),
-
-        'p_buyer_company': _buyerCompanyCtrl.text.trim().isEmpty
-            ? null
-            : _buyerCompanyCtrl.text.trim(),
-        'p_purchase_date': _purchaseDate.toIso8601String().substring(0, 10),
-        'p_currency': 'USD',
-        'p_qty': qty,
-        'p_total_cost': totalCost,
-        'p_fees': fees,
-        'p_init_status': _initStatus,
-        'p_channel_id': null,
-        'p_tracking': _trackingCtrl.text.trim().isNotEmpty
-            ? _trackingCtrl.text.trim()
-            : null,
-        'p_photo_url': _photoUrlCtrl.text.trim().isNotEmpty
-            ? _photoUrlCtrl.text.trim()
-            : null,
-        'p_document_url':
-            _docUrlCtrl.text.trim().isNotEmpty ? _docUrlCtrl.text.trim() : null,
-
-        'p_estimated_price': estPrice, // null si vide
-
-        'p_notes':
-            _notesCtrl.text.trim().isNotEmpty ? _notesCtrl.text.trim() : null,
-        'p_grade_id': _gradeIdCtrl.text.trim().isNotEmpty
-            ? _gradeIdCtrl.text.trim()
-            : null,
-        'p_grading_note': _gradingNoteCtrl.text.trim().isNotEmpty
-            ? _gradingNoteCtrl.text.trim()
-            : null,
-        'p_grading_fees': gradingFees, // par unité, nullable
-        'p_item_location': _itemLocationCtrl.text.trim().isNotEmpty
-            ? _itemLocationCtrl.text.trim()
-            : null,
-
-        'p_shipping_fees': (_shippingFeesCtrl.text.trim().isEmpty)
-            ? null
-            : double.tryParse(
-                _shippingFeesCtrl.text.trim().replaceAll(',', '.')),
-        'p_commission_fees': (_commissionFeesCtrl.text.trim().isEmpty)
-            ? null
-            : double.tryParse(
-                _commissionFeesCtrl.text.trim().replaceAll(',', '.')),
-        'p_payment_type': _paymentTypeCtrl.text.trim().isEmpty
-            ? null
-            : _paymentTypeCtrl.text.trim(),
-        'p_buyer_infos': _buyerInfosCtrl.text.trim().isEmpty
-            ? null
-            : _buyerInfosCtrl.text.trim(),
-        'p_sale_price': _salePriceCtrl.text.trim().isEmpty
-            ? null
-            : double.tryParse(_salePriceCtrl.text.trim().replaceAll(',', '.')),
-      });
-
-      _snack('Stock créé ($qty items)');
+      _snack('Stock créé (${_qtyCtrl.text} items)');
       if (mounted) Navigator.pop(context, true);
     } on PostgrestException catch (e) {
       _snack('Erreur Supabase: ${e.message}');
@@ -256,14 +424,12 @@ class _NewStockPageState extends State<NewStockPage> {
     _qtyCtrl.dispose();
     _feesCtrl.dispose();
     _notesCtrl.dispose();
-
     _trackingCtrl.dispose();
     _photoUrlCtrl.dispose();
     _docUrlCtrl.dispose();
     _estimatedPriceCtrl.dispose();
     _gradeIdCtrl.dispose();
     _itemLocationCtrl.dispose();
-
     _shippingFeesCtrl.dispose();
     _commissionFeesCtrl.dispose();
     _paymentTypeCtrl.dispose();
@@ -271,7 +437,6 @@ class _NewStockPageState extends State<NewStockPage> {
     _buyerInfosCtrl.dispose();
     _gradingNoteCtrl.dispose();
     _gradingFeesCtrl.dispose();
-
     super.dispose();
   }
 
@@ -297,22 +462,23 @@ class _NewStockPageState extends State<NewStockPage> {
                       Row(children: [
                         Expanded(
                           child: DropdownButtonFormField<String>(
-                            initialValue: _type,
+                            value: _type,
                             items: const [
                               DropdownMenuItem(
                                   value: 'single', child: Text('Single')),
                               DropdownMenuItem(
                                   value: 'sealed', child: Text('Sealed')),
                             ],
-                            onChanged: (v) => setState(() {
-                              _type = v ?? 'single';
-                              final newStatuses = _type == 'single'
-                                  ? singleStatuses
-                                  : sealedStatuses;
-                              if (!newStatuses.contains(_initStatus)) {
-                                _initStatus = newStatuses.first;
-                              }
-                            }),
+                            onChanged: (v) {
+                              setState(() {
+                                _type = v ?? 'single';
+                                final newStatuses = _type == 'single'
+                                    ? singleStatuses
+                                    : sealedStatuses;
+                                if (!newStatuses.contains(_initStatus))
+                                  _initStatus = newStatuses.first;
+                              });
+                            },
                             decoration:
                                 const InputDecoration(labelText: 'Type *'),
                           ),
@@ -320,7 +486,7 @@ class _NewStockPageState extends State<NewStockPage> {
                         const SizedBox(width: 12),
                         Expanded(
                           child: DropdownButtonFormField<String>(
-                            initialValue: _lang,
+                            value: _lang,
                             items: langs
                                 .map((l) =>
                                     DropdownMenuItem(value: l, child: Text(l)))
@@ -331,22 +497,60 @@ class _NewStockPageState extends State<NewStockPage> {
                           ),
                         ),
                       ]),
-
                       const SizedBox(height: 8),
 
-                      // ===== (1) Nom du produit : une seule case + suggestions =====
-                      LookupAutocompleteField(
-                        tableName: 'product',
-                        label: 'Nom du produit',
-                        controller: _nameCtrl,
-                        requiredField: true,
-                        addDialogTitle: 'Nouveau produit',
+                      // ========= Barre de recherche catalogue =========
+                      CatalogPicker(
+                        labelText: 'Nom du produit *',
+                        selectedGameId: _selectedGameId,
+                        onTextChanged: (text) {
+                          // On synchronise le texte pour le fallback (rare)
+                          _nameCtrl.text = text;
+
+                          // IMPORTANT : ne pas annuler la sélection si l'utilisateur
+                          // ne fait que voir le libellé programmatique (libellé complet)
+                          final t = text.trim();
+                          if (_selectedCatalogDisplay != null &&
+                              t == _selectedCatalogDisplay) {
+                            return; // c'est la mise à jour due à la sélection → on ne clear pas
+                          }
+
+                          // L'utilisateur modifie le texte → on invalide la sélection
+                          setState(() {
+                            _selectedCatalogCard = null;
+                            _selectedBlueprintId = null;
+                            _selectedCatalogDisplay = null;
+                          });
+                        },
+                        onSelected: (card) {
+                          setState(() {
+                            _selectedCatalogCard = card;
+                            _selectedBlueprintId =
+                                (card['id'] as num?)?.toInt();
+
+                            // Libellé complet (pré-calculé par le picker)
+                            final full = (card['display_text'] as String?) ??
+                                buildFullDisplay(card);
+                            _selectedCatalogDisplay = full;
+                            _nameCtrl.text = full;
+
+                            // Photo par défaut depuis le blueprint
+                            final img = (card['image_url'] as String?) ?? '';
+                            if (img.isNotEmpty) _photoUrlCtrl.text = img;
+                          });
+
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                                content: Text(
+                                    'Sélectionné: ${card['name'] ?? 'Item'}')),
+                          );
+                        },
                       ),
 
                       const SizedBox(height: 8),
 
                       DropdownButtonFormField<int>(
-                        initialValue: _selectedGameId,
+                        value: _selectedGameId,
                         items: _games
                             .map((g) => DropdownMenuItem<int>(
                                   value: g['id'] as int,
@@ -360,33 +564,25 @@ class _NewStockPageState extends State<NewStockPage> {
                     ],
                   ),
                 ),
-
                 const SizedBox(height: 12),
-
                 _Section(
                   title: 'Achat (USD)',
                   child: Column(
                     children: [
-                      // ===== (2) Fournisseur : une seule case + suggestions =====
                       LookupAutocompleteField(
                         tableName: 'fournisseur',
                         label: 'Fournisseur (optionnel)',
                         controller: _supplierNameCtrl,
                         addDialogTitle: 'Nouveau fournisseur',
                       ),
-
                       const SizedBox(height: 8),
-
-                      // ===== (3) Société acheteuse : une seule case + suggestions =====
                       LookupAutocompleteField(
                         tableName: 'society',
                         label: 'Société acheteuse (optionnel)',
                         controller: _buyerCompanyCtrl,
                         addDialogTitle: 'Nouvelle société',
                       ),
-
                       const SizedBox(height: 8),
-
                       Row(children: [
                         Expanded(
                           child: TextFormField(
@@ -416,9 +612,7 @@ class _NewStockPageState extends State<NewStockPage> {
                           ),
                         ),
                       ]),
-
                       const SizedBox(height: 8),
-
                       Row(children: [
                         Expanded(
                           child: _DateField(
@@ -430,8 +624,10 @@ class _NewStockPageState extends State<NewStockPage> {
                         const SizedBox(width: 12),
                         Expanded(
                           child: DropdownButtonFormField<String>(
-                            initialValue: statusValue,
-                            items: statuses
+                            value: statusValue,
+                            items: (_type == 'single'
+                                    ? singleStatuses
+                                    : sealedStatuses)
                                 .map((s) =>
                                     DropdownMenuItem(value: s, child: Text(s)))
                                 .toList(),
@@ -442,9 +638,7 @@ class _NewStockPageState extends State<NewStockPage> {
                           ),
                         ),
                       ]),
-
                       const SizedBox(height: 8),
-
                       Row(children: [
                         Expanded(
                           child: TextFormField(
@@ -466,10 +660,7 @@ class _NewStockPageState extends State<NewStockPage> {
                           ),
                         ),
                       ]),
-
                       const SizedBox(height: 8),
-
-                      // Estimated price (OPTIONNEL)
                       TextFormField(
                         controller: _estimatedPriceCtrl,
                         keyboardType: const TextInputType.numberWithOptions(
@@ -481,10 +672,7 @@ class _NewStockPageState extends State<NewStockPage> {
                     ],
                   ),
                 ),
-
                 const SizedBox(height: 12),
-
-                // Plus d’options
                 Align(
                   alignment: Alignment.centerLeft,
                   child: TextButton.icon(
@@ -494,7 +682,6 @@ class _NewStockPageState extends State<NewStockPage> {
                     label: const Text('Plus d’options'),
                   ),
                 ),
-
                 if (_showMore)
                   _Section(
                     title: 'Options (facultatif)',
@@ -502,20 +689,16 @@ class _NewStockPageState extends State<NewStockPage> {
                       children: [
                         Row(children: [
                           Expanded(
-                            child: TextFormField(
-                              controller: _gradeIdCtrl,
-                              decoration: const InputDecoration(
-                                  labelText: 'Grading ID'),
-                            ),
-                          ),
+                              child: TextFormField(
+                                  controller: _gradeIdCtrl,
+                                  decoration: const InputDecoration(
+                                      labelText: 'Grading ID'))),
                           const SizedBox(width: 12),
                           Expanded(
-                            child: TextFormField(
-                              controller: _gradingNoteCtrl,
-                              decoration: const InputDecoration(
-                                  labelText: 'Grading Note'),
-                            ),
-                          ),
+                              child: TextFormField(
+                                  controller: _gradingNoteCtrl,
+                                  decoration: const InputDecoration(
+                                      labelText: 'Grading Note'))),
                           const SizedBox(width: 12),
                           Expanded(
                             child: TextFormField(
@@ -524,13 +707,10 @@ class _NewStockPageState extends State<NewStockPage> {
                                   const TextInputType.numberWithOptions(
                                       decimal: true),
                               decoration: const InputDecoration(
-                                labelText: 'Grading Fees (USD) — par unité',
-                              ),
+                                  labelText: 'Grading Fees (USD) — par unité'),
                             ),
                           ),
                           const SizedBox(width: 12),
-
-                          // ===== (4) Item Location : une seule case + suggestions =====
                           Expanded(
                             child: LookupAutocompleteField(
                               tableName: 'item_location',
@@ -540,23 +720,17 @@ class _NewStockPageState extends State<NewStockPage> {
                             ),
                           ),
                         ]),
-
                         const SizedBox(height: 8),
-
                         Row(children: [
                           Expanded(
-                            child: TextFormField(
-                              controller: _trackingCtrl,
-                              decoration: const InputDecoration(
-                                  labelText: 'Tracking Number'),
-                            ),
-                          ),
+                              child: TextFormField(
+                                  controller: _trackingCtrl,
+                                  decoration: const InputDecoration(
+                                      labelText: 'Tracking Number'))),
                           const SizedBox(width: 12),
                           const Expanded(child: SizedBox.shrink()),
                         ]),
-
                         const SizedBox(height: 8),
-
                         StorageUploadTile(
                           label: 'Photo',
                           bucket: 'item-photos',
@@ -568,9 +742,7 @@ class _NewStockPageState extends State<NewStockPage> {
                           acceptImagesOnly: true,
                           onError: _showUploadError,
                         ),
-
                         const SizedBox(height: 8),
-
                         StorageUploadTile(
                           label: 'Document',
                           bucket: 'item-docs',
@@ -582,18 +754,14 @@ class _NewStockPageState extends State<NewStockPage> {
                           acceptDocsOnly: true,
                           onError: _showUploadError,
                         ),
-
                         const SizedBox(height: 8),
-
                         TextFormField(
-                          controller: _notesCtrl,
-                          minLines: 2,
-                          maxLines: 5,
-                          decoration: const InputDecoration(labelText: 'Notes'),
-                        ),
-
+                            controller: _notesCtrl,
+                            minLines: 2,
+                            maxLines: 5,
+                            decoration:
+                                const InputDecoration(labelText: 'Notes')),
                         const SizedBox(height: 8),
-
                         Row(children: [
                           Expanded(
                             child: TextFormField(
@@ -617,40 +785,31 @@ class _NewStockPageState extends State<NewStockPage> {
                             ),
                           ),
                         ]),
-
                         const SizedBox(height: 8),
-
-                        // ===== (5) Type de paiement : une seule case + suggestions =====
-                        LookupAutocompleteField(
-                          tableName: 'sale_prices',
-                          label: 'prix de vente',
+                        TextFormField(
                           controller: _salePriceCtrl,
-                          addDialogTitle: 'Nouveau prix de vente',
+                          keyboardType: const TextInputType.numberWithOptions(
+                              decimal: true),
+                          decoration: const InputDecoration(
+                              labelText: 'Prix de vente (optionnel)'),
                         ),
-
                         const SizedBox(height: 8),
-
                         Row(children: [
                           Expanded(
-                            child: TextFormField(
-                              controller: _paymentTypeCtrl,
-                              decoration: const InputDecoration(
-                                  labelText: 'Type de paiement'),
-                            ),
-                          ),
+                              child: TextFormField(
+                                  controller: _paymentTypeCtrl,
+                                  decoration: const InputDecoration(
+                                      labelText: 'Type de paiement'))),
                           const SizedBox(width: 12),
                           Expanded(
-                            child: TextFormField(
-                              controller: _buyerInfosCtrl,
-                              decoration: const InputDecoration(
-                                  labelText: 'Infos acheteur'),
-                            ),
-                          ),
+                              child: TextFormField(
+                                  controller: _buyerInfosCtrl,
+                                  decoration: const InputDecoration(
+                                      labelText: 'Infos acheteur'))),
                         ]),
                       ],
                     ),
                   ),
-
                 const SizedBox(height: 20),
                 SizedBox(
                   width: double.infinity,
@@ -721,10 +880,7 @@ class _DateField extends StatelessWidget {
   }
 }
 
-/// ===================================================================
-/// Widget : UNE SEULE CASE texte + suggestions (overlay Autocomplete)
-/// + Entrée => ajoute la valeur s'il n'y a aucun résultat
-/// ===================================================================
+/// ===== Lookup simple (inchangé)
 class LookupAutocompleteField extends StatefulWidget {
   const LookupAutocompleteField({
     super.key,
@@ -755,7 +911,7 @@ class LookupAutocompleteField extends StatefulWidget {
 class _LookupAutocompleteFieldState extends State<LookupAutocompleteField> {
   final _sb = Supabase.instance.client;
 
-  final FocusNode _focusNode = FocusNode(); // appairé à RawAutocomplete
+  final FocusNode _focusNode = FocusNode();
   List<String> _all = [];
   bool _loading = true;
 
@@ -785,14 +941,12 @@ class _LookupAutocompleteFieldState extends State<LookupAutocompleteField> {
       } else {
         data = await base.order('name');
       }
-
       _all = data
           .map<String>((e) => (e as Map)['name']?.toString() ?? '')
           .where((s) => s.isNotEmpty)
           .toList();
-    } catch (e) {
+    } catch (_) {
       _all = [];
-      debugPrint('LookupAutocompleteField load error: $e');
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -814,54 +968,43 @@ class _LookupAutocompleteFieldState extends State<LookupAutocompleteField> {
     final n = name.trim();
     if (n.isEmpty) return;
 
-    // Évite doublons (case-insensitive)
     if (_all.any((x) => x.toLowerCase() == n.toLowerCase())) {
       widget.controller.text = n;
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Déjà présent: "$n"')),
-        );
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Déjà présent: "$n"')));
       }
       return;
     }
 
     try {
-      // ✅ force le retour de la ligne insérée, et déclenche une erreur si RLS bloque
       final inserted = await _sb
           .from(widget.tableName)
           .insert({'name': n})
           .select('id, name')
           .single();
-
       if ((inserted['id'] != null)) {
-        // recharge la liste puis sélectionne la valeur
         await _load();
         widget.controller.text = n;
         if (context.mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Ajouté: "${inserted['name']}"')),
-          );
+              SnackBar(content: Text('Ajouté: "${inserted['name']}"')));
         }
       } else {
-        // cas improbable: pas de ligne renvoyée
         if (context.mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Insertion non confirmée.')),
-          );
+              const SnackBar(content: Text('Insertion non confirmée.')));
         }
       }
     } on PostgrestException catch (e) {
-      // ✅ tu verras l’erreur RLS ici (policy manquante…) ou colonne manquante
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Erreur INSERT: ${e.message}')),
-        );
+            SnackBar(content: Text('Erreur INSERT: ${e.message}')));
       }
     } catch (e) {
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Erreur inconnue: $e')),
-        );
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Erreur inconnue: $e')));
       }
     }
   }
@@ -874,15 +1017,12 @@ class _LookupAutocompleteFieldState extends State<LookupAutocompleteField> {
     final exact = _hasExact(t);
 
     if (exact) {
-      // rien à faire: on garde la valeur exacte
       widget.controller.text = t;
       return;
     }
 
-    // S'il n'y a AUCUN résultat (liste vide pour cette requête) et que l'option est activée:
     if (widget.autoAddOnEnter && !anyMatch) {
       await _addValue(t);
-      // referme le clavier et l'overlay
       _focusNode.unfocus();
     }
   }
@@ -895,9 +1035,8 @@ class _LookupAutocompleteFieldState extends State<LookupAutocompleteField> {
       return InputDecorator(
         decoration: InputDecoration(labelText: label),
         child: const SizedBox(
-          height: 48,
-          child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
-        ),
+            height: 48,
+            child: Center(child: CircularProgressIndicator(strokeWidth: 2))),
       );
     }
 
@@ -915,12 +1054,7 @@ class _LookupAutocompleteFieldState extends State<LookupAutocompleteField> {
       optionsViewBuilder: (context, onSelected, options) {
         final input = widget.controller.text.trim();
         final canAdd = input.isNotEmpty && !_hasExact(input);
-
-        // on montre "➕ Ajouter" seulement s'il n'existe pas déjà une valeur exacte
-        final merged = [
-          ...options,
-          if (canAdd) '___ADD___$input',
-        ];
+        final merged = [...options, if (canAdd) '___ADD___$input'];
 
         return Align(
           alignment: Alignment.topLeft,
@@ -957,15 +1091,13 @@ class _LookupAutocompleteFieldState extends State<LookupAutocompleteField> {
         );
       },
       fieldViewBuilder: (context, textController, focusNode, onFieldSubmitted) {
-        // `textController` et `focusNode` sont ceux fournis au-dessus
         return TextFormField(
           controller: textController,
           focusNode: focusNode,
           decoration: InputDecoration(labelText: label),
           onFieldSubmitted: (val) async {
-            // Entrée => si aucun résultat, on ajoute
             await _submitOrAdd(val);
-            onFieldSubmitted(); // laisse RawAutocomplete gérer la fermeture
+            onFieldSubmitted();
           },
           validator: (v) {
             if (!widget.requiredField) return null;

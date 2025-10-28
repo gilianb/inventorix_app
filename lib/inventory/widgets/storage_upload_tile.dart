@@ -35,7 +35,7 @@ class _StorageUploadTileState extends State<StorageUploadTile> {
   final _sb = Supabase.instance.client;
   late final StorageHelper _storage = StorageHelper(_sb);
 
-  String? _url; // URL publique/signée pour prévisualiser
+  String? _url; // URL publique pour prévisualiser
 
   @override
   void initState() {
@@ -43,8 +43,21 @@ class _StorageUploadTileState extends State<StorageUploadTile> {
     _url = widget.initialUrl;
   }
 
-  bool get _isImage =>
-      (_url ?? '').toLowerCase().contains(RegExp(r'\.(png|jpe?g|gif|webp)$'));
+  bool get _isImage {
+    final u = _url ?? '';
+    if (u.isEmpty) return false;
+    try {
+      final path = Uri.parse(u).path.toLowerCase();
+      return path.endsWith('.png') ||
+          path.endsWith('.jpg') ||
+          path.endsWith('.jpeg') ||
+          path.endsWith('.gif') ||
+          path.endsWith('.webp');
+    } catch (_) {
+      final lu = u.toLowerCase();
+      return RegExp(r'\.(png|jpe?g|gif|webp)(\?.*)?$').hasMatch(lu);
+    }
+  }
 
   // Règle de nommage simple: lettres/chiffres/._- uniquement
   bool _isSafeFileName(String name) =>
@@ -86,18 +99,19 @@ class _StorageUploadTileState extends State<StorageUploadTile> {
         '${widget.objectPrefix}/${DateTime.now().millisecondsSinceEpoch}_$safeName';
 
     try {
+      // 1) Upload brut (renvoie le chemin objet stocké)
       final key = await _storage.uploadBytes(
         bucket: widget.bucket,
         objectPath: objectPath,
         bytes: Uint8List.fromList(bytes),
       );
-      final url = await _storage.getPublicOrSignedUrl(
-        bucket: widget.bucket,
-        objectPath: key,
-      );
+
+      // 2) URL **publique** (bucket doit être public)
+      final publicUrl = _sb.storage.from(widget.bucket).getPublicUrl(key);
+
       if (!mounted) return;
-      setState(() => _url = url);
-      widget.onUrlChanged(url);
+      setState(() => _url = publicUrl);
+      widget.onUrlChanged(publicUrl);
     } on StorageException catch (e) {
       // Erreurs storage précises -> remonte au parent via onError si fourni
       final msg = 'Upload échoué: ${e.message} (code ${e.statusCode ?? '-'})';
