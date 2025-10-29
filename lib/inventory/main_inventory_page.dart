@@ -10,12 +10,11 @@ import '../../inventory/widgets/table_by_status.dart';
 import '../../inventory/utils/status_utils.dart';
 import '../../inventory/widgets/edit.dart';
 
-import 'package:inventorix_app/new_stock_page.dart';
-import 'package:inventorix_app/sales_archive_page.dart';
+import 'package:inventorix_app/new_stock/new_stock_page.dart';
 import 'package:inventorix_app/details/details_page.dart';
-import 'package:inventorix_app/collection_page.dart';
+import 'package:inventorix_app/collection/collection_page.dart';
 
-import '../top_sold_page.dart'; // ⬅️ Top Sold tab
+import '../top_sold/top_sold_page.dart'; // ⬅️ Top Sold tab
 
 /// Accents (UI only)
 const kAccentA = Color(0xFF6C5CE7); // violet
@@ -147,7 +146,9 @@ class _MainInventoryPageState extends State<MainInventoryPage>
         'qty_sent_to_grader, qty_at_grader, qty_graded, '
         'qty_listed, qty_awaiting_payment, qty_sold, qty_shipped, qty_finalized, qty_collection, '
         'total_cost, total_cost_with_fees, realized_revenue, '
-        'sum_shipping_fees, sum_commission_fees, sum_grading_fees';
+        'sum_shipping_fees, sum_commission_fees, sum_grading_fees, '
+        // ✅ nouveaux champs pour la séparation par coût unitaire
+        'unit_cost, unit_fees';
 
     // Base query
     var query =
@@ -587,15 +588,6 @@ class _MainInventoryPageState extends State<MainInventoryPage>
             Tab(icon: Icon(Icons.collections_bookmark), text: 'Collection'),
           ],
         ),
-        actions: [
-          IconButton(
-            tooltip: 'Archive ventes',
-            onPressed: () => Navigator.of(context).push(
-              MaterialPageRoute(builder: (_) => const SalesArchivePage()),
-            ),
-            icon: const Icon(Icons.receipt_long),
-          ),
-        ],
         flexibleSpace: Container(
           decoration: const BoxDecoration(
             gradient: LinearGradient(

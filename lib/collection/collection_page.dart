@@ -5,11 +5,11 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-import '../../inventory/widgets/table_by_status.dart';
-import '../../inventory/widgets/edit.dart';
-import '../../inventory/widgets/search_and_filters.dart'; // ⬅️ barre de recherche + filtre jeu
+import '../../../inventory/widgets/table_by_status.dart';
+import '../../../inventory/widgets/edit.dart';
+import '../../../inventory/widgets/search_and_filters.dart'; // ⬅️ barre de recherche + filtre jeu
 import 'package:inventorix_app/details/details_page.dart';
-import 'package:inventorix_app/new_stock_page.dart';
+import 'package:inventorix_app/new_stock/new_stock_page.dart';
 
 const kAccentA = Color(0xFF6C5CE7);
 const kAccentB = Color(0xFF00D1B2);

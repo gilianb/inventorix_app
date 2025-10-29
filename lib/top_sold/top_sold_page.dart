@@ -4,8 +4,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-import 'details/widgets/marge.dart'; // MarginChip
-import 'inventory/main_inventory_page.dart'
+import '../details/widgets/marge.dart'; // MarginChip
+import '../inventory/main_inventory_page.dart'
     show kAccentA, kAccentB, kAccentC, kAccentG;
 
 class TopSoldPage extends StatefulWidget {

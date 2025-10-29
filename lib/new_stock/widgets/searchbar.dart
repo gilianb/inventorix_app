@@ -2,6 +2,8 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+/*Ton CatalogPicker : recherche/sélection d’une carte du catalogue 
+(blueprint), renvoie l’item choisi et son affichage complet.*/
 
 const String EXT_SUPABASE_URL = 'https://pejsdroimtdxrnyhtvlx.supabase.co';
 const String EXT_SUPABASE_ANON_KEY =
@@ -62,6 +64,7 @@ String buildSubtitle(Map<String, dynamic> r) {
   final parts = <String>[];
   final exName = (r['expansion_name'] as String?) ?? '';
   final exCode = (r['expansion_code'] as String?) ?? '';
+  final exVersion = (r['version'] as String?) ?? '';
   final no = (r['collector_number'] as String?) ?? '';
   final rarity = (r['rarity_text'] as String?) ?? '';
   if (exName.isNotEmpty && exCode.isNotEmpty) {
@@ -70,6 +73,9 @@ String buildSubtitle(Map<String, dynamic> r) {
     parts.add(exName);
   } else if (exCode.isNotEmpty) {
     parts.add(exCode);
+  }
+  if (exVersion.isNotEmpty) {
+    parts.add(exVersion);
   }
   if (no.isNotEmpty) parts.add('No. $no');
   if (rarity.isNotEmpty) parts.add('Ver. $rarity');
