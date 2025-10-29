@@ -185,7 +185,7 @@ class _TopSoldPageState extends State<TopSoldPage> {
       // 5) REGROUPEMENT STRICT (mêmes clés que l'inventaire) + statut
       Map<String, Map<String, dynamic>> groups = {}; // key -> aggregate map
 
-      String _keyOf(Map<String, dynamic> r) {
+      String keyOf(Map<String, dynamic> r) {
         final buf = StringBuffer();
         for (final k in _strictLineKeys) {
           final v = r.containsKey(k) ? r[k] : null;
@@ -203,7 +203,7 @@ class _TopSoldPageState extends State<TopSoldPage> {
       }
 
       for (final r in items) {
-        final key = _keyOf(r);
+        final key = keyOf(r);
         final g = groups.putIfAbsent(key, () {
           // base du groupe = copier toutes les clés strictes + statut
           final base = <String, dynamic>{};

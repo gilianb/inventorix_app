@@ -1,12 +1,13 @@
 // lib/details/widgets/marge.dart
 import 'package:flutter/material.dart';
 
+/*MarginChip (seule source du code couleur des marges - noir/rouge/orange/vert, gris si null).
 /// Pastille de marge (en %).
 /// - null  -> gris + "Not sold yet"
 /// - < 0   -> noir
 /// - 0–30  -> rouge
 /// - 30–60 -> orange
-/// - 60+   -> vert
+/// - 60+   -> vert*/
 class MarginChip extends StatelessWidget {
   const MarginChip({
     super.key,

@@ -294,13 +294,13 @@ class _CollectionPageState extends State<CollectionPage> {
   /// Récupère les IDs d'items appartenant STRICTEMENT à la "ligne"
   Future<List<int>> _collectItemIdsForLine(Map<String, dynamic> line) async {
     // --- Helpers de normalisation ---
-    dynamic _norm(dynamic v) {
+    dynamic norm(dynamic v) {
       if (v == null) return null;
       if (v is String && v.trim().isEmpty) return null; // '' -> NULL
       return v;
     }
 
-    String? _dateStr(dynamic v) {
+    String? dateStr(dynamic v) {
       if (v == null) return null;
       if (v is DateTime) {
         return v.toIso8601String().split('T').first; // YYYY-MM-DD
@@ -336,12 +336,12 @@ class _CollectionPageState extends State<CollectionPage> {
       'buyer_infos',
     };
 
-    Future<List<int>> _runQuery(Set<String> keys) async {
+    Future<List<int>> runQuery(Set<String> keys) async {
       var q = _sb.from('item').select('id');
 
       for (final k in keys) {
         if (!line.containsKey(k)) continue;
-        var v = _norm(line[k]);
+        var v = norm(line[k]);
 
         if (v == null) {
           q = q.filter(k, 'is', null);
@@ -349,7 +349,7 @@ class _CollectionPageState extends State<CollectionPage> {
         }
 
         if (k == 'purchase_date' || k == 'sale_date') {
-          final ds = _dateStr(v);
+          final ds = dateStr(v);
           if (ds == null) {
             q = q.filter(k, 'is', null);
           } else {
@@ -372,7 +372,7 @@ class _CollectionPageState extends State<CollectionPage> {
     }
 
     // 2) Essai avec l’ensemble “primary”
-    var ids = await _runQuery(primaryKeys);
+    var ids = await runQuery(primaryKeys);
     if (ids.isNotEmpty) return ids;
 
     // 3) Fallback : ne garder que des clés “fortes”
@@ -388,7 +388,7 @@ class _CollectionPageState extends State<CollectionPage> {
       'item_location',
       'tracking',
     };
-    ids = await _runQuery(strongKeys);
+    ids = await runQuery(strongKeys);
     return ids;
   }
 

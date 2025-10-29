@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+/*liste chronologique des mouvements (mtype, from→to, qty, prix, note…).*/
 
 class HistoryList extends StatelessWidget {
   const HistoryList({super.key, required this.movements});

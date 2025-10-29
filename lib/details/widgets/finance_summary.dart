@@ -1,5 +1,6 @@
 // ignore_for_file: deprecated_member_use
-
+/*3 KPI (Invested / Potential / Realized) —
+ pure UI, reçoit des nombres prêts + currency.*/
 import 'package:flutter/material.dart';
 
 const kAccentA = Color(0xFF6C5CE7);

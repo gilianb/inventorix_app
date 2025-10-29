@@ -299,13 +299,13 @@ class _MainInventoryPageState extends State<MainInventoryPage>
 
   Future<List<int>> _collectItemIdsForLine(Map<String, dynamic> line) async {
     // Helpers de normalisation
-    dynamic _norm(dynamic v) {
+    dynamic norm(dynamic v) {
       if (v == null) return null;
       if (v is String && v.trim().isEmpty) return null;
       return v;
     }
 
-    String? _dateStr(dynamic v) {
+    String? dateStr(dynamic v) {
       if (v == null) return null;
       if (v is DateTime) return v.toIso8601String().split('T').first;
       if (v is String) return v; // supposé déjà 'YYYY-MM-DD'
@@ -340,7 +340,7 @@ class _MainInventoryPageState extends State<MainInventoryPage>
     };
 
     // Construit la requête avec normalisation NULL/vides et dates
-    Future<List<int>> _runQuery(Set<String> keys) async {
+    Future<List<int>> runQuery(Set<String> keys) async {
       var q = _sb.from('item').select('id');
 
       for (final k in keys) {
@@ -348,7 +348,7 @@ class _MainInventoryPageState extends State<MainInventoryPage>
         var v = line[k];
 
         // normalisation
-        v = _norm(v);
+        v = norm(v);
         if (v == null) {
           q = q.filter(k, 'is', null);
           continue;
@@ -356,7 +356,7 @@ class _MainInventoryPageState extends State<MainInventoryPage>
 
         // dates -> 'YYYY-MM-DD'
         if (k == 'purchase_date' || k == 'sale_date') {
-          final ds = _dateStr(v);
+          final ds = dateStr(v);
           if (ds == null) {
             q = q.filter(k, 'is', null);
           } else {
@@ -379,7 +379,7 @@ class _MainInventoryPageState extends State<MainInventoryPage>
     }
 
     // 2) essai avec l’ensemble “primary”
-    var ids = await _runQuery(primaryKeys);
+    var ids = await runQuery(primaryKeys);
     if (ids.isNotEmpty) return ids;
 
     // 3) Fallback : ne garder que les champs "forts"
@@ -396,7 +396,7 @@ class _MainInventoryPageState extends State<MainInventoryPage>
       'item_location',
       'tracking',
     };
-    ids = await _runQuery(strongKeys);
+    ids = await runQuery(strongKeys);
     return ids;
   }
 

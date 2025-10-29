@@ -276,7 +276,7 @@ class _NewStockPageState extends State<NewStockPage> {
             : _trackingCtrl.text.trim(),
         'photo_url': (_photoUrlCtrl.text.trim().isNotEmpty)
             ? _photoUrlCtrl.text.trim()
-            : (photo ?? null),
+            : (photo),
         'document_url':
             _docUrlCtrl.text.trim().isEmpty ? null : _docUrlCtrl.text.trim(),
         'estimated_price': estPrice,
@@ -462,7 +462,7 @@ class _NewStockPageState extends State<NewStockPage> {
                       Row(children: [
                         Expanded(
                           child: DropdownButtonFormField<String>(
-                            value: _type,
+                            initialValue: _type,
                             items: const [
                               DropdownMenuItem(
                                   value: 'single', child: Text('Single')),
@@ -475,8 +475,9 @@ class _NewStockPageState extends State<NewStockPage> {
                                 final newStatuses = _type == 'single'
                                     ? singleStatuses
                                     : sealedStatuses;
-                                if (!newStatuses.contains(_initStatus))
+                                if (!newStatuses.contains(_initStatus)) {
                                   _initStatus = newStatuses.first;
+                                }
                               });
                             },
                             decoration:
@@ -486,7 +487,7 @@ class _NewStockPageState extends State<NewStockPage> {
                         const SizedBox(width: 12),
                         Expanded(
                           child: DropdownButtonFormField<String>(
-                            value: _lang,
+                            initialValue: _lang,
                             items: langs
                                 .map((l) =>
                                     DropdownMenuItem(value: l, child: Text(l)))
@@ -550,7 +551,7 @@ class _NewStockPageState extends State<NewStockPage> {
                       const SizedBox(height: 8),
 
                       DropdownButtonFormField<int>(
-                        value: _selectedGameId,
+                        initialValue: _selectedGameId,
                         items: _games
                             .map((g) => DropdownMenuItem<int>(
                                   value: g['id'] as int,
@@ -624,7 +625,7 @@ class _NewStockPageState extends State<NewStockPage> {
                         const SizedBox(width: 12),
                         Expanded(
                           child: DropdownButtonFormField<String>(
-                            value: statusValue,
+                            initialValue: statusValue,
                             items: (_type == 'single'
                                     ? singleStatuses
                                     : sealedStatuses)

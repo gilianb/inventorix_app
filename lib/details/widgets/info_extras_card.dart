@@ -1,7 +1,11 @@
 // ignore_for_file: deprecated_member_use
+/*section Informations (gauche/droite), liens cliquables, 
+calcule et affiche marge (%) et marge en valeur sous forme de chips 
+(en s’appuyant sur les champs unit_cost/fees/sale_price/marge existants).*/
 
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'marge.dart'; // ⬅️ pour MarginChip (%)
 
 const kAccentA = Color(0xFF6C5CE7);
 const kAccentB = Color(0xFF00D1B2);
@@ -37,6 +41,12 @@ class InfoExtrasCard extends StatelessWidget {
     if (v is num) return '${v.toDouble().toStringAsFixed(2)} $cur';
     final parsed = num.tryParse(v.toString());
     return parsed == null ? '—' : '${parsed.toStringAsFixed(2)} $cur';
+  }
+
+  num? _asNum(dynamic v) {
+    if (v == null) return null;
+    if (v is num) return v;
+    return num.tryParse(v.toString());
   }
 
   Future<void> _openUrl(BuildContext ctx, String? url) async {
@@ -75,6 +85,26 @@ class InfoExtrasCard extends StatelessWidget {
     );
   }
 
+  // Version "widget" pour pouvoir afficher des chips colorés
+  Widget _kvW(BuildContext ctx, String label, Widget value) {
+    final styleLabel = Theme.of(ctx).textTheme.labelMedium?.copyWith(
+          letterSpacing: .15,
+          fontWeight: FontWeight.w700,
+          color: kAccentA,
+        );
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          SizedBox(width: 160, child: Text(label, style: styleLabel)),
+          const SizedBox(width: 8),
+          value,
+        ],
+      ),
+    );
+  }
+
   Widget _kvLink(BuildContext ctx, String label, String? url) {
     final u = (url ?? '').trim();
     return Padding(
@@ -106,7 +136,7 @@ class InfoExtrasCard extends StatelessWidget {
                             u,
                             overflow: TextOverflow.ellipsis,
                             maxLines: 1,
-                            style: TextStyle(
+                            style: const TextStyle(
                               color: kAccentA,
                               decoration: TextDecoration.underline,
                               fontWeight: FontWeight.w600,
@@ -125,12 +155,61 @@ class InfoExtrasCard extends StatelessWidget {
     );
   }
 
+  Color _marginColorFor(num? pct) {
+    if (pct == null) return Colors.grey;
+    if (pct < 0) return Colors.black;
+    if (pct < 30) return Colors.redAccent;
+    if (pct < 60) return Colors.orangeAccent;
+    return Colors.green;
+  }
+
+  /// Chip pour la marge en valeur (couleur = basée sur %)
+  Widget _marginValueChip(num? value, String currency, num? pct) {
+    final bg = _marginColorFor(pct);
+    final label = value == null
+        ? '—'
+        : (value >= 0
+            ? '+${value.toDouble().toStringAsFixed(2)} $currency'
+            : '${value.toDouble().toStringAsFixed(2)} $currency');
+
+    return Chip(
+      avatar: const Icon(Icons.attach_money, size: 16, color: Colors.white),
+      label: Text(
+        label,
+        style:
+            const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+      ),
+      backgroundColor: bg,
+      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      visualDensity: const VisualDensity(horizontal: -2, vertical: -2),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final currency = _txt(data['currency']) == '—'
         ? currencyFallback
         : _txt(data['currency']);
+
+    // === Calcul des marges ===
+    final num? pct = _asNum(data['marge']); // % si présent
+    final num? sale = _asNum(data['sale_price']);
+    final num cost =
+        (_asNum(data['unit_cost']) ?? 0) + (_asNum(data['unit_fees']) ?? 0);
+    final num fees = (_asNum(data['shipping_fees']) ?? 0) +
+        (_asNum(data['commission_fees']) ?? 0) +
+        (_asNum(data['grading_fees']) ?? 0);
+    final num invested = cost + fees;
+
+    final num? valueMargin =
+        (sale == null) ? null : (sale - invested); // valeur absolue
+    // si % absent mais vendue et investi > 0, on le dérive
+    final num? pctDerived = (pct != null)
+        ? pct
+        : ((sale != null && invested > 0)
+            ? ((sale - invested) / invested * 100)
+            : null);
 
     final left = <Widget>[
       _kv(context, 'Product name', _txt(data['product_name'])),
@@ -146,6 +225,8 @@ class InfoExtrasCard extends StatelessWidget {
       _kv(context, 'Grade ID', _txt(data['grade_id'])),
       _kv(context, 'Grading note', _txt(data['grading_note'])),
       _kv(context, 'Grading fees', _money(data['grading_fees'], currency)),
+      // === Marges (gauche pour visibilité) ===
+      _kvW(context, 'Margin (%)', MarginChip(marge: pctDerived, compact: true)),
     ];
 
     final right = <Widget>[
@@ -164,6 +245,8 @@ class InfoExtrasCard extends StatelessWidget {
           _money(data['commission_fees'], currency)),
       _kv(context, 'Payment type', _txt(data['payment_type'])),
       _kv(context, 'Buyer infos', _txt(data['buyer_infos'])),
+      _kvW(context, 'Margin (value)',
+          _marginValueChip(valueMargin, currency, pctDerived)),
     ];
 
     final notes = (data['notes'] ?? '').toString();
