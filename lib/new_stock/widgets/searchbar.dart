@@ -380,7 +380,12 @@ class _CatalogPickerState extends State<CatalogPicker> {
                   : null),
         ),
         validator: (v) => (v == null || v.trim().isEmpty) ? 'Requis' : null,
-        onFieldSubmitted: (_) => _search(_q.text.trim()),
+        onFieldSubmitted: (_) {
+          // Entrée = on valide le texte libre, on ferme la liste
+          _removeOverlay();
+          FocusScope.of(context).unfocus();
+          // Pas de _search ici : on n’impose pas la sélection catalogue
+        },
       ),
     );
   }

@@ -11,14 +11,16 @@ import '../../../inventory/widgets/search_and_filters.dart'; // ⬅️ barre de 
 import 'package:inventorix_app/details/details_page.dart';
 import 'package:inventorix_app/new_stock/new_stock_page.dart';
 
+// ✅ KPI factorisé (Investi / Estimé / Vendu) basé sur sale_price null / non-null
+import '../../../inventory/widgets/finance_overview.dart';
+
 const kAccentA = Color(0xFF6C5CE7);
 const kAccentB = Color(0xFF00D1B2);
 const kAccentC = Color(0xFFFFB545);
 const kAccentG = Color(0xFF22C55E);
 
 class CollectionPage extends StatefulWidget {
-  const CollectionPage(
-      {super.key, this.orgId}); // ← AJOUT orgId (optionnel pour rétro-compat)
+  const CollectionPage({super.key, this.orgId}); // ← orgId optionnel
   final String? orgId;
 
   @override
@@ -35,14 +37,11 @@ class _CollectionPageState extends State<CollectionPage> {
   String? _gameFilter; // valeur = game_label
   String _typeFilter = 'single'; // 'single' | 'sealed'
 
+  // Données pour le tableau (groupes)
   List<Map<String, dynamic>> _groups = const [];
 
-  // KPIs (collection uniquement)
-  num _invested = 0;
-  num _potential = 0;
-
-  // ➕ KPI: somme brute des sale_price de chaque item en 'collection'
-  num _soldTotal = 0;
+  // Données brutes items pour le KPI factorisé
+  List<Map<String, dynamic>> _kpiItems = const [];
 
   bool get _isGilian =>
       (_sb.auth.currentUser?.email ?? '').toLowerCase() ==
@@ -72,9 +71,10 @@ class _CollectionPageState extends State<CollectionPage> {
   Future<void> _refresh() async {
     setState(() => _loading = true);
     try {
+      // 1) Groupes pour le tableau
       _groups = await _fetchGroupedFromView();
-      _computeKpisFromCollectionLines(); // investi + potentiel (sur lignes)
-      _soldTotal = await _sumSoldFromItems(); // 💰 somme brute item-level
+      // 2) Items bruts pour le KPI FinanceOverview
+      _kpiItems = await _fetchCollectionItemsForKpis();
     } catch (e) {
       _snack('Erreur chargement collection : $e');
     } finally {
@@ -140,61 +140,16 @@ class _CollectionPageState extends State<CollectionPage> {
     return rows;
   }
 
-  // Explose uniquement la collection
-  List<Map<String, dynamic>> _collectionLines() {
-    final out = <Map<String, dynamic>>[];
-    for (final r in _groups) {
-      final q = (r['qty_collection'] as int?) ?? 0;
-      if (q > 0) {
-        out.add({
-          ...r,
-          'status': 'collection',
-          'qty_status': q,
-        });
-      }
-    }
-    return out;
-  }
-
-  void _computeKpisFromCollectionLines() {
-    final lines = _collectionLines();
-    num invested = 0;
-    num potential = 0;
-
-    for (final r in lines) {
-      final qtyTotal = (r['qty_total'] as num?) ?? 0;
-      final totalWithFees = (r['total_cost_with_fees'] as num?) ?? 0;
-      final sumShipping = (r['sum_shipping_fees'] as num?) ?? 0;
-      final sumCommission = (r['sum_commission_fees'] as num?) ?? 0;
-      final sumGrading = (r['sum_grading_fees'] as num?) ?? 0;
-
-      final perUnitBase = qtyTotal > 0 ? (totalWithFees / qtyTotal) : 0;
-      final perUnitShipping = qtyTotal > 0 ? (sumShipping / qtyTotal) : 0;
-      final perUnitCommission = qtyTotal > 0 ? (sumCommission / qtyTotal) : 0;
-      final perUnitGrading = qtyTotal > 0 ? (sumGrading / qtyTotal) : 0;
-      final unit =
-          perUnitBase + perUnitShipping + perUnitCommission + perUnitGrading;
-
-      final int q = (r['qty_status'] as int?) ?? 0;
-      invested += unit * q;
-
-      final estUnit = (r['estimated_price'] as num?) ?? 0;
-      potential += estUnit * q;
-    }
-
-    _invested = invested;
-    _potential = potential;
-  }
-
-  /// ➕ Somme brute des sale_price *au niveau item* pour les items en 'collection'
-  /// Respecte le filtre type et (si présent) le filtre jeu (via game_id).
-  Future<num> _sumSoldFromItems() async {
-    var sel = _sb
-        .from('item')
-        .select('sale_price, game_id, org_id')
-        .eq('status', 'collection')
-        .eq('type', _typeFilter)
-        .not('sale_price', 'is', null);
+  /// Items bruts de la collection (pour KPI FinanceOverview)
+  /// Logique KPI:
+  /// - Investi / Estimé → items avec sale_price == null
+  /// - Vendu → items avec sale_price != null
+  Future<List<Map<String, dynamic>>> _fetchCollectionItemsForKpis() async {
+    var sel = _sb.from('item').select('''
+          id, org_id, game_id, type, status, sale_price,
+          unit_cost, unit_fees, shipping_fees, commission_fees, grading_fees,
+          estimated_price, currency
+        ''').eq('status', 'collection').eq('type', _typeFilter);
 
     // 🔐 filtre org
     if ((widget.orgId ?? '').isNotEmpty) {
@@ -207,17 +162,14 @@ class _CollectionPageState extends State<CollectionPage> {
       if (gid != null) {
         sel = sel.eq('game_id', gid);
       } else {
-        return 0;
+        return const [];
       }
     }
 
     final List<dynamic> rows = await sel.limit(50000);
-    num sum = 0;
-    for (final e in rows) {
-      final sp = (e['sale_price'] as num?);
-      if (sp != null) sum += sp;
-    }
-    return sum;
+    return rows
+        .map<Map<String, dynamic>>((e) => Map<String, dynamic>.from(e as Map))
+        .toList();
   }
 
   /// Résout un id de jeu à partir de son label (pour le filtre jeu)
@@ -232,6 +184,22 @@ class _CollectionPageState extends State<CollectionPage> {
     } catch (_) {
       return null;
     }
+  }
+
+  // Explose uniquement la collection pour le tableau
+  List<Map<String, dynamic>> _collectionLines() {
+    final out = <Map<String, dynamic>>[];
+    for (final r in _groups) {
+      final q = (r['qty_collection'] as int?) ?? 0;
+      if (q > 0) {
+        out.add({
+          ...r,
+          'status': 'collection',
+          'qty_status': q,
+        });
+      }
+    }
+    return out;
   }
 
   void _openDetails(Map<String, dynamic> line) async {
@@ -351,7 +319,7 @@ class _CollectionPageState extends State<CollectionPage> {
     Future<List<int>> runQuery(Set<String> keys) async {
       var q = _sb.from('item').select('id');
 
-      // 🔐 filtre org_id sur la récupération des items ciblés
+      // 🔐 filtre org_id
       if ((widget.orgId ?? '').isNotEmpty) {
         q = q.eq('org_id', widget.orgId as Object);
       }
@@ -392,7 +360,7 @@ class _CollectionPageState extends State<CollectionPage> {
     var ids = await runQuery(primaryKeys);
     if (ids.isNotEmpty) return ids;
 
-    // 3) Fallback : ne garder que des clés “fortes”
+    // 3) Fallback : clés “fortes”
     const strongKeys = <String>{
       'product_id',
       'type',
@@ -527,15 +495,20 @@ class _CollectionPageState extends State<CollectionPage> {
 
                 const SizedBox(height: 10),
 
+                // ===== KPI factorisé, réutilisable partout =====
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 12),
-                  child: _CollectionKpis(
-                    invested: _invested,
-                    potential: _potential,
-                    soldTotal: _soldTotal, // 💰 somme brute item-level
+                  child: FinanceOverview(
+                    items: _kpiItems,
                     currency: lines.isNotEmpty
                         ? (lines.first['currency']?.toString() ?? 'USD')
                         : 'USD',
+                    titleInvested: 'Investi (collection)',
+                    titleEstimated: 'Valeur estimée',
+                    titleSold: 'Total sold',
+                    subtitleInvested: 'Σ coûts (items non vendus)',
+                    subtitleEstimated: 'Σ estimated_price (non vendus)',
+                    subtitleSold: 'Σ sale_price (vendus)',
                   ),
                 ),
 
@@ -566,7 +539,7 @@ class _CollectionPageState extends State<CollectionPage> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Inventorix — Collection'),
+        title: const Text(' Collection'),
         actions: const [],
         flexibleSpace: Container(
           decoration: const BoxDecoration(
@@ -597,131 +570,5 @@ class _CollectionPageState extends State<CollectionPage> {
         label: const Text('Nouveau stock'),
       ),
     );
-  }
-}
-
-class _CollectionKpis extends StatelessWidget {
-  const _CollectionKpis({
-    required this.invested,
-    required this.potential,
-    required this.soldTotal, // 💰
-    required this.currency,
-  });
-
-  final num invested;
-  final num potential;
-  final num soldTotal; // 💰
-  final String currency;
-
-  String _m(num n) => n.toDouble().toStringAsFixed(2);
-
-  Widget _card(BuildContext context, IconData icon, String title, String value,
-      {List<Color>? gradient, Color? iconBg}) {
-    final cs = Theme.of(context).colorScheme;
-    return Card(
-      elevation: 1,
-      shadowColor: kAccentA.withOpacity(.16),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      child: Container(
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(16),
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: gradient ??
-                [kAccentA.withOpacity(.08), kAccentB.withOpacity(.06)],
-          ),
-          border: Border.all(color: kAccentA.withOpacity(.14), width: 0.8),
-        ),
-        child: Padding(
-          padding: const EdgeInsets.all(14),
-          child: Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  color: iconBg ?? kAccentA,
-                  shape: BoxShape.circle,
-                ),
-                child: Icon(icon, size: 20, color: Colors.white),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(title,
-                        style: Theme.of(context)
-                            .textTheme
-                            .labelMedium
-                            ?.copyWith(color: cs.onSurfaceVariant)),
-                    const SizedBox(height: 2),
-                    Text(
-                      value,
-                      style: Theme.of(context)
-                          .textTheme
-                          .headlineSmall
-                          ?.copyWith(fontWeight: FontWeight.w800),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return LayoutBuilder(builder: (ctx, c) {
-      final w = c.maxWidth;
-
-      final k1 = _card(ctx, Icons.savings, 'Investi (collection)',
-          '${_m(invested)} $currency',
-          gradient: [kAccentA.withOpacity(.12), kAccentB.withOpacity(.06)],
-          iconBg: kAccentA);
-
-      final k2 = _card(
-          ctx, Icons.lightbulb, 'Valeur estimée', '${_m(potential)} $currency',
-          gradient: [kAccentB.withOpacity(.12), kAccentC.withOpacity(.06)],
-          iconBg: kAccentB);
-
-      final k3 = _card(ctx, Icons.monetization_on, 'Total sold',
-          '${_m(soldTotal)} $currency',
-          gradient: [kAccentG.withOpacity(.14), kAccentB.withOpacity(.06)],
-          iconBg: kAccentG);
-
-      if (w > 1200) {
-        return Row(children: [
-          Expanded(child: k1),
-          const SizedBox(width: 12),
-          Expanded(child: k2),
-          const SizedBox(width: 12),
-          Expanded(child: k3),
-        ]);
-      } else if (w > 800) {
-        return Column(
-          children: [
-            Row(children: [
-              Expanded(child: k1),
-              const SizedBox(width: 12),
-              Expanded(child: k2),
-            ]),
-            const SizedBox(height: 12),
-            k3,
-          ],
-        );
-      } else {
-        return Column(children: [
-          k1,
-          const SizedBox(height: 12),
-          k2,
-          const SizedBox(height: 12),
-          k3
-        ]);
-      }
-    });
   }
 }

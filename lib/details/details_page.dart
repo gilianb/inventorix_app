@@ -1,7 +1,8 @@
 // ignore_for_file: unused_local_variable, deprecated_member_use
-/*Rôle : c’est l’écran “Détails” lui-même (StatefulWidget). 
+/*Rôle : c’est l’écran “Détails” lui-même (StatefulWidget).
 Il orchestre la récupération des données, applique les filtres,
- calcule les KPI d’affichage, et compose l’UI en assemblant les widgets.*/
+compose l’UI en assemblant les widgets.*/
+
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -11,7 +12,6 @@ import '../inventory/widgets/edit.dart' show EditItemsDialog;
 
 // Widgets existants (inchangés)
 import 'widgets/history_list.dart';
-import 'widgets/finance_summary.dart';
 import 'widgets/info_extras_card.dart';
 import 'widgets/info_banner.dart';
 
@@ -22,6 +22,9 @@ import 'widgets/items_table.dart';
 
 // Service factorisé (data + helpers)
 import 'details_service.dart';
+
+// ✅ Nouveau widget KPI factorisé (basé sur sale_price null / non-null)
+import '../../inventory/widgets/finance_overview.dart';
 
 /// ✅ Image par défaut locale (asset) si `photo_url` manquante
 const String kDefaultAssetPhoto = 'assets/images/default_card.png';
@@ -173,8 +176,9 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
     setState(() => _loading = true);
     try {
       final orgId = _orgIdFromContext;
+      final pid = (widget.group['product_id'] as int?);
 
-      // 1) Items stricts
+      // ---------- Tier 1 : strict ----------
       var items = await DetailsService.fetchItemsByLineKey(
         _sb,
         {
@@ -185,7 +189,7 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
         ignoreKeys: const {},
       );
 
-      // 2) Fallback doux
+      // ---------- Tier 2 : doux (ignorer les clés volatiles) ----------
       if (items.isEmpty) {
         items = await DetailsService.fetchItemsByLineKey(
           _sb,
@@ -198,16 +202,29 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
         );
       }
 
+      // ---------- Tier 3 : ultra-robuste → par product_id seul ----------
+      if (items.isEmpty && pid != null) {
+        final q = _sb.from('item').select('*').eq('product_id', pid);
+        if (orgId != null) {
+          q.eq('org_id', orgId);
+        }
+        final rows = await q.order('created_at', ascending: true);
+        items = (rows as List)
+            .map<Map<String, dynamic>>(
+                (e) => Map<String, dynamic>.from(e as Map))
+            .toList();
+      }
+
       if (items.isEmpty) {
+        // Rien trouvé malgré Tier 3 : garder header, vider items/historique
         setState(() {
-          _viewRow = null;
           _items = const [];
           _movements = const [];
         });
         return;
       }
 
-      // statut actif
+      // Filtre de statut (recalculé à partir des items actualisés)
       final detectedStatus =
           (widget.group['status'] ?? items.first['status'] ?? '').toString();
       if ((_localStatusFilter ?? '').isEmpty ||
@@ -215,22 +232,23 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
         _localStatusFilter = detectedStatus;
       }
 
-      // ligne vue exacte (filtrée org_id si dispo)
+      // ViewRow : par product_id (+ org_id)
       final viewRow = await DetailsService.fetchViewRow(
             _sb,
             {
               if (orgId != null) 'org_id': orgId,
-              ...widget.group,
+              if (pid != null) 'product_id': pid,
             },
             kViewCols,
           ) ??
           widget.group;
 
-      // mouvements
+      // Historique
       final hist = await DetailsService.fetchHistoryForItems(
         _sb,
         items.map((e) => e['id'] as int).toList(),
       );
+
       setState(() {
         _viewRow = viewRow;
         _items = items;
@@ -311,14 +329,6 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
             'USD')
         .toString();
 
-    final investedForView = DetailsService.investedFromItems(visibleItems);
-    final potential = DetailsService.sumNum(
-        visibleItems.map((e) => (e['estimated_price'] as num?) ?? 0));
-    final realized = DetailsService.sumNum(visibleItems.where((e) {
-      final s = (e['status'] ?? '').toString();
-      return DetailsService.isRealized(s);
-    }).map((e) => (e['sale_price'] as num?) ?? 0));
-
     final photoUrl =
         (_viewRow?['photo_url'] ?? widget.group['photo_url'])?.toString();
     final bool hasPhoto = photoUrl != null && photoUrl.isNotEmpty;
@@ -363,16 +373,31 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
                       qty: qtyStatus,
                       margin: headerMargin,
                       historyEvents: _movements, // 👈 fourni au popover
-                      historyTitle:
-                          'Journal des sauvegardes', // (optionnel) comme sur ta capture
-                      historyCount:
-                          _movements.length, // (optionnel) pour le badge
+                      historyTitle: 'Journal des sauvegardes', // (optionnel)
+                      historyCount: _movements.length, // (optionnel)
                     ),
 
                     const SizedBox(height: 12),
                     LayoutBuilder(
                       builder: (ctx, cons) {
                         final wide = cons.maxWidth >= 760;
+
+                        final finance = FinanceOverview(
+                          // ⬅️ On passe directement les items visibles.
+                          // Le widget calcule:
+                          // - Investi: somme coûts (unit_cost+fees...) pour sale_price == null
+                          // - Estimé: Σ estimated_price pour sale_price == null
+                          // - Vendu:  Σ sale_price pour sale_price != null
+                          items: visibleItems,
+                          currency: currency,
+                          titleInvested: 'Investi (vue)',
+                          titleEstimated: 'Valeur estimée',
+                          titleSold: 'Revenu réel',
+                          subtitleInvested: 'Σ coûts (items non vendus)',
+                          subtitleEstimated: 'Σ estimated_price (non vendus)',
+                          subtitleSold: 'Σ sale_price (vendus)',
+                        );
+
                         if (wide) {
                           return Row(
                             crossAxisAlignment: CrossAxisAlignment.start,
@@ -419,12 +444,7 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
                               Expanded(
                                 child: Column(
                                   children: [
-                                    FinanceSummary(
-                                      currency: currency,
-                                      investedForView: investedForView,
-                                      potentialRevenue: potential,
-                                      realizedRevenue: realized,
-                                    ),
+                                    finance,
                                     const SizedBox(height: 12),
                                     InfoExtrasCard(
                                       data: info,
@@ -468,12 +488,7 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
                                   },
                                 ),
                               const SizedBox(height: 12),
-                              FinanceSummary(
-                                currency: currency,
-                                investedForView: investedForView,
-                                potentialRevenue: potential,
-                                realizedRevenue: realized,
-                              ),
+                              finance,
                               const SizedBox(height: 12),
                               InfoExtrasCard(
                                 data: info,

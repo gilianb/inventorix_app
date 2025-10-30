@@ -9,6 +9,7 @@ import '../../inventory/widgets/status_breakdown_panel.dart';
 import '../../inventory/widgets/table_by_status.dart';
 import '../../inventory/utils/status_utils.dart';
 import '../../inventory/widgets/edit.dart';
+import '../../inventory/widgets/finance_overview.dart'; // ⬅️ NOUVEAU widget factorisé
 
 import 'package:inventorix_app/new_stock/new_stock_page.dart';
 import 'package:inventorix_app/details/details_page.dart';
@@ -75,8 +76,9 @@ class _MainInventoryPageState extends State<MainInventoryPage>
 
   // Données
   List<Map<String, dynamic>> _groups = const [];
-  num _kpiPotentialRevenue = 0; // Σ estimated (hors collection)
-  num _kpiRealRevenue = 0; // Σ realized (hors collection)
+
+  // Items servant aux KPI (passés à FinanceOverview)
+  List<Map<String, dynamic>> _kpiItems = const [];
 
   @override
   void initState() {
@@ -111,33 +113,13 @@ class _MainInventoryPageState extends State<MainInventoryPage>
     setState(() => _loading = true);
     try {
       _groups = await _fetchGroupedFromView();
-      _recomputeKpis();
+      _kpiItems =
+          await _fetchItemsForKpis(); // ⬅️ items bruts pour FinanceOverview
     } catch (e) {
       _snack('Erreur de chargement : $e');
     } finally {
       if (mounted) setState(() => _loading = false);
     }
-  }
-
-  void _recomputeKpis() {
-    final lines = _explodeLines(); // hors collection
-    num potential = 0;
-    num realized = 0;
-
-    for (final r in lines) {
-      final int qty = (r['qty_status'] as int?) ?? 0;
-      final String s = (r['status'] ?? '').toString();
-      final num estUnit = (r['estimated_price'] as num?) ?? 0;
-      final num saleUnit = (r['sale_price'] as num?) ?? 0;
-
-      potential += estUnit * qty;
-      if (s == 'sold' || s == 'shipped' || s == 'finalized') {
-        realized += saleUnit * qty;
-      }
-    }
-
-    _kpiPotentialRevenue = potential;
-    _kpiRealRevenue = realized;
   }
 
   Future<List<Map<String, dynamic>>> _fetchGroupedFromView() async {
@@ -199,6 +181,57 @@ class _MainInventoryPageState extends State<MainInventoryPage>
     return rows;
   }
 
+  /// Items pour KPI (hors collection), respectant tous les filtres actifs.
+  Future<List<Map<String, dynamic>>> _fetchItemsForKpis() async {
+    // Statuts à inclure selon le filtre courant (hors 'collection')
+    List<String> statuses;
+    if ((_statusFilter ?? '').isNotEmpty) {
+      final f = _statusFilter!;
+      final grouped = kGroupToStatuses[f];
+      if (grouped != null) {
+        statuses = grouped.where((s) => s != 'collection').toList();
+      } else {
+        statuses = [f];
+      }
+    } else {
+      // tous les statuts sauf 'collection'
+      statuses = kStatusOrder.where((s) => s != 'collection').toList();
+    }
+
+    var q = _sb
+        .from('item')
+        .select('''
+          unit_cost, unit_fees, shipping_fees, commission_fees, grading_fees,
+          estimated_price, sale_price, game_id, org_id, type, status, purchase_date
+        ''')
+        .eq('org_id', widget.orgId)
+        .eq('type', _typeFilter)
+        .inFilter('status', statuses);
+
+    // Période (purchase_date)
+    final after = _purchaseDateStart();
+    if (after != null) {
+      final d = after.toIso8601String().split('T').first;
+      q = q.gte('purchase_date', d);
+    }
+
+    // Filtre jeu (par label → id)
+    if ((_gameFilter ?? '').isNotEmpty) {
+      final row = await _sb
+          .from('games')
+          .select('id,label')
+          .eq('label', _gameFilter!)
+          .maybeSingle();
+      final gid = (row?['id'] as int?);
+      if (gid != null) q = q.eq('game_id', gid);
+    }
+
+    final List<dynamic> raw = await q.limit(50000);
+    return raw
+        .map<Map<String, dynamic>>((e) => Map<String, dynamic>.from(e as Map))
+        .toList();
+  }
+
   // Lignes par statut (hors collection)
   List<Map<String, dynamic>> _explodeLines() {
     final out = <Map<String, dynamic>>[];
@@ -223,28 +256,6 @@ class _MainInventoryPageState extends State<MainInventoryPage>
       }
     }
     return out;
-  }
-
-  num _kpiInvestedFromLines(List<Map<String, dynamic>> lines) {
-    num total = 0;
-    for (final r in lines) {
-      final qtyTotal = (r['qty_total'] as num?) ?? 0;
-      final totalWithFees = (r['total_cost_with_fees'] as num?) ?? 0;
-      final sumShipping = (r['sum_shipping_fees'] as num?) ?? 0;
-      final sumCommission = (r['sum_commission_fees'] as num?) ?? 0;
-      final sumGrading = (r['sum_grading_fees'] as num?) ?? 0;
-
-      final perUnitBase = qtyTotal > 0 ? (totalWithFees / qtyTotal) : 0;
-      final perUnitShipping = qtyTotal > 0 ? (sumShipping / qtyTotal) : 0;
-      final perUnitCommission = qtyTotal > 0 ? (sumCommission / qtyTotal) : 0;
-      final perUnitGrading = qtyTotal > 0 ? (sumGrading / qtyTotal) : 0;
-
-      final unit =
-          perUnitBase + perUnitShipping + perUnitCommission + perUnitGrading;
-      final q = (r['qty_status'] as int?) ?? 0;
-      total += unit * q;
-    }
-    return total;
   }
 
   void _openDetails(Map<String, dynamic> line) async {
@@ -545,17 +556,23 @@ class _MainInventoryPageState extends State<MainInventoryPage>
 
                 if (_groups.isNotEmpty) ...[
                   const SizedBox(height: 8),
-                  _OverviewKpis(
-                    typeFilter: _typeFilter,
-                    linesCount: lines.length,
-                    units: lines.fold<int>(
-                        0, (p, e) => p + ((e['qty_status'] as int?) ?? 0)),
-                    investedView: _kpiInvestedFromLines(lines),
-                    potentialRevenue: _kpiPotentialRevenue,
-                    realRevenue: _kpiRealRevenue,
-                    currency: lines.isNotEmpty
-                        ? (lines.first['currency']?.toString() ?? 'USD')
-                        : 'USD',
+                  // ⬇️ Nouveau widget KPI factorisé
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    child: FinanceOverview(
+                      items: _kpiItems,
+                      currency: lines.isNotEmpty
+                          ? (lines.first['currency']?.toString() ?? 'USD')
+                          : 'USD',
+                      titleInvested: 'Investi (vue)',
+                      titleEstimated: 'Revenu potentiel',
+                      titleSold: 'Revenu réel',
+                      subtitleInvested:
+                          'Σ coûts (non vendus) — hors collection',
+                      subtitleEstimated:
+                          'Σ estimated_price (non vendus) — hors collection',
+                      subtitleSold: 'Σ sale_price (vendus) — hors collection',
+                    ),
                   ),
                   const SizedBox(height: 12),
                   StatusBreakdownPanel(
@@ -569,13 +586,18 @@ class _MainInventoryPageState extends State<MainInventoryPage>
                       if (s == 'collection') return;
                       setState(() =>
                           _statusFilter = (_statusFilter == s ? null : s));
+                      // Recharger les items KPI si l’utilisateur change le filtre via le graphique
+                      _refresh();
                     },
                   ),
                   const SizedBox(height: 12),
                   ActiveStatusFilterBar(
                     statusFilter: _statusFilter,
                     linesCount: lines.length,
-                    onClear: () => setState(() => _statusFilter = null),
+                    onClear: () {
+                      setState(() => _statusFilter = null);
+                      _refresh();
+                    },
                   ),
                   const SizedBox(height: 12),
                 ],
@@ -646,7 +668,6 @@ class _MainInventoryPageState extends State<MainInventoryPage>
           // Onglet 0 : Inventaire
           inventoryBody,
           // Onglet 1 : Top Sold
-// APRÈS
           TopSoldPage(
             orgId: widget.orgId, // ✅ passe l’org à TopSold
             onOpenDetails: (payload) {
@@ -688,171 +709,6 @@ class _MainInventoryPageState extends State<MainInventoryPage>
             icon: const Icon(Icons.add),
             label: const Text('Nouveau stock'),
           );
-        },
-      ),
-    );
-  }
-}
-
-/* ===== petits widgets locaux ===== */
-
-class _OverviewKpis extends StatelessWidget {
-  const _OverviewKpis({
-    required this.typeFilter,
-    required this.linesCount,
-    required this.units,
-    required this.investedView,
-    required this.potentialRevenue,
-    required this.realRevenue,
-    required this.currency,
-  });
-
-  final String typeFilter;
-  final int linesCount;
-  final int units;
-  final num investedView;
-  final num potentialRevenue;
-  final num realRevenue;
-  final String currency;
-
-  String _money(num n) => n.toDouble().toStringAsFixed(2);
-
-  Widget _kpiCard({
-    required BuildContext context,
-    required IconData icon,
-    required String title,
-    required String value,
-    String? subtitle,
-    List<Color>? gradient,
-    Color? iconBg,
-  }) {
-    final cs = Theme.of(context).colorScheme;
-    return Card(
-      elevation: 1,
-      shadowColor: kAccentA.withOpacity(.16),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      child: Container(
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(16),
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: gradient ??
-                [kAccentA.withOpacity(.08), kAccentB.withOpacity(.06)],
-          ),
-          border: Border.all(color: kAccentA.withOpacity(.14), width: 0.8),
-        ),
-        child: Padding(
-          padding: const EdgeInsets.all(14),
-          child: Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                    color: (iconBg ?? kAccentA), shape: BoxShape.circle),
-                child: Icon(icon, size: 20, color: Colors.white),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(title,
-                        style: Theme.of(context)
-                            .textTheme
-                            .labelMedium
-                            ?.copyWith(color: cs.onSurfaceVariant)),
-                    const SizedBox(height: 2),
-                    Text(value,
-                        style: Theme.of(context)
-                            .textTheme
-                            .headlineSmall
-                            ?.copyWith(fontWeight: FontWeight.w800)),
-                    if (subtitle != null) ...[
-                      const SizedBox(height: 2),
-                      Text(subtitle,
-                          style: Theme.of(context).textTheme.bodySmall),
-                    ],
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final kpis = [
-      _kpiCard(
-        context: context,
-        icon: Icons.savings,
-        title: 'Investi (vue)',
-        value: '${_money(investedView)} $currency',
-        subtitle: 'Σ (Qté × coût/u estimé) — hors collection',
-        gradient: [kAccentA.withOpacity(.12), kAccentB.withOpacity(.06)],
-        iconBg: kAccentA,
-      ),
-      _kpiCard(
-        context: context,
-        icon: Icons.trending_up,
-        title: 'Revenu potentiel',
-        value: '${_money(potentialRevenue)} $currency',
-        subtitle: 'Σ estimated — hors collection',
-        gradient: [kAccentB.withOpacity(.12), kAccentC.withOpacity(.06)],
-        iconBg: kAccentB,
-      ),
-      _kpiCard(
-        context: context,
-        icon: Icons.payments,
-        title: 'Revenu réel',
-        value: '${_money(realRevenue)} $currency',
-        subtitle: 'Σ sale (sold/shipped/finalized)',
-        gradient: [kAccentG.withOpacity(.14), kAccentB.withOpacity(.06)],
-        iconBg: kAccentG,
-      ),
-    ];
-
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 12),
-      child: LayoutBuilder(
-        builder: (ctx, c) {
-          final isWide = c.maxWidth > 960;
-          final isMedium = c.maxWidth > 680;
-
-          if (isWide) {
-            return Row(
-              children: [
-                Expanded(child: kpis[0]),
-                const SizedBox(width: 12),
-                Expanded(child: kpis[1]),
-                const SizedBox(width: 12),
-                Expanded(child: kpis[2]),
-              ],
-            );
-          } else if (isMedium) {
-            return Column(
-              children: [
-                Row(children: [
-                  Expanded(child: kpis[0]),
-                  const SizedBox(width: 12),
-                  Expanded(child: kpis[1])
-                ]),
-                const SizedBox(height: 12),
-                Row(children: [Expanded(child: kpis[2])]),
-              ],
-            );
-          } else {
-            return Column(children: [
-              kpis[0],
-              const SizedBox(height: 12),
-              kpis[1],
-              const SizedBox(height: 12),
-              kpis[2]
-            ]);
-          }
         },
       ),
     );

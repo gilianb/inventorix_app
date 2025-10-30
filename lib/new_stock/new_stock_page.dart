@@ -196,10 +196,10 @@ class _NewStockPageState extends State<NewStockPage> {
     setState(() => _saving = true);
     try {
       if (_selectedBlueprintId != null && _selectedCatalogCard != null) {
-        // Sauvegarde à partir d’une carte du catalogue (blueprint)
+        // Cas A : carte sélectionnée dans le catalogue
         await NewStockService.saveWithExternalCard(
           sb: _sb,
-          orgId: widget.orgId, // ← AJOUT
+          orgId: widget.orgId,
           bp: _selectedCatalogCard!,
           selectedGameId: _selectedGameId!,
           type: _type,
@@ -256,14 +256,10 @@ class _NewStockPageState extends State<NewStockPage> {
           gradingFees: _num(_gradingFeesCtrl),
         );
       } else if (_nameCtrl.text.trim().isNotEmpty) {
-        _snack('Sélectionne une fiche du catalogue dans la liste.');
-        setState(() => _saving = false);
-        return;
-      } else {
-        // Fallback RPC (création libre)
+        // Cas B : saisie libre (pas de blueprint sélectionné)
         await NewStockService.saveFallbackRpc(
           sb: _sb,
-          orgId: widget.orgId, // ← AJOUT
+          orgId: widget.orgId,
           type: _type,
           name: _nameCtrl.text.trim(),
           lang: _lang,
@@ -299,6 +295,12 @@ class _NewStockPageState extends State<NewStockPage> {
               : double.tryParse(
                   _salePriceCtrl.text.trim().replaceAll(',', '.')),
         );
+      } else {
+        // Cas C : ni blueprint ni nom → on informe l’utilisateur
+        _snack(
+            'Renseigne un nom de produit ou sélectionne une fiche du catalogue.');
+        setState(() => _saving = false);
+        return;
       }
 
       _snack('Stock créé (${_qtyCtrl.text} items)');
