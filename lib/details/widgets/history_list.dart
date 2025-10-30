@@ -1,10 +1,12 @@
+// ignore_for_file: deprecated_member_use
+
 import 'package:flutter/material.dart';
 
 /// Liste chronologique des évènements (v_item_history ou mouvement legacy).
 /// - hiérarchie visuelle renforcée
 /// - tags (Achat, Vente, Statut, Prix...)
 /// - valeurs Avant → Après alignées
-/// - “par <utilisateur>” (actor_name ou actor_uid)
+/// - “par utilisateur” (actor_name ou actor_uid)
 class HistoryList extends StatelessWidget {
   const HistoryList({super.key, required this.movements});
   final List<Map<String, dynamic>> movements;

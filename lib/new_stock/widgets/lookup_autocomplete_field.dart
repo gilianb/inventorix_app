@@ -1,4 +1,6 @@
 // Extrait tel quel de ta page (ajout mineur d'import)
+// ignore_for_file: use_build_context_synchronously
+
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 

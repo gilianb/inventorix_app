@@ -44,6 +44,7 @@ class _AuthGateState extends State<AuthGate> {
       return MainInventoryPage(orgId: orgId);
     }
     // ouvre la page Mes organisations et attend un choix
+    // ignore: use_build_context_synchronously
     final picked = await Navigator.of(context).push<String>(
       MaterialPageRoute(builder: (_) => const OrganizationsPage()),
     );

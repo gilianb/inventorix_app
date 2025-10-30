@@ -343,7 +343,9 @@ class _NewStockPageState extends State<NewStockPage> {
                       _nameCtrl.text = text;
                       final t = text.trim();
                       if (_selectedCatalogDisplay != null &&
-                          t == _selectedCatalogDisplay) return;
+                          t == _selectedCatalogDisplay) {
+                        return;
+                      }
                       setState(() {
                         _selectedCatalogCard = null;
                         _selectedBlueprintId = null;

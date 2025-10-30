@@ -74,7 +74,7 @@ class PurchaseSection extends StatelessWidget {
             const SizedBox(width: 12),
             Expanded(
               child: DropdownButtonFormField<String>(
-                value: statusValue,
+                initialValue: statusValue,
                 items: statuses
                     .map((s) => DropdownMenuItem(value: s, child: Text(s)))
                     .toList(),

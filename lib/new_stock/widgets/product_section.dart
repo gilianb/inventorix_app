@@ -39,7 +39,7 @@ class ProductSection extends StatelessWidget {
           Row(children: [
             Expanded(
               child: DropdownButtonFormField<String>(
-                value: type,
+                initialValue: type,
                 items: const [
                   DropdownMenuItem(value: 'single', child: Text('Single')),
                   DropdownMenuItem(value: 'sealed', child: Text('Sealed')),
@@ -51,7 +51,7 @@ class ProductSection extends StatelessWidget {
             const SizedBox(width: 12),
             Expanded(
               child: DropdownButtonFormField<String>(
-                value: lang,
+                initialValue: lang,
                 items: langs
                     .map((l) => DropdownMenuItem(value: l, child: Text(l)))
                     .toList(),
@@ -65,7 +65,7 @@ class ProductSection extends StatelessWidget {
           catalogPicker,
           const SizedBox(height: 8),
           DropdownButtonFormField<int>(
-            value: selectedGameId,
+            initialValue: selectedGameId,
             items: games
                 .map((g) => DropdownMenuItem<int>(
                       value: g['id'] as int,

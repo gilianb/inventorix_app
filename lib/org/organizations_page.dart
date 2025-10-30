@@ -1,4 +1,6 @@
 // lib/org/organizations_page.dart
+// ignore_for_file: deprecated_member_use
+
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'organization_models.dart';
@@ -134,7 +136,7 @@ class _OrganizationsPageState extends State<OrganizationsPage> {
                   final cols = _columnsForWidth(cons.maxWidth);
                   final items = [
                     const _CreateOrgCard(), // la tuile "Créer"
-                    ..._orgs.map((o) => _OrgCard(org: o)).toList(),
+                    ..._orgs.map((o) => _OrgCard(org: o)),
                   ];
 
                   if (_orgs.isEmpty) {
@@ -345,8 +347,9 @@ class _OrgCard extends StatelessWidget {
   String _initials(String name) {
     final p = name.trim().split(RegExp(r'\s+'));
     if (p.isEmpty) return 'O';
-    if (p.length == 1)
+    if (p.length == 1) {
       return p.first.characters.take(2).toString().toUpperCase();
+    }
     return (p.first.characters.take(1).toString() +
             p.last.characters.take(1).toString())
         .toUpperCase();
