@@ -9,7 +9,7 @@ import '../../inventory/widgets/status_breakdown_panel.dart';
 import '../../inventory/widgets/table_by_status.dart';
 import '../../inventory/utils/status_utils.dart';
 import '../../inventory/widgets/edit.dart';
-import '../../inventory/widgets/finance_overview.dart'; // ⬅️ NOUVEAU widget factorisé
+import '../../inventory/widgets/finance_overview.dart'; // ⬅️ widget KPI factorisé
 
 import 'package:inventorix_app/new_stock/new_stock_page.dart';
 import 'package:inventorix_app/details/details_page.dart';
@@ -68,7 +68,7 @@ class _MainInventoryPageState extends State<MainInventoryPage>
   String _typeFilter = 'single'; // 'single' | 'sealed'
   String? _statusFilter; // filtre de la liste
 
-  /// NEW: filtre de période (sur purchase_date)
+  /// Filtre de période (sur purchase_date)
   /// 'all' | 'month' (30j) | 'week' (7j)
   String _dateFilter = 'all';
 
@@ -83,7 +83,7 @@ class _MainInventoryPageState extends State<MainInventoryPage>
   @override
   void initState() {
     super.initState();
-    _tabCtrl = TabController(length: 3, vsync: this);
+    _tabCtrl = TabController(length: 4, vsync: this); // ← 4 onglets (Finalized)
     _refresh();
   }
 
@@ -135,9 +135,7 @@ class _MainInventoryPageState extends State<MainInventoryPage>
         'qty_listed, qty_awaiting_payment, qty_sold, qty_shipped, qty_finalized, qty_collection, '
         'total_cost, total_cost_with_fees, realized_revenue, '
         'sum_shipping_fees, sum_commission_fees, sum_grading_fees, '
-        // ✅ nouveaux champs pour la séparation par coût unitaire
         'unit_cost, unit_fees, '
-        // (optionnel) utile au debug
         'org_id';
 
     // Base query
@@ -147,7 +145,7 @@ class _MainInventoryPageState extends State<MainInventoryPage>
         .eq('type', _typeFilter)
         .eq('org_id', widget.orgId); // ← IMPORTANT : filtre org
 
-    // NEW: filtre période sur purchase_date
+    // Filtre période sur purchase_date
     final after = _purchaseDateStart();
     if (after != null) {
       final afterStr = after.toIso8601String().split('T').first; // 'YYYY-MM-DD'
@@ -232,9 +230,13 @@ class _MainInventoryPageState extends State<MainInventoryPage>
         .toList();
   }
 
-  // Lignes par statut (hors collection)
-  List<Map<String, dynamic>> _explodeLines() {
+  // ===== Explosion des lignes (avec option de forcer un statut) =====
+  // ⚠️ Par défaut (pas de filtre), on CACHE les lignes "finalized" uniquement dans la liste.
+  // Si un filtre est actif OU override, on affiche normalement.
+  List<Map<String, dynamic>> _explodeLines({String? overrideFilter}) {
     final out = <Map<String, dynamic>>[];
+
+    // Déplie v_items_by_status -> lignes par statut (sauf collection)
     for (final r in _groups) {
       for (final s in kStatusOrder) {
         if (s == 'collection') continue;
@@ -244,18 +246,209 @@ class _MainInventoryPageState extends State<MainInventoryPage>
         }
       }
     }
-    if ((_statusFilter ?? '').isNotEmpty) {
-      final f = _statusFilter!;
-      final grouped = kGroupToStatuses[f];
+
+    // Filtre effectif (override prioritaire)
+    final effectiveFilter = (overrideFilter ?? _statusFilter)?.toString() ?? '';
+
+    if (effectiveFilter.isNotEmpty) {
+      final grouped = kGroupToStatuses[effectiveFilter];
       if (grouped != null) {
         return out
             .where((e) => grouped.contains(e['status'] as String))
             .toList();
       } else {
-        return out.where((e) => e['status'] == f).toList();
+        return out.where((e) => e['status'] == effectiveFilter).toList();
       }
     }
-    return out;
+
+    // 👉 Aucun filtre : on MASQUE uniquement les lignes 'finalized' (affichage)
+    return out.where((e) => e['status'] != 'finalized').toList();
+  }
+
+  // ====== Body d’inventaire réutilisable (optionnellement forcé sur un statut) ======
+  Widget _buildInventoryBody({String? forceStatus}) {
+    // KPI : si on force un statut, on filtre localement _kpiItems au lieu de re-fetch.
+    final effectiveKpiItems = (forceStatus == null)
+        ? _kpiItems
+        : _kpiItems
+            .where((e) => (e['status']?.toString() ?? '') == forceStatus)
+            .toList();
+
+    final lines = _explodeLines(overrideFilter: forceStatus);
+
+    if (_loading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    return RefreshIndicator(
+      onRefresh: _refresh,
+      child: ListView(
+        padding: const EdgeInsets.only(bottom: 24),
+        children: [
+          // Recherche & Filtres
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+            child: Card(
+              elevation: 1,
+              shadowColor: kAccentA.withOpacity(.18),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16)),
+              child: Container(
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(16),
+                  gradient: LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [
+                      kAccentA.withOpacity(.06),
+                      kAccentB.withOpacity(.05)
+                    ],
+                  ),
+                  border:
+                      Border.all(color: kAccentA.withOpacity(.15), width: 0.8),
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
+                  child: Column(
+                    children: [
+                      SearchAndGameFilter(
+                        searchCtrl: _searchCtrl,
+                        games: _groups
+                            .map((r) => (r['game_label'] ?? '') as String)
+                            .where((s) => s.isNotEmpty)
+                            .toSet()
+                            .toList()
+                          ..sort(),
+                        selectedGame: _gameFilter,
+                        onGameChanged: (v) {
+                          setState(() => _gameFilter = v);
+                          _refresh();
+                        },
+                        onSearch: _refresh,
+                      ),
+                      const SizedBox(height: 8),
+                      // Ligne de filtres: Type + Période
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        children: [
+                          TypeTabs(
+                            typeFilter: _typeFilter,
+                            onTypeChanged: (t) {
+                              setState(() => _typeFilter = t);
+                              _refresh();
+                            },
+                          ),
+                          SegmentedButton<String>(
+                            segments: const [
+                              ButtonSegment(
+                                  value: 'all', label: Text('All time')),
+                              ButtonSegment(
+                                  value: 'month', label: Text('Last month')),
+                              ButtonSegment(
+                                  value: 'week', label: Text('Last week')),
+                            ],
+                            selected: {_dateFilter},
+                            onSelectionChanged: (s) {
+                              setState(() => _dateFilter = s.first);
+                              _refresh();
+                            },
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+
+          const SizedBox(height: 10),
+
+          if (_groups.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            // KPIs (prennent les items effectifs)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              child: FinanceOverview(
+                items: effectiveKpiItems,
+                currency: lines.isNotEmpty
+                    ? (lines.first['currency']?.toString() ?? 'USD')
+                    : 'USD',
+                titleInvested: 'Investi (vue)',
+                titleEstimated: 'Revenu potentiel',
+                titleSold: 'Revenu réel',
+                subtitleInvested: 'Σ coûts (non vendus) — hors collection',
+                subtitleEstimated:
+                    'Σ estimated_price (non vendus) — hors collection',
+                subtitleSold: 'Σ sale_price (vendus) — hors collection',
+              ),
+            ),
+            const SizedBox(height: 12),
+            StatusBreakdownPanel(
+              expanded: _breakdownExpanded,
+              onToggle: (v) => setState(() => _breakdownExpanded = v),
+              groupRows:
+                  _groups.map((r) => {...r, 'qty_collection': 0}).toList(),
+              currentFilter: forceStatus ?? _statusFilter,
+              onTapStatus: (s) {
+                if (s == 'collection') return;
+
+                if (forceStatus != null) {
+                  // Depuis l’onglet Finalized : si on clique un autre statut,
+                  // on bascule sur l’onglet Inventaire avec ce filtre.
+                  if (s != forceStatus) {
+                    setState(() => _statusFilter = s);
+                    _tabCtrl.index = 0; // go Inventaire
+                    _refresh();
+                  }
+                  return; // si "finalized", on reste
+                }
+
+                setState(() => _statusFilter = (_statusFilter == s ? null : s));
+                _refresh();
+              },
+            ),
+            const SizedBox(height: 12),
+
+            // Barre de filtre actif : inutile si forceStatus (car fixé par l’onglet)
+            if (forceStatus == null)
+              ActiveStatusFilterBar(
+                statusFilter: _statusFilter,
+                linesCount: lines.length,
+                onClear: () {
+                  setState(() => _statusFilter = null);
+                  _refresh();
+                },
+              ),
+            if (forceStatus == null) const SizedBox(height: 12),
+          ],
+
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            child: Text(
+              forceStatus == null
+                  ? 'Lignes (${lines.length}) — vue par statut'
+                  : 'Finalized — Lignes (${lines.length})',
+              style: Theme.of(context)
+                  .textTheme
+                  .titleMedium
+                  ?.copyWith(fontWeight: FontWeight.w700),
+            ),
+          ),
+          const SizedBox(height: 4),
+
+          InventoryTableByStatus(
+            lines: lines,
+            onOpen: _openDetails,
+            onEdit: _openEdit,
+            onDelete: _deleteLine,
+          ),
+          const SizedBox(height: 48),
+        ],
+      ),
+    );
   }
 
   void _openDetails(Map<String, dynamic> line) async {
@@ -461,167 +654,6 @@ class _MainInventoryPageState extends State<MainInventoryPage>
 
   @override
   Widget build(BuildContext context) {
-    final lines = _explodeLines();
-
-    final inventoryBody = _loading
-        ? const Center(child: CircularProgressIndicator())
-        : RefreshIndicator(
-            onRefresh: _refresh,
-            child: ListView(
-              padding: const EdgeInsets.only(bottom: 24),
-              children: [
-                // Recherche & Filtres
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
-                  child: Card(
-                    elevation: 1,
-                    shadowColor: kAccentA.withOpacity(.18),
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(16)),
-                    child: Container(
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(16),
-                        gradient: LinearGradient(
-                          begin: Alignment.topLeft,
-                          end: Alignment.bottomRight,
-                          colors: [
-                            kAccentA.withOpacity(.06),
-                            kAccentB.withOpacity(.05)
-                          ],
-                        ),
-                        border: Border.all(
-                            color: kAccentA.withOpacity(.15), width: 0.8),
-                      ),
-                      child: Padding(
-                        padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
-                        child: Column(
-                          children: [
-                            SearchAndGameFilter(
-                              searchCtrl: _searchCtrl,
-                              games: _groups
-                                  .map((r) => (r['game_label'] ?? '') as String)
-                                  .where((s) => s.isNotEmpty)
-                                  .toSet()
-                                  .toList()
-                                ..sort(),
-                              selectedGame: _gameFilter,
-                              onGameChanged: (v) {
-                                setState(() => _gameFilter = v);
-                                _refresh();
-                              },
-                              onSearch: _refresh,
-                            ),
-                            const SizedBox(height: 8),
-                            // Ligne de filtres: Type + Période
-                            Wrap(
-                              spacing: 8,
-                              runSpacing: 8,
-                              crossAxisAlignment: WrapCrossAlignment.center,
-                              children: [
-                                TypeTabs(
-                                  typeFilter: _typeFilter,
-                                  onTypeChanged: (t) {
-                                    setState(() => _typeFilter = t);
-                                    _refresh();
-                                  },
-                                ),
-                                // NEW: filtre période (purchase_date)
-                                SegmentedButton<String>(
-                                  segments: const [
-                                    ButtonSegment(
-                                        value: 'all', label: Text('All time')),
-                                    ButtonSegment(
-                                        value: 'month',
-                                        label: Text('Last month')),
-                                    ButtonSegment(
-                                        value: 'week',
-                                        label: Text('Last week')),
-                                  ],
-                                  selected: {_dateFilter},
-                                  onSelectionChanged: (s) {
-                                    setState(() => _dateFilter = s.first);
-                                    _refresh();
-                                  },
-                                ),
-                              ],
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-
-                const SizedBox(height: 10),
-
-                if (_groups.isNotEmpty) ...[
-                  const SizedBox(height: 8),
-                  // ⬇️ Nouveau widget KPI factorisé
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 12),
-                    child: FinanceOverview(
-                      items: _kpiItems,
-                      currency: lines.isNotEmpty
-                          ? (lines.first['currency']?.toString() ?? 'USD')
-                          : 'USD',
-                      titleInvested: 'Investi (vue)',
-                      titleEstimated: 'Revenu potentiel',
-                      titleSold: 'Revenu réel',
-                      subtitleInvested:
-                          'Σ coûts (non vendus) — hors collection',
-                      subtitleEstimated:
-                          'Σ estimated_price (non vendus) — hors collection',
-                      subtitleSold: 'Σ sale_price (vendus) — hors collection',
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  StatusBreakdownPanel(
-                    expanded: _breakdownExpanded,
-                    onToggle: (v) => setState(() => _breakdownExpanded = v),
-                    groupRows: _groups
-                        .map((r) => {...r, 'qty_collection': 0})
-                        .toList(),
-                    currentFilter: _statusFilter,
-                    onTapStatus: (s) {
-                      if (s == 'collection') return;
-                      setState(() =>
-                          _statusFilter = (_statusFilter == s ? null : s));
-                      // Recharger les items KPI si l’utilisateur change le filtre via le graphique
-                      _refresh();
-                    },
-                  ),
-                  const SizedBox(height: 12),
-                  ActiveStatusFilterBar(
-                    statusFilter: _statusFilter,
-                    linesCount: lines.length,
-                    onClear: () {
-                      setState(() => _statusFilter = null);
-                      _refresh();
-                    },
-                  ),
-                  const SizedBox(height: 12),
-                ],
-
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 12),
-                  child: Text('Lignes (${lines.length}) — vue par statut',
-                      style: Theme.of(context)
-                          .textTheme
-                          .titleMedium
-                          ?.copyWith(fontWeight: FontWeight.w700)),
-                ),
-                const SizedBox(height: 4),
-                InventoryTableByStatus(
-                  lines: lines,
-                  onOpen: _openDetails,
-                  onEdit: _openEdit,
-                  onDelete: _deleteLine,
-                ),
-                const SizedBox(height: 48),
-              ],
-            ),
-          );
-
     return Scaffold(
       appBar: AppBar(
         title: const Text('Inventorix'),
@@ -650,6 +682,7 @@ class _MainInventoryPageState extends State<MainInventoryPage>
             Tab(icon: Icon(Icons.inventory_2), text: 'Inventaire'),
             Tab(icon: Icon(Icons.trending_up), text: 'Top Sold'),
             Tab(icon: Icon(Icons.collections_bookmark), text: 'Collection'),
+            Tab(icon: Icon(Icons.check_circle), text: 'Finalized'), // ← NEW
           ],
         ),
         flexibleSpace: Container(
@@ -665,13 +698,13 @@ class _MainInventoryPageState extends State<MainInventoryPage>
       body: TabBarView(
         controller: _tabCtrl,
         children: [
-          // Onglet 0 : Inventaire
-          inventoryBody,
+          // Onglet 0 : Inventaire (normal, finalized masqué par défaut)
+          _buildInventoryBody(),
+
           // Onglet 1 : Top Sold
           TopSoldPage(
             orgId: widget.orgId, // ✅ passe l’org à TopSold
             onOpenDetails: (payload) {
-              // ✅ ne jette rien : on transmet TOUT ce que TopSold a construit
               _openDetails({
                 'org_id': widget.orgId, // 🔐 utile pour les requêtes Détails
                 ...payload,
@@ -681,6 +714,9 @@ class _MainInventoryPageState extends State<MainInventoryPage>
 
           // Onglet 2 : Collection
           const CollectionPage(),
+
+          // Onglet 3 : Finalized — même page, filtre forcé
+          _buildInventoryBody(forceStatus: 'finalized'),
         ],
       ),
       // FAB visible uniquement sur l’onglet Inventaire
