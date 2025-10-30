@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import 'marge.dart';
+import 'history_popover.dart';
 
-/*Rôle : affiche le titre, sous-titre (jeu/langue/type),
- statut, quantité et la pastille de marge.*/
+/* Header: titre, sous-titre, statut, quantité, marge, et bouton Historique (popover ancré). */
 
 const kAccentA = Color(0xFF6C5CE7);
 const kAccentB = Color(0xFF00D1B2);
@@ -16,6 +16,9 @@ class DetailsHeader extends StatelessWidget {
     required this.status,
     required this.qty,
     this.margin,
+    this.historyEvents = const [],
+    this.historyTitle,
+    this.historyCount,
   });
 
   final String title;
@@ -24,9 +27,15 @@ class DetailsHeader extends StatelessWidget {
   final int qty;
   final num? margin;
 
+  final List<Map<String, dynamic>> historyEvents;
+  final String? historyTitle;
+  final int? historyCount;
+
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    final hasHistory = historyEvents.isNotEmpty;
+
     return Card(
       elevation: 0.8,
       color: cs.surface,
@@ -44,13 +53,12 @@ class DetailsHeader extends StatelessWidget {
         ),
         padding: const EdgeInsets.all(16),
         child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Container(
               padding: const EdgeInsets.all(12),
-              decoration: const BoxDecoration(
-                color: kAccentA,
-                shape: BoxShape.circle,
-              ),
+              decoration:
+                  const BoxDecoration(color: kAccentA, shape: BoxShape.circle),
               child:
                   const Icon(Icons.inventory_2, size: 22, color: Colors.white),
             ),
@@ -59,21 +67,45 @@ class DetailsHeader extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(title.isEmpty ? 'Détails' : title,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context)
-                          .textTheme
-                          .titleLarge
-                          ?.copyWith(fontWeight: FontWeight.w800, height: 1.1)),
+                  // Titre + bouton Historique (UN seul)
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(
+                        child: Text(
+                          title.isEmpty ? 'Détails' : title,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context)
+                              .textTheme
+                              .titleLarge
+                              ?.copyWith(
+                                  fontWeight: FontWeight.w800, height: 1.1),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      _HistoryMenuButton(
+                        enabled: hasHistory,
+                        count: historyCount,
+                        builder: (ctx) => HistoryPopoverCard(
+                          events: historyEvents,
+                          title: historyTitle ?? 'Journal des changements',
+                        ),
+                      ),
+                    ],
+                  ),
+
                   if (subtitle.isNotEmpty) ...[
                     const SizedBox(height: 4),
-                    Text(subtitle,
-                        style: Theme.of(context)
-                            .textTheme
-                            .titleSmall
-                            ?.copyWith(color: cs.onSurfaceVariant)),
+                    Text(
+                      subtitle,
+                      style: Theme.of(context)
+                          .textTheme
+                          .titleSmall
+                          ?.copyWith(color: cs.onSurfaceVariant),
+                    ),
                   ],
+
                   const SizedBox(height: 10),
                   Wrap(
                     spacing: 8,
@@ -104,6 +136,81 @@ class DetailsHeader extends StatelessWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// Bouton qui ouvre un popover ancré avec PopupMenuButton.
+class _HistoryMenuButton extends StatelessWidget {
+  const _HistoryMenuButton({
+    required this.enabled,
+    required this.builder,
+    this.count,
+  });
+
+  final bool enabled;
+  final int? count;
+  final WidgetBuilder builder;
+
+  @override
+  Widget build(BuildContext context) {
+    final showBadge = (count ?? 0) > 0;
+
+    return PopupMenuButton<int>(
+      tooltip: 'Journal des changements',
+      enabled: enabled,
+      offset: const Offset(0, 8),
+      elevation: 8,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      itemBuilder: (ctx) => [
+        PopupMenuItem<int>(
+          enabled: false,
+          padding: EdgeInsets.zero,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 460, maxHeight: 560),
+            child: builder(ctx),
+          ),
+        ),
+      ],
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          Material(
+            color: Colors.white,
+            shape: const CircleBorder(),
+            elevation: enabled ? 1.5 : 0,
+            child: const Padding(
+              padding: EdgeInsets.all(10),
+              child: Icon(Icons.history, color: kAccentA, size: 22),
+            ),
+          ),
+          if (enabled && showBadge)
+            Positioned(
+              right: -4,
+              top: -4,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: kAccentB,
+                  borderRadius: BorderRadius.circular(999),
+                  boxShadow: const [
+                    BoxShadow(
+                        color: Colors.black12,
+                        blurRadius: 2,
+                        offset: Offset(0, 1))
+                  ],
+                ),
+                child: DefaultTextStyle(
+                  style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 10,
+                      fontWeight: FontWeight.w700),
+                  child: Text((count ?? 0) > 99 ? '99+' : '${count ?? 0}'),
+                ),
+              ),
+            ),
+        ],
       ),
     );
   }

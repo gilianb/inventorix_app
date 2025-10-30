@@ -40,9 +40,10 @@ class NewStockService {
     return '$name — ${parts.join(' — ')}';
   }
 
-  // Crée/retourne product depuis blueprint
+  // Crée/retourne product depuis blueprint (scopé par org)
   static Future<int> _ensureProductFromBlueprint({
     required SupabaseClient sb,
+    required String orgId, // ← AJOUT
     required Map<String, dynamic> bp,
     required int gameId,
     required String type,
@@ -55,6 +56,7 @@ class NewStockService {
         .from('product')
         .select('id')
         .eq('blueprint_id', blueprintId)
+        .eq('org_id', orgId) // ← AJOUT : ne pas mélanger entre orgs
         .maybeSingle();
 
     if (existing != null && existing['id'] != null) {
@@ -87,6 +89,7 @@ class NewStockService {
           'fixed_properties': bp['fixed_properties'],
           'editable_properties': bp['editable_properties'],
           'data': bp['data'],
+          'org_id': orgId, // ← AJOUT
         })
         .select('id')
         .single();
@@ -97,6 +100,7 @@ class NewStockService {
   // Sauvegarde depuis blueprint sélectionné
   static Future<void> saveWithExternalCard({
     required SupabaseClient sb,
+    required String orgId, // ← AJOUT
     required Map<String, dynamic> bp,
     required int selectedGameId,
     required String type,
@@ -129,6 +133,7 @@ class NewStockService {
 
     final productId = await _ensureProductFromBlueprint(
       sb: sb,
+      orgId: orgId, // ← AJOUT
       bp: bp,
       gameId: selectedGameId,
       type: type,
@@ -168,6 +173,7 @@ class NewStockService {
         'payment_type': paymentType,
         'buyer_infos': buyerInfos,
         'grading_fees': gradingFees,
+        'org_id': orgId, // ← AJOUT
       };
     });
 
@@ -177,6 +183,7 @@ class NewStockService {
   // Fallback RPC (création libre produit + items)
   static Future<void> saveFallbackRpc({
     required SupabaseClient sb,
+    required String orgId, // ← AJOUT
     required String type,
     required String name,
     required String lang,
@@ -204,6 +211,8 @@ class NewStockService {
     double? salePrice,
   }) async {
     await sb.rpc('fn_create_product_and_items', params: {
+      'p_org_id':
+          orgId, // ← AJOUT (assure-toi que la fonction SQL prend ce param)
       'p_type': type,
       'p_name': name,
       'p_language': lang,

@@ -17,7 +17,9 @@ const kAccentC = Color(0xFFFFB545);
 const kAccentG = Color(0xFF22C55E);
 
 class CollectionPage extends StatefulWidget {
-  const CollectionPage({super.key});
+  const CollectionPage(
+      {super.key, this.orgId}); // ← AJOUT orgId (optionnel pour rétro-compat)
+  final String? orgId;
 
   @override
   State<CollectionPage> createState() => _CollectionPageState();
@@ -85,7 +87,7 @@ class _CollectionPageState extends State<CollectionPage> {
   Future<List<Map<String, dynamic>>> _fetchGroupedFromView() async {
     const cols =
         // dimensions
-        'product_id, game_id, type, language, '
+        'org_id, product_id, game_id, type, language, '
         'product_name, game_code, game_label, '
         'purchase_date, currency, '
         // champs homogènes
@@ -101,26 +103,32 @@ class _CollectionPageState extends State<CollectionPage> {
         'total_cost, total_cost_with_fees, realized_revenue, '
         'sum_shipping_fees, sum_commission_fees, sum_grading_fees';
 
-    final List<dynamic> raw = await _sb
-        .from('v_items_by_status')
-        .select(cols)
-        .eq('type', _typeFilter)
-        .order('purchase_date', ascending: false)
-        .limit(1000);
+    var q = _sb.from('v_items_by_status').select(cols).eq('type', _typeFilter);
+
+    // 🔐 filtre org si fourni
+    if ((widget.orgId ?? '').isNotEmpty) {
+      q = q.eq('org_id', widget.orgId as Object);
+    }
+
+    final List<dynamic> raw =
+        await q.order('purchase_date', ascending: false).limit(1000);
 
     var rows = raw
         .map<Map<String, dynamic>>((e) => Map<String, dynamic>.from(e as Map))
         .toList();
 
     // filtre texte local (nom produit / langue / jeu / fournisseur)
-    final q = _searchCtrl.text.trim().toLowerCase();
-    if (q.isNotEmpty) {
+    final qtxt = _searchCtrl.text.trim().toLowerCase();
+    if (qtxt.isNotEmpty) {
       rows = rows.where((r) {
         final n = (r['product_name'] ?? '').toString().toLowerCase();
         final l = (r['language'] ?? '').toString().toLowerCase();
         final g = (r['game_label'] ?? '').toString().toLowerCase();
         final s = (r['supplier_name'] ?? '').toString().toLowerCase();
-        return n.contains(q) || l.contains(q) || g.contains(q) || s.contains(q);
+        return n.contains(qtxt) ||
+            l.contains(qtxt) ||
+            g.contains(qtxt) ||
+            s.contains(qtxt);
       }).toList();
     }
 
@@ -183,18 +191,22 @@ class _CollectionPageState extends State<CollectionPage> {
   Future<num> _sumSoldFromItems() async {
     var sel = _sb
         .from('item')
-        .select('sale_price, game_id')
+        .select('sale_price, game_id, org_id')
         .eq('status', 'collection')
         .eq('type', _typeFilter)
         .not('sale_price', 'is', null);
 
-    // Si un jeu est filtré, on traduit le label -> id pour filtrer game_id
+    // 🔐 filtre org
+    if ((widget.orgId ?? '').isNotEmpty) {
+      sel = sel.eq('org_id', widget.orgId as Object);
+    }
+
+    // filtre jeu si label choisi
     if ((_gameFilter ?? '').isNotEmpty) {
       final gid = await _resolveGameIdByLabel(_gameFilter!);
       if (gid != null) {
         sel = sel.eq('game_id', gid);
       } else {
-        // aucun jeu ne matche ce label → somme = 0
         return 0;
       }
     }
@@ -339,6 +351,11 @@ class _CollectionPageState extends State<CollectionPage> {
     Future<List<int>> runQuery(Set<String> keys) async {
       var q = _sb.from('item').select('id');
 
+      // 🔐 filtre org_id sur la récupération des items ciblés
+      if ((widget.orgId ?? '').isNotEmpty) {
+        q = q.eq('org_id', widget.orgId as Object);
+      }
+
       for (final k in keys) {
         if (!line.containsKey(k)) continue;
         var v = norm(line[k]);
@@ -406,8 +423,18 @@ class _CollectionPageState extends State<CollectionPage> {
 
       final idsCsv = '(${ids.join(",")})';
 
-      await _sb.from('movement').delete().filter('item_id', 'in', idsCsv);
-      await _sb.from('item').delete().filter('id', 'in', idsCsv);
+      final moveDel =
+          _sb.from('movement').delete().filter('item_id', 'in', idsCsv);
+      final itemDel = _sb.from('item').delete().filter('id', 'in', idsCsv);
+
+      // 🔐 sécuriser les deletes par org si fournie
+      if ((widget.orgId ?? '').isNotEmpty) {
+        moveDel.eq('org_id', widget.orgId as Object);
+        itemDel.eq('org_id', widget.orgId as Object);
+      }
+
+      await moveDel;
+      await itemDel;
 
       _snack('Ligne supprimée (${ids.length} item(s) + mouvements).');
       _refresh();
@@ -556,8 +583,13 @@ class _CollectionPageState extends State<CollectionPage> {
         backgroundColor: kAccentA,
         foregroundColor: Colors.white,
         onPressed: () async {
+          final orgId = widget.orgId;
+          if (orgId == null || orgId.isEmpty) {
+            _snack('Aucune organisation sélectionnée.');
+            return;
+          }
           final changed = await Navigator.of(context).push<bool>(
-            MaterialPageRoute(builder: (_) => const NewStockPage()),
+            MaterialPageRoute(builder: (_) => NewStockPage(orgId: orgId)),
           );
           if (changed == true) _refresh();
         },

@@ -73,6 +73,15 @@ class DetailsService {
     List<String> viewCols,
   ) async {
     var builder = sb.from('v_items_by_status').select(viewCols.join(','));
+
+    // 🔐 si org_id est connu, on le force
+    final orgId = (group['org_id']?.toString().isNotEmpty ?? false)
+        ? group['org_id']
+        : null;
+    if (orgId != null) {
+      builder = builder.eq('org_id', orgId);
+    }
+
     for (final key in viewCols) {
       if (group.containsKey(key) && group[key] != null) {
         builder = builder.eq(key, group[key]);
@@ -92,6 +101,7 @@ class DetailsService {
   }) async {
     const itemCols = [
       'id',
+      'org_id', // ← 🔐 ajouté
       'product_id',
       'game_id',
       'type',
@@ -125,10 +135,16 @@ class DetailsService {
 
     var q = sb.from('item').select(itemCols.join(','));
 
+    // 🔐 org_id prioritaire si fourni
+    if ((source['org_id']?.toString().isNotEmpty ?? false)) {
+      q = q.eq('org_id', source['org_id']);
+    }
+
     for (final k in strictKeys) {
       if (ignoreKeys.contains(k)) continue;
       if (!source.containsKey(k)) continue;
       final v = source[k];
+      if (k == 'org_id') continue; // déjà appliqué ci-dessus
       if (v == null) {
         q = q.filter(k, 'is', null);
       } else {
@@ -147,19 +163,21 @@ class DetailsService {
     );
   }
 
-  static Future<List<Map<String, dynamic>>> fetchMovementsFor(
-      SupabaseClient sb, List<int> itemIds) async {
+  static Future<List<Map<String, dynamic>>> fetchHistoryForItems(
+    SupabaseClient sb,
+    List<int> itemIds, {
+    int limit = 5000,
+  }) async {
     if (itemIds.isEmpty) return [];
     final raw = await sb
-        .from('movement')
-        .select(
-          'id, ts, mtype, from_status, to_status, channel_id, qty, unit_price, currency, fees, grader, grade, tracking, note, item_id',
-        )
+        .from('v_item_history')
+        .select('*')
         .inFilter('item_id', itemIds)
         .order('ts', ascending: false)
-        .limit(20000);
+        .limit(limit);
 
     return List<Map<String, dynamic>>.from(
-        (raw as List).map((e) => Map<String, dynamic>.from(e as Map)));
+      (raw as List).map((e) => Map<String, dynamic>.from(e as Map)),
+    );
   }
 }

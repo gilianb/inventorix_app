@@ -18,7 +18,9 @@ import 'widgets/date_field.dart';
 import 'widgets/lookup_autocomplete_field.dart';
 
 class NewStockPage extends StatefulWidget {
-  const NewStockPage({super.key});
+  const NewStockPage({super.key, required this.orgId});
+  final String orgId; // ← AJOUT : org_id courant
+
   @override
   State<NewStockPage> createState() => _NewStockPageState();
 }
@@ -197,6 +199,7 @@ class _NewStockPageState extends State<NewStockPage> {
         // Sauvegarde à partir d’une carte du catalogue (blueprint)
         await NewStockService.saveWithExternalCard(
           sb: _sb,
+          orgId: widget.orgId, // ← AJOUT
           bp: _selectedCatalogCard!,
           selectedGameId: _selectedGameId!,
           type: _type,
@@ -260,6 +263,7 @@ class _NewStockPageState extends State<NewStockPage> {
         // Fallback RPC (création libre)
         await NewStockService.saveFallbackRpc(
           sb: _sb,
+          orgId: widget.orgId, // ← AJOUT
           type: _type,
           name: _nameCtrl.text.trim(),
           lang: _lang,

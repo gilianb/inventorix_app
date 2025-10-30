@@ -9,7 +9,10 @@ import '../inventory/main_inventory_page.dart'
     show kAccentA, kAccentB, kAccentC, kAccentG;
 
 class TopSoldPage extends StatefulWidget {
-  const TopSoldPage({super.key, this.onOpenDetails});
+  const TopSoldPage({super.key, this.orgId, this.onOpenDetails});
+
+  /// Filtre d’organisation (UUID). Si null/empty => pas de filtre org côté requêtes.
+  final String? orgId;
 
   /// Callback pour ouvrir la page Détails depuis l’onglet Top Sold
   final void Function(Map<String, dynamic> itemRow)? onOpenDetails;
@@ -31,6 +34,8 @@ class _TopSoldPageState extends State<TopSoldPage> {
   /// NEW: filtre de période sur purchase_date
   /// 'all' | 'month' (30j) | 'week' (7j)
   String _dateFilter = 'all';
+
+  static const String _kDefaultAsset = 'assets/images/default_card.png';
 
   static const List<String> _wantedStatuses = [
     'sold',
@@ -104,7 +109,7 @@ class _TopSoldPageState extends State<TopSoldPage> {
             unit_cost, unit_fees, shipping_fees, commission_fees, grading_fees,
             photo_url, buyer_company, supplier_name, purchase_date,
             channel_id, notes, grade_id, grading_note, document_url,
-            estimated_price, item_location
+            estimated_price, item_location, org_id
           ''');
 
       if (_typeFilter != 'all') {
@@ -129,7 +134,6 @@ class _TopSoldPageState extends State<TopSoldPage> {
       items = items.where((r) {
         final s = (r['status'] ?? '').toString();
         final hasSale = r['sale_price'] != null; // <- clé: vente existante
-
         return _wantedStatuses.contains(s) && hasSale;
       }).toList();
 
@@ -143,10 +147,13 @@ class _TopSoldPageState extends State<TopSoldPage> {
       Map<int, Map<String, dynamic>> gameById = {};
 
       if (productIds.isNotEmpty) {
-        final List<dynamic> prods = await _sb
+        var pq = _sb
             .from('product')
-            .select('id, name, sku, language')
+            .select('id, name, sku, language, org_id')
             .filter('id', 'in', '(${productIds.join(",")})');
+
+        // (ne filtre pas org ici si RLS empêche la lecture; on gère fallback vue)
+        final List<dynamic> prods = await pq;
         productById = {
           for (final p in prods.map((e) => Map<String, dynamic>.from(e as Map)))
             (p['id'] as int): p
@@ -164,6 +171,30 @@ class _TopSoldPageState extends State<TopSoldPage> {
         };
       }
 
+      // 3.bis) Fallback: noms depuis la vue v_items_by_status (insensible aux RLS de product)
+      Map<int, Map<String, dynamic>> vInfoByProductId = {};
+      if (productIds.isNotEmpty) {
+        final String idsCsv = '(${productIds.join(",")})';
+        final List<dynamic> vrows = await _sb
+            .from('v_items_by_status')
+            .select(
+                'product_id, game_id, product_name, game_label, game_code, language')
+            .filter('product_id', 'in', idsCsv)
+            .limit(5000);
+        for (final e in vrows) {
+          final m = Map<String, dynamic>.from(e as Map);
+          final pid = (m['product_id'] as num?)?.toInt();
+          if (pid != null && !vInfoByProductId.containsKey(pid)) {
+            vInfoByProductId[pid] = {
+              'product_name': (m['product_name'] ?? '').toString(),
+              'language': (m['language'] ?? '').toString(),
+              'game_label': (m['game_label'] ?? '').toString(),
+              'game_code': (m['game_code'] ?? '').toString(),
+            };
+          }
+        }
+      }
+
       // 4) Filtre jeu + recherche locale (product.name / product.sku)
       final qtxt = _searchCtrl.text.trim().toLowerCase();
       if ((_gameFilter ?? '').isNotEmpty || qtxt.isNotEmpty) {
@@ -171,14 +202,26 @@ class _TopSoldPageState extends State<TopSoldPage> {
           final p = productById[r['product_id'] as int?] ?? const {};
           final g = gameById[r['game_id'] as int?] ?? const {};
 
-          final gameOk =
-              (_gameFilter ?? '').isEmpty || (g['label'] ?? '') == _gameFilter;
+          // fallback vue pour game_label
+          final gameLabelFallback =
+              (vInfoByProductId[r['product_id'] as int?]?['game_label'] ?? '')
+                  .toString();
+
+          final gameOk = (_gameFilter ?? '').isEmpty ||
+              (g['label'] ?? '') == _gameFilter ||
+              gameLabelFallback == _gameFilter;
           if (!gameOk) return false;
 
           if (qtxt.isEmpty) return true;
           final name = (p['name'] ?? '').toString().toLowerCase();
           final sku = (p['sku'] ?? '').toString().toLowerCase();
-          return name.contains(qtxt) || sku.contains(qtxt);
+          final nameFallback =
+              (vInfoByProductId[r['product_id'] as int?]?['product_name'] ?? '')
+                  .toString()
+                  .toLowerCase();
+          return name.contains(qtxt) ||
+              sku.contains(qtxt) ||
+              nameFallback.contains(qtxt);
         }).toList();
       }
 
@@ -223,6 +266,8 @@ class _TopSoldPageState extends State<TopSoldPage> {
           base['_sum_grad'] = 0.0;
           // pour l'affichage: on garde aussi une photo non vide si possible
           base['_any_photo'] = (r['photo_url'] ?? '').toString();
+          // garder la monnaie
+          base['currency'] = r['currency'];
           return base;
         });
 
@@ -255,21 +300,36 @@ class _TopSoldPageState extends State<TopSoldPage> {
         final cnt = (g['_count'] as int);
         num avg(num sum) => cnt == 0 ? 0 : sum / cnt;
 
-        final product = productById[g['product_id'] as int?] ?? const {};
-        final game = gameById[g['game_id'] as int?] ?? const {};
+        final pid = g['product_id'] as int?;
+        final gid = g['game_id'] as int?;
+
+        final product = productById[pid] ?? const {};
+        final game = gameById[gid] ?? const {};
+        final vinfo =
+            (pid != null) ? (vInfoByProductId[pid] ?? const {}) : const {};
 
         rows.add({
-          // clés strictes + statut -> permettront d'ouvrir Détails correctement
           for (final k in _strictLineKeys) k: g[k],
           'status': g['status'],
-          // pour la tuile
-          'product_id': g['product_id'],
-          'game_id': g['game_id'],
+
+          'product_id': pid,
+          'game_id': gid,
+
+          // 👇 champs plats utilisés par la page Détails + affichage
+          'product_name':
+              (product['name'] ?? vinfo['product_name'] ?? '').toString(),
+          'language': (product['language'] ??
+                  vinfo['language'] ??
+                  (g['language'] ?? ''))
+              .toString(),
+          'game_label': (game['label'] ?? vinfo['game_label'] ?? '').toString(),
+          'game_code': (game['code'] ?? vinfo['game_code'] ?? '').toString(),
+
           'product': product,
           'game': game,
           'photo_url': (g['_any_photo'] ?? '').toString(),
           'currency': g['currency'] ?? 'USD',
-          // agrégats affichés (moyennes)
+
           'marge': avg((g['_sum_marge'] as num)),
           'sale_price': avg((g['_sum_sale'] as num)),
           'unit_cost': avg((g['_sum_ucost'] as num)),
@@ -277,7 +337,6 @@ class _TopSoldPageState extends State<TopSoldPage> {
           'shipping_fees': avg((g['_sum_ship'] as num)),
           'commission_fees': avg((g['_sum_comm'] as num)),
           'grading_fees': avg((g['_sum_grad'] as num)),
-          // (optionnel) quantité du groupe - pas affichée mais utile
           'qty': cnt,
         });
       }
@@ -305,6 +364,39 @@ class _TopSoldPageState extends State<TopSoldPage> {
   }
 
   String _money(num? n) => n == null ? '—' : n.toDouble().toStringAsFixed(2);
+
+  /// Vignette format "carte" (≈100×72) avec fallback asset si pas d'image.
+  Widget _cardThumb(String photoUrl) {
+    const double h = 100;
+    const double w = 72; // ~ h * 0.72
+    final hasNet = photoUrl.isNotEmpty;
+
+    Widget img;
+    if (hasNet) {
+      img = Image.network(
+        photoUrl,
+        fit: BoxFit.cover,
+        errorBuilder: (_, __, ___) => Image.asset(
+          _kDefaultAsset,
+          fit: BoxFit.cover,
+        ),
+      );
+    } else {
+      img = Image.asset(
+        _kDefaultAsset,
+        fit: BoxFit.cover,
+      );
+    }
+
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(10),
+      child: SizedBox(
+        width: w,
+        height: h,
+        child: img,
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -444,11 +536,17 @@ class _TopSoldPageState extends State<TopSoldPage> {
                         final Map<String, dynamic> game =
                             Map<String, dynamic>.from(r['game'] ?? const {});
 
-                        final String title = _safeStr(product['name']).isEmpty
-                            ? 'Produit #${_safeStr(r['product_id'])}'
-                            : _safeStr(product['name']);
+                        final String title =
+                            _safeStr(r['product_name']).isNotEmpty
+                                ? _safeStr(r['product_name'])
+                                : (_safeStr(product['name']).isNotEmpty
+                                    ? _safeStr(product['name'])
+                                    : 'Produit #${_safeStr(r['product_id'])}');
 
-                        final String gameLbl = _safeStr(game['label']);
+                        final String gameLbl =
+                            _safeStr(r['game_label']).isNotEmpty
+                                ? _safeStr(r['game_label'])
+                                : _safeStr(game['label']);
                         final String sku = _safeStr(product['sku']);
                         final String subtitle = [gameLbl, sku]
                             .where((e) => e.isNotEmpty)
@@ -468,7 +566,7 @@ class _TopSoldPageState extends State<TopSoldPage> {
                             (_asNum(r['grading_fees']) ?? 0);
                         final num? salePrice = _asNum(r['sale_price']);
 
-                        // ======= Tuile tolérante =======
+                        // ======= Tuile =======
                         return Card(
                           elevation: 0.8,
                           shadowColor: kAccentA.withOpacity(.12),
@@ -477,45 +575,22 @@ class _TopSoldPageState extends State<TopSoldPage> {
                           child: InkWell(
                             borderRadius: BorderRadius.circular(14),
                             onTap: () {
-                              // On passe la CLÉ STRICTE + statut pour ouvrir Détails au bon groupe
-                              final payload = <String, dynamic>{
-                                for (final k in _strictLineKeys) k: r[k],
-                                'status': status,
-                                // petits extras utiles (non requis par la clé)
+                              // ✅ MET CE BLOC À LA PLACE (même logique que MainInventory) :
+                              widget.onOpenDetails?.call({
                                 'product_id': r['product_id'],
-                                'game_id': r['game_id'],
+                                'status': status,
                                 'currency': r['currency'],
-                                'photo_url': r['photo_url'],
-                              };
-                              widget.onOpenDetails?.call(payload);
+                                'unit_cost': r['unit_cost'],
+                                'sale_price': r['sale_price'],
+                              });
                             },
                             child: Padding(
                               padding: const EdgeInsets.all(12),
                               child: Row(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  // thumb robuste
-                                  ClipRRect(
-                                    borderRadius: BorderRadius.circular(10),
-                                    child: SizedBox(
-                                      width: 140,
-                                      height: 94,
-                                      child: Image.network(
-                                        (photoUrl.isEmpty
-                                            ? 'https://placehold.co/600x400?text=No+Photo'
-                                            : photoUrl),
-                                        fit: BoxFit.cover,
-                                        errorBuilder: (_, __, ___) {
-                                          return Container(
-                                            color: Colors.black12,
-                                            alignment: Alignment.center,
-                                            child:
-                                                const Icon(Icons.broken_image),
-                                          );
-                                        },
-                                      ),
-                                    ),
-                                  ),
+                                  // VIGNETTE FORMAT "CARTE"
+                                  _cardThumb(photoUrl),
                                   const SizedBox(width: 12),
 
                                   // infos

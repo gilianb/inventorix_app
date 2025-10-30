@@ -16,6 +16,10 @@ import 'package:inventorix_app/collection/collection_page.dart';
 
 import '../top_sold/top_sold_page.dart'; // ⬅️ Top Sold tab
 
+// 🔁 Multi-org
+import 'package:inventorix_app/org/organization_models.dart';
+import 'package:inventorix_app/org/organizations_page.dart';
+
 /// Accents (UI only)
 const kAccentA = Color(0xFF6C5CE7); // violet
 const kAccentB = Color(0xFF00D1B2); // menthe
@@ -44,7 +48,9 @@ const Map<String, List<String>> kGroupToStatuses = {
 };
 
 class MainInventoryPage extends StatefulWidget {
-  const MainInventoryPage({super.key});
+  const MainInventoryPage({super.key, required this.orgId});
+  final String orgId;
+
   @override
   State<MainInventoryPage> createState() => _MainInventoryPageState();
 }
@@ -148,11 +154,16 @@ class _MainInventoryPageState extends State<MainInventoryPage>
         'total_cost, total_cost_with_fees, realized_revenue, '
         'sum_shipping_fees, sum_commission_fees, sum_grading_fees, '
         // ✅ nouveaux champs pour la séparation par coût unitaire
-        'unit_cost, unit_fees';
+        'unit_cost, unit_fees, '
+        // (optionnel) utile au debug
+        'org_id';
 
     // Base query
-    var query =
-        _sb.from('v_items_by_status').select(cols).eq('type', _typeFilter);
+    var query = _sb
+        .from('v_items_by_status')
+        .select(cols)
+        .eq('type', _typeFilter)
+        .eq('org_id', widget.orgId); // ← IMPORTANT : filtre org
 
     // NEW: filtre période sur purchase_date
     final after = _purchaseDateStart();
@@ -239,8 +250,9 @@ class _MainInventoryPageState extends State<MainInventoryPage>
   void _openDetails(Map<String, dynamic> line) async {
     final changed = await Navigator.of(context).push<bool>(
       MaterialPageRoute(
-          builder: (_) =>
-              GroupDetailsPage(group: Map<String, dynamic>.from(line))),
+        builder: (_) =>
+            GroupDetailsPage(group: Map<String, dynamic>.from(line)),
+      ),
     );
     if (changed == true) {
       _refresh();
@@ -342,7 +354,10 @@ class _MainInventoryPageState extends State<MainInventoryPage>
 
     // Construit la requête avec normalisation NULL/vides et dates
     Future<List<int>> runQuery(Set<String> keys) async {
-      var q = _sb.from('item').select('id');
+      var q = _sb
+          .from('item')
+          .select('id')
+          .eq('org_id', widget.orgId); // ← filtre org
 
       for (final k in keys) {
         if (!line.containsKey(k)) continue;
@@ -413,8 +428,16 @@ class _MainInventoryPageState extends State<MainInventoryPage>
       }
 
       final idsCsv = '(${ids.join(",")})';
-      await _sb.from('movement').delete().filter('item_id', 'in', idsCsv);
-      await _sb.from('item').delete().filter('id', 'in', idsCsv);
+      await _sb
+          .from('movement')
+          .delete()
+          .eq('org_id', widget.orgId) // ← sécurité org
+          .filter('item_id', 'in', idsCsv);
+      await _sb
+          .from('item')
+          .delete()
+          .eq('org_id', widget.orgId) // ← sécurité org
+          .filter('id', 'in', idsCsv);
 
       _snack('Ligne supprimée (${ids.length} item(s) + mouvements).');
       _refresh();
@@ -580,6 +603,25 @@ class _MainInventoryPageState extends State<MainInventoryPage>
     return Scaffold(
       appBar: AppBar(
         title: const Text('Inventorix'),
+        actions: [
+          IconButton(
+            tooltip: 'Changer d’organisation',
+            icon: const Icon(Icons.switch_account),
+            onPressed: () async {
+              await OrgPrefs.clear();
+              if (!mounted) return;
+              final picked = await Navigator.of(context).push<String>(
+                MaterialPageRoute(builder: (_) => const OrganizationsPage()),
+              );
+              if (picked != null && mounted) {
+                Navigator.of(context).pushReplacement(
+                  MaterialPageRoute(
+                      builder: (_) => MainInventoryPage(orgId: picked)),
+                );
+              }
+            },
+          ),
+        ],
         bottom: TabBar(
           controller: _tabCtrl,
           tabs: const [
@@ -604,20 +646,18 @@ class _MainInventoryPageState extends State<MainInventoryPage>
           // Onglet 0 : Inventaire
           inventoryBody,
           // Onglet 1 : Top Sold
+// APRÈS
           TopSoldPage(
-            onOpenDetails: (itemRow) {
-              final status = (itemRow['status'] ?? 'sold').toString();
-              final productId = itemRow['product_id'] as int?;
-              if (productId != null) {
-                _openDetails({
-                  'product_id': productId,
-                  'status': status,
-                  'currency': itemRow['currency'],
-                  'photo_url': itemRow['photo_url'],
-                });
-              }
+            orgId: widget.orgId, // ✅ passe l’org à TopSold
+            onOpenDetails: (payload) {
+              // ✅ ne jette rien : on transmet TOUT ce que TopSold a construit
+              _openDetails({
+                'org_id': widget.orgId, // 🔐 utile pour les requêtes Détails
+                ...payload,
+              });
             },
           ),
+
           // Onglet 2 : Collection
           const CollectionPage(),
         ],
@@ -631,8 +671,17 @@ class _MainInventoryPageState extends State<MainInventoryPage>
             backgroundColor: kAccentA,
             foregroundColor: Colors.white,
             onPressed: () async {
+              final orgId = widget.orgId;
+              if (orgId.isEmpty) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                      content: Text('Aucune organisation sélectionnée.')),
+                );
+                return;
+              }
+
               final changed = await Navigator.of(context).push<bool>(
-                MaterialPageRoute(builder: (_) => const NewStockPage()),
+                MaterialPageRoute(builder: (_) => NewStockPage(orgId: orgId)),
               );
               if (changed == true) _refresh();
             },

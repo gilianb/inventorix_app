@@ -33,6 +33,7 @@ const kAccentC = Color(0xFFFFB545);
 
 /// Colonnes exposées par la vue (pour fetch viewRow strict)
 const List<String> kViewCols = [
+  'org_id', // ← 🔐 ajouté
   'product_id',
   'game_id',
   'type',
@@ -81,6 +82,7 @@ const List<String> kViewCols = [
 
 /// Clef de regroupement (identique à MainInventoryPage)
 const Set<String> kStrictLineKeys = {
+  'org_id', // ← 🔐 ajouté
   'product_id',
   'game_id',
   'type',
@@ -117,8 +119,11 @@ const Set<String> kVolatileKeys = {
 };
 
 class GroupDetailsPage extends StatefulWidget {
-  const GroupDetailsPage({super.key, required this.group});
+  const GroupDetailsPage({super.key, required this.group, this.orgId});
   final Map<String, dynamic> group;
+
+  /// Optionnel : forcer l’org courante (sinon on lit group['org_id'])
+  final String? orgId;
 
   @override
   State<GroupDetailsPage> createState() => _GroupDetailsPageState();
@@ -138,6 +143,11 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
   bool _dirty = false; // indique si modification effectuée
 
   Map<String, dynamic> get _initial => widget.group;
+
+  String? get _orgIdFromContext {
+    final v = (widget.orgId ?? widget.group['org_id'])?.toString();
+    return (v != null && v.isNotEmpty) ? v : null;
+  }
 
   String get _title =>
       (_viewRow?['product_name'] ?? _initial['product_name'] ?? '').toString();
@@ -162,10 +172,15 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
   Future<void> _loadAll() async {
     setState(() => _loading = true);
     try {
+      final orgId = _orgIdFromContext;
+
       // 1) Items stricts
       var items = await DetailsService.fetchItemsByLineKey(
         _sb,
-        widget.group,
+        {
+          if (orgId != null) 'org_id': orgId,
+          ...widget.group,
+        },
         kStrictLineKeys,
         ignoreKeys: const {},
       );
@@ -174,7 +189,10 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
       if (items.isEmpty) {
         items = await DetailsService.fetchItemsByLineKey(
           _sb,
-          widget.group,
+          {
+            if (orgId != null) 'org_id': orgId,
+            ...widget.group,
+          },
           kStrictLineKeys,
           ignoreKeys: kVolatileKeys,
         );
@@ -197,19 +215,26 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
         _localStatusFilter = detectedStatus;
       }
 
-      // ligne vue exacte
-      final viewRow =
-          await DetailsService.fetchViewRow(_sb, widget.group, kViewCols) ??
-              widget.group;
+      // ligne vue exacte (filtrée org_id si dispo)
+      final viewRow = await DetailsService.fetchViewRow(
+            _sb,
+            {
+              if (orgId != null) 'org_id': orgId,
+              ...widget.group,
+            },
+            kViewCols,
+          ) ??
+          widget.group;
 
       // mouvements
-      final mvts = await DetailsService.fetchMovementsFor(
-          _sb, items.map((e) => e['id'] as int).toList());
-
+      final hist = await DetailsService.fetchHistoryForItems(
+        _sb,
+        items.map((e) => e['id'] as int).toList(),
+      );
       setState(() {
         _viewRow = viewRow;
         _items = items;
-        _movements = mvts;
+        _movements = hist;
       });
     } catch (e) {
       _snack('Erreur chargement détails : $e');
@@ -337,7 +362,13 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
                       status: status,
                       qty: qtyStatus,
                       margin: headerMargin,
+                      historyEvents: _movements, // 👈 fourni au popover
+                      historyTitle:
+                          'Journal des sauvegardes', // (optionnel) comme sur ta capture
+                      historyCount:
+                          _movements.length, // (optionnel) pour le badge
                     ),
+
                     const SizedBox(height: 12),
                     LayoutBuilder(
                       builder: (ctx, cons) {
@@ -484,7 +515,7 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
                                 .textTheme
                                 .titleMedium
                                 ?.copyWith(fontWeight: FontWeight.w700)),
-                        const SizedBox(width: 8),
+                        const SizedBox(height: 8),
                         IconButton(
                           tooltip: _showHistory ? 'Masquer' : 'Afficher',
                           icon: Icon(_showHistory
