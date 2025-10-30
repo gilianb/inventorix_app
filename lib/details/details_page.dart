@@ -224,9 +224,12 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
         return;
       }
 
-      // Filtre de statut (recalculé à partir des items actualisés)
-      final detectedStatus =
-          (widget.group['status'] ?? items.first['status'] ?? '').toString();
+      // ✅ Filtre de statut basé en priorité sur le statut RÉEL des items (après éventuelle édition)
+      //    Fallback sur le statut passé via le groupe si la liste est vide.
+      final detectedStatus = items.isNotEmpty
+          ? (items.first['status'] ?? '').toString()
+          : ((widget.group['status'] ?? '').toString());
+
       if ((_localStatusFilter ?? '').isEmpty ||
           _localStatusFilter != detectedStatus) {
         _localStatusFilter = detectedStatus;
@@ -253,6 +256,15 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
         _viewRow = viewRow;
         _items = items;
         _movements = hist;
+
+        // ✅ Sécurité : si le filtre courant ne matche aucun item,
+        //    on rebascule automatiquement sur le premier statut disponible.
+        if (_items.isNotEmpty &&
+            !_items.any((e) =>
+                (e['status'] ?? '').toString() ==
+                ((_localStatusFilter ?? '').toString()))) {
+          _localStatusFilter = (_items.first['status'] ?? '').toString();
+        }
       });
     } catch (e) {
       _snack('Erreur chargement détails : $e');
@@ -290,7 +302,7 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
 
     if (changed == true) {
       _dirty = true;
-      await _loadAll();
+      await _loadAll(); // re-sync + met à jour _localStatusFilter
     }
   }
 
@@ -299,6 +311,7 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
     final f = (_localStatusFilter ?? '').toString();
     if (f.isEmpty) return _items;
     return _items.where((e) => (e['status'] ?? '') == f).toList();
+    // (si aucun item ne matche, la sécurité dans _loadAll remettra un statut valide au prochain refresh)
   }
 
   @override

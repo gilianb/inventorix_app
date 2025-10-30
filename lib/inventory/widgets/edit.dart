@@ -68,7 +68,7 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
   // appliquer sur les items les plus anciens (id ASC) ou récents (id DESC)
   bool _oldestFirst = true;
 
-  // ======= CONTRÔLEURS ======= (plus de cases à cocher)
+  // ======= CONTRÔLEURS =======
   String _newStatus = '';
   final _gradeIdCtrl = TextEditingController();
   final _gradingNoteCtrl = TextEditingController();
@@ -123,7 +123,7 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
 
   Map<String, dynamic> get _sample => (widget.initialSample ?? const {});
 
-  // Helpers de coercition (assure une valeur valide dans les dropdowns)
+  // Helpers de coercition
   String _coerceString(String? value, List<String> allowed, String fallback) {
     final v = (value ?? '').trim();
     return allowed.contains(v) ? v : fallback;
@@ -147,7 +147,6 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
     _countToEdit = widget.availableQty.clamp(1, 999999);
     final s = _sample;
 
-    // Coercition pour éviter des valeurs hors liste
     _newStatus = _coerceString(widget.status, kAllStatuses, kAllStatuses.first);
 
     _gradeIdCtrl.text = (s['grade_id'] ?? '').toString();
@@ -189,7 +188,6 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
                 (e) => Map<String, dynamic>.from(e as Map))
             .toList();
 
-        // Si le game_id du sample n'existe plus en DB, on l'injecte comme placeholder
         final sampleGameId = _asInt(_sample['game_id']);
         if (sampleGameId != null && !list.any((g) => g['id'] == sampleGameId)) {
           list.insert(0, {
@@ -306,21 +304,18 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
   Map<String, dynamic> _buildItemUpdates() {
     final m = <String, dynamic>{};
 
-    // Text -> NULL si vide (si différent)
     void putText(String key, TextEditingController c) {
       if (_changedText(key, c.text)) {
         m[key] = c.text.trim().isEmpty ? null : c.text.trim();
       }
     }
 
-    // Num -> peut être NULL (effacé)
     void putNum(String key, TextEditingController c) {
       if (_changedNum(key, c.text)) {
         m[key] = _tryNum(c.text);
       }
     }
 
-    // Int -> peut être NULL
     void putInt(String key, TextEditingController c) {
       if (_changedInt(key, c.text)) {
         m[key] = _tryInt(c.text);
@@ -339,7 +334,7 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
     putText('notes', _notesCtrl);
     putText('photo_url', _photoUrlCtrl);
     putText('document_url', _documentUrlCtrl);
-    putNum('unit_cost', _unitCostCtrl); // 👈 ajout
+    putNum('unit_cost', _unitCostCtrl);
 
     // Nouveaux champs item
     if (_changedSimple('type', _newType)) m['type'] = _newType;
@@ -395,6 +390,106 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
     return m;
   }
 
+  // ===== FIX: Sélection d'IDs robuste & RLS-friendly =====
+  Future<List<int>> _collectIdsForEdit({
+    required Map<String, dynamic> sample,
+    required String status,
+    required int limitCount,
+    required bool oldestFirst,
+  }) async {
+    // Normalisation
+    dynamic norm(dynamic v) {
+      if (v == null) return null;
+      if (v is String && v.trim().isEmpty) return null; // '' -> NULL
+      return v;
+    }
+
+    String? dateStr(dynamic v) {
+      if (v == null) return null;
+      if (v is DateTime) return v.toIso8601String().split('T').first;
+      if (v is String) return v; // supposé déjà 'YYYY-MM-DD'
+      return v.toString();
+    }
+
+    Future<List<int>> runQuery(Set<String> keys) async {
+      var q = _sb.from('item').select('id');
+
+      // 🔐 org_id si disponible
+      final orgId = (sample['org_id']?.toString().isNotEmpty ?? false)
+          ? sample['org_id']
+          : null;
+      if (orgId != null) {
+        q = q.eq('org_id', orgId);
+      }
+
+      // Toujours filtrer par product_id connu
+      q = q.eq('product_id', widget.productId);
+
+      for (final k in keys) {
+        if (!sample.containsKey(k)) continue;
+        var v = norm(sample[k]);
+
+        if (v == null) {
+          q = q.filter(k, 'is', null);
+          continue;
+        }
+
+        if (k == 'purchase_date' || k == 'sale_date') {
+          final ds = dateStr(v);
+          if (ds == null) {
+            q = q.filter(k, 'is', null);
+          } else {
+            q = q.eq(k, ds);
+          }
+        } else {
+          q = q.eq(k, v);
+        }
+      }
+
+      // Statut de départ (le groupe cliqué)
+      q = q.eq('status', status);
+
+      final List<dynamic> raw =
+          await q.order('id', ascending: oldestFirst).limit(limitCount);
+
+      return raw
+          .map((e) => (e as Map)['id'])
+          .whereType<int>()
+          .toList(growable: false);
+    }
+
+    // 1) Clés STABLES (pas de champs volatiles ni unit_cost)
+    const primaryKeys = <String>{
+      'game_id',
+      'type',
+      'language',
+      'channel_id',
+      'purchase_date',
+      'currency',
+      'supplier_name',
+      'buyer_company',
+      'item_location',
+      'tracking',
+    };
+
+    // 2) Fallback (encore plus robuste)
+    const strongKeys = <String>{
+      'game_id',
+      'type',
+      'language',
+      'channel_id',
+      'purchase_date',
+      'supplier_name',
+      'buyer_company',
+    };
+
+    var ids = await runQuery(primaryKeys);
+    if (ids.isNotEmpty) return ids;
+
+    ids = await runQuery(strongKeys);
+    return ids;
+  }
+
   Future<void> _apply() async {
     final baseUpdates = _buildItemUpdates();
     final productUpdates = _buildProductUpdates();
@@ -409,47 +504,13 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
       final sample = Map<String, dynamic>.from(_sample)
         ..putIfAbsent('product_id', () => widget.productId);
 
-      // === 1) IDs strictement du même groupe (NULL = NULL) ===
-      PostgrestFilterBuilder idsQ = _sb.from('item').select('id');
-
-      const keys = <String>{
-        'product_id',
-        'game_id',
-        'type',
-        'language',
-        'purchase_date',
-        'currency',
-        'supplier_name',
-        'buyer_company',
-        'notes',
-        'grade_id',
-        'grading_note',
-        'grading_fees',
-        'sale_date',
-        'sale_price',
-        'tracking',
-        'photo_url',
-        'document_url',
-        'item_location',
-        'channel_id',
-        'unit_cost', // 👈 ajout
-      };
-
-      for (final k in keys) {
-        if (!sample.containsKey(k)) continue;
-        final v = sample[k];
-        if (v == null) {
-          idsQ = idsQ.filter(k, 'is', null);
-        } else {
-          idsQ = idsQ.eq(k, v);
-        }
-      }
-
-      idsQ = idsQ.eq('status', widget.status);
-
-      final idsRaw =
-          await idsQ.order('id', ascending: _oldestFirst).limit(_countToEdit);
-      final ids = idsRaw.map((e) => (e as Map)['id']).whereType<int>().toList();
+      // === FIX: on récupère les IDs du groupe avec la méthode robuste ===
+      final ids = await _collectIdsForEdit(
+        sample: sample,
+        status: widget.status,
+        limitCount: _countToEdit,
+        oldestFirst: _oldestFirst,
+      );
 
       if (ids.isEmpty) {
         _snack("Aucun item trouvé à mettre à jour pour CETTE ligne.");
