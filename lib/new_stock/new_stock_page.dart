@@ -1,9 +1,4 @@
-// ignore_for_file: use_build_context_synchronously
-/*
-Orchestrateur de la page. Contient l’état (controllers,
- validations, _save()), le chargement des jeux, et assemble les 
-sous-widgets (sections) + bouton “Créer le stock”.*/
-
+// new_stock_page.dart (extrait complet du fichier, modifications dans _save() uniquement)
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -186,6 +181,14 @@ class _NewStockPageState extends State<NewStockPage> {
       return;
     }
 
+    // Frais saisis (TOTaux) → convertis en frais par unité
+    final double? shippingTotal = _num(_shippingFeesCtrl);
+    final double? commissionTotal = _num(_commissionFeesCtrl);
+    final double? shippingPerUnit =
+        (shippingTotal != null) ? (shippingTotal / qty) : null;
+    final double? commissionPerUnit =
+        (commissionTotal != null) ? (commissionTotal / qty) : null;
+
     final mustHaveEstimated =
         _initStatus == 'listed' || _initStatus == 'awaiting_payment';
     if (mustHaveEstimated && (estPrice == null || estPrice < 0)) {
@@ -239,14 +242,9 @@ class _NewStockPageState extends State<NewStockPage> {
           itemLocation: _itemLocationCtrl.text.trim().isEmpty
               ? null
               : _itemLocationCtrl.text.trim(),
-          shippingFees: _shippingFeesCtrl.text.trim().isEmpty
-              ? null
-              : double.tryParse(
-                  _shippingFeesCtrl.text.trim().replaceAll(',', '.')),
-          commissionFees: _commissionFeesCtrl.text.trim().isEmpty
-              ? null
-              : double.tryParse(
-                  _commissionFeesCtrl.text.trim().replaceAll(',', '.')),
+          // ⬇️ on passe la valeur PAR UNITÉ
+          shippingFees: shippingPerUnit,
+          commissionFees: commissionPerUnit,
           paymentType: _paymentTypeCtrl.text.trim().isEmpty
               ? null
               : _paymentTypeCtrl.text.trim(),
@@ -280,14 +278,9 @@ class _NewStockPageState extends State<NewStockPage> {
           gradingNote: _gradingNoteCtrl.text.trim(),
           gradingFees: _num(_gradingFeesCtrl),
           itemLocation: _itemLocationCtrl.text.trim(),
-          shippingFees: _shippingFeesCtrl.text.trim().isEmpty
-              ? null
-              : double.tryParse(
-                  _shippingFeesCtrl.text.trim().replaceAll(',', '.')),
-          commissionFees: _commissionFeesCtrl.text.trim().isEmpty
-              ? null
-              : double.tryParse(
-                  _commissionFeesCtrl.text.trim().replaceAll(',', '.')),
+          // ⬇️ on passe la valeur PAR UNITÉ
+          shippingFees: shippingPerUnit,
+          commissionFees: commissionPerUnit,
           paymentType: _paymentTypeCtrl.text.trim(),
           buyerInfos: _buyerInfosCtrl.text.trim(),
           salePrice: _salePriceCtrl.text.trim().isEmpty

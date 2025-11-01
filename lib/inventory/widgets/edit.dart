@@ -1,3 +1,4 @@
+// edit.dart (extrait complet du fichier, avec la partie _apply modifiée)
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'storage_upload_tile.dart';
@@ -340,12 +341,15 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
     if (_changedSimple('type', _newType)) m['type'] = _newType;
     if (_changedSimple('language', _language)) m['language'] = _language;
     if (_changedSimple('game_id', _gameId)) m['game_id'] = _gameId;
+
+    // ⬇️ On laisse la saisie brute ici (total), la division se fera dans _apply()
     if (_changedNum('shipping_fees', _shippingFeesCtrl.text)) {
       m['shipping_fees'] = _tryNum(_shippingFeesCtrl.text);
     }
     if (_changedNum('commission_fees', _commissionFeesCtrl.text)) {
       m['commission_fees'] = _tryNum(_commissionFeesCtrl.text);
     }
+
     if (_changedText('payment_type', _paymentTypeCtrl.text)) {
       m['payment_type'] = _paymentTypeCtrl.text.trim().isEmpty
           ? null
@@ -390,51 +394,63 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
     return m;
   }
 
-  // ===== FIX: Sélection d'IDs robuste & RLS-friendly =====
+  // ===== FIX group_sig-first =====
   Future<List<int>> _collectIdsForEdit({
     required Map<String, dynamic> sample,
     required String status,
     required int limitCount,
     required bool oldestFirst,
   }) async {
-    // Normalisation
+    final orgId = (sample['org_id']?.toString().isNotEmpty ?? false)
+        ? sample['org_id']
+        : null;
+    final String? groupSig =
+        (sample['group_sig']?.toString().isNotEmpty ?? false)
+            ? sample['group_sig'].toString()
+            : null;
+
+    // 1) Chemin strict par group_sig si dispo
+    if (groupSig != null) {
+      var q = _sb
+          .from('item')
+          .select('id')
+          .eq('group_sig', groupSig)
+          .eq('status', status);
+      if (orgId != null) q = q.eq('org_id', orgId);
+      final List<dynamic> raw =
+          await q.order('id', ascending: oldestFirst).limit(limitCount);
+      return raw
+          .map((e) => (e as Map)['id'])
+          .whereType<int>()
+          .toList(growable: false);
+    }
+
+    // 2) Fallback existant (si on arrive ici sans group_sig)
     dynamic norm(dynamic v) {
       if (v == null) return null;
-      if (v is String && v.trim().isEmpty) return null; // '' -> NULL
+      if (v is String && v.trim().isEmpty) return null;
       return v;
     }
 
     String? dateStr(dynamic v) {
       if (v == null) return null;
       if (v is DateTime) return v.toIso8601String().split('T').first;
-      if (v is String) return v; // supposé déjà 'YYYY-MM-DD'
+      if (v is String) return v;
       return v.toString();
     }
 
     Future<List<int>> runQuery(Set<String> keys) async {
       var q = _sb.from('item').select('id');
 
-      // 🔐 org_id si disponible
-      final orgId = (sample['org_id']?.toString().isNotEmpty ?? false)
-          ? sample['org_id']
-          : null;
-      if (orgId != null) {
-        q = q.eq('org_id', orgId);
-      }
-
-      // Toujours filtrer par product_id connu
+      if (orgId != null) q = q.eq('org_id', orgId);
       q = q.eq('product_id', widget.productId);
 
       for (final k in keys) {
         if (!sample.containsKey(k)) continue;
         var v = norm(sample[k]);
-
         if (v == null) {
           q = q.filter(k, 'is', null);
-          continue;
-        }
-
-        if (k == 'purchase_date' || k == 'sale_date') {
+        } else if (k == 'purchase_date' || k == 'sale_date') {
           final ds = dateStr(v);
           if (ds == null) {
             q = q.filter(k, 'is', null);
@@ -446,19 +462,15 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
         }
       }
 
-      // Statut de départ (le groupe cliqué)
       q = q.eq('status', status);
-
       final List<dynamic> raw =
           await q.order('id', ascending: oldestFirst).limit(limitCount);
-
       return raw
           .map((e) => (e as Map)['id'])
           .whereType<int>()
           .toList(growable: false);
     }
 
-    // 1) Clés STABLES (pas de champs volatiles ni unit_cost)
     const primaryKeys = <String>{
       'game_id',
       'type',
@@ -472,7 +484,6 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
       'tracking',
     };
 
-    // 2) Fallback (encore plus robuste)
     const strongKeys = <String>{
       'game_id',
       'type',
@@ -504,7 +515,7 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
       final sample = Map<String, dynamic>.from(_sample)
         ..putIfAbsent('product_id', () => widget.productId);
 
-      // === FIX: on récupère les IDs du groupe avec la méthode robuste ===
+      // 1) IDs à mettre à jour
       final ids = await _collectIdsForEdit(
         sample: sample,
         status: widget.status,
@@ -517,10 +528,24 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
         return;
       }
 
-      // === 2) Apply updates UNIQUEMENT aux IDs ===
+      // 2) Conversion des frais "total" -> "par unité" selon le nombre réel d'IDs
+      final updates = Map<String, dynamic>.from(baseUpdates);
+      final n = ids.length;
+      if (n > 0) {
+        if (updates.containsKey('shipping_fees')) {
+          final v = updates['shipping_fees'];
+          if (v is num) updates['shipping_fees'] = v / n;
+        }
+        if (updates.containsKey('commission_fees')) {
+          final v = updates['commission_fees'];
+          if (v is num) updates['commission_fees'] = v / n;
+        }
+      }
+
+      // 3) Apply updates UNIQUEMENT aux IDs
       final idsCsv = '(${ids.join(",")})';
-      if (baseUpdates.isNotEmpty) {
-        await _sb.from('item').update(baseUpdates).filter('id', 'in', idsCsv);
+      if (updates.isNotEmpty) {
+        await _sb.from('item').update(updates).filter('id', 'in', idsCsv);
       }
 
       if (productUpdates.isNotEmpty) {

@@ -240,12 +240,13 @@ class InfoExtrasCard extends StatelessWidget {
       _kv(context, 'Created at', _date(data['created_at'])),
       _kvLink(context, 'Photo URL', data['photo_url']),
       _kvLink(context, 'Document URL', data['document_url']),
-      _kv(context, 'Shipping fees', _money(data['shipping_fees'], currency)),
-      _kv(context, 'Commission fees',
+      _kv(context, 'Shipping fees per unit',
+          _money(data['shipping_fees'], currency)),
+      _kv(context, 'Commission fees per unit',
           _money(data['commission_fees'], currency)),
       _kv(context, 'Payment type', _txt(data['payment_type'])),
       _kv(context, 'Buyer infos', _txt(data['buyer_infos'])),
-      _kvW(context, 'Margin (value)',
+      _kvW(context, 'Margin (value per unit)',
           _marginValueChip(valueMargin, currency, pctDerived)),
     ];
 

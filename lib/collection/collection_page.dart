@@ -71,8 +71,8 @@ class _CollectionPageState extends State<CollectionPage> {
   Future<void> _refresh() async {
     setState(() => _loading = true);
     try {
-      // 1) Groupes pour le tableau
-      _groups = await _fetchGroupedFromView();
+      // 1) Groupes pour le tableau (une ligne = un group_sig exact)
+      _groups = await _fetchGroupsFromView();
       // 2) Items bruts pour le KPI FinanceOverview
       _kpiItems = await _fetchCollectionItemsForKpis();
     } catch (e) {
@@ -82,28 +82,27 @@ class _CollectionPageState extends State<CollectionPage> {
     }
   }
 
-  /// Récupère les groupes depuis la vue stricte v_items_by_status
-  /// + applique les filtres “search” et “game” (comme la page principale)
-  Future<List<Map<String, dynamic>>> _fetchGroupedFromView() async {
-    const cols =
-        // dimensions
-        'org_id, product_id, game_id, type, language, '
-        'product_name, game_code, game_label, '
-        'purchase_date, currency, '
-        // champs homogènes
-        'supplier_name, buyer_company, notes, grade_id, grading_note, sale_date, sale_price, '
-        'tracking, photo_url, document_url, estimated_price, sum_estimated_price, item_location, channel_id, '
-        'payment_type, buyer_infos, '
-        // agrégats
-        'qty_total, '
-        'qty_ordered, qty_in_transit, qty_paid, qty_received, '
-        'qty_sent_to_grader, qty_at_grader, qty_graded, '
-        'qty_listed, qty_awaiting_payment, qty_sold, qty_shipped, qty_finalized, qty_collection, '
-        // totaux coûts + KPI
-        'total_cost, total_cost_with_fees, realized_revenue, '
-        'sum_shipping_fees, sum_commission_fees, sum_grading_fees';
+  /// Lit la vue stricte v_item_groups (1 ligne = 1 group_sig) en ne gardant que status='collection'
+  /// + hydratation game_label/game_code depuis la table games
+  Future<List<Map<String, dynamic>>> _fetchGroupsFromView() async {
+    // Colonnes exposées par v_item_groups (suivant la définition envoyée)
+    const cols = '''
+      group_sig, org_id, type, status,
+      product_id, product_name, game_id, language,
+      purchase_date, currency,
+      supplier_name, buyer_company, notes,
+      grade_id, grading_note, sale_date, sale_price, tracking, photo_url, document_url,
+      estimated_price, item_location, channel_id, payment_type, buyer_infos,
+      unit_cost, unit_fees,
+      qty_status, total_cost_with_fees,
+      sum_shipping_fees, sum_commission_fees, sum_grading_fees
+    ''';
 
-    var q = _sb.from('v_items_by_status').select(cols).eq('type', _typeFilter);
+    var q = _sb
+        .from('v_item_groups')
+        .select(cols)
+        .eq('type', _typeFilter)
+        .eq('status', 'collection');
 
     // 🔐 filtre org si fourni
     if ((widget.orgId ?? '').isNotEmpty) {
@@ -116,6 +115,40 @@ class _CollectionPageState extends State<CollectionPage> {
     var rows = raw
         .map<Map<String, dynamic>>((e) => Map<String, dynamic>.from(e as Map))
         .toList();
+
+    // ===== Hydrate game_label / game_code (la vue n'expose que game_id) =====
+    final gameIds = rows
+        .map((r) => r['game_id'])
+        .where((v) => v != null)
+        .toSet()
+        .cast<int>()
+        .toList();
+
+    Map<int, Map<String, dynamic>> gamesById = {};
+    if (gameIds.isNotEmpty) {
+      final gs = await _sb
+          .from('games')
+          .select('id, code, label')
+          .inFilter('id', gameIds);
+      final list = gs
+          .map<Map<String, dynamic>>((e) => Map<String, dynamic>.from(e as Map))
+          .toList();
+      for (final g in list) {
+        gamesById[g['id'] as int] = g;
+      }
+    }
+
+    rows = rows.map((r) {
+      final gid = r['game_id'] as int?;
+      final g = gid != null ? gamesById[gid] : null;
+      return {
+        ...r,
+        'game_label': g?['label'] ?? '', // requis par le tableau / filtres
+        'game_code': g?['code'] ?? '',
+        // compat: le tableau s’attend à posséder 'qty_status' (ok),
+        // et n’a plus besoin de qty_collection car status est déjà fixé à 'collection'
+      };
+    }).toList();
 
     // filtre texte local (nom produit / langue / jeu / fournisseur)
     final qtxt = _searchCtrl.text.trim().toLowerCase();
@@ -136,6 +169,9 @@ class _CollectionPageState extends State<CollectionPage> {
     if ((_gameFilter ?? '').isNotEmpty) {
       rows = rows.where((r) => (r['game_label'] ?? '') == _gameFilter).toList();
     }
+
+    // ✅ forcer le champ 'status' pour le tableau (déjà 'collection' mais on s’assure)
+    rows = rows.map((r) => {...r, 'status': 'collection'}).toList();
 
     return rows;
   }
@@ -186,22 +222,6 @@ class _CollectionPageState extends State<CollectionPage> {
     }
   }
 
-  // Explose uniquement la collection pour le tableau
-  List<Map<String, dynamic>> _collectionLines() {
-    final out = <Map<String, dynamic>>[];
-    for (final r in _groups) {
-      final q = (r['qty_collection'] as int?) ?? 0;
-      if (q > 0) {
-        out.add({
-          ...r,
-          'status': 'collection',
-          'qty_status': q,
-        });
-      }
-    }
-    return out;
-  }
-
   void _openDetails(Map<String, dynamic> line) async {
     final changed = await Navigator.of(context).push<bool>(
       MaterialPageRoute(
@@ -230,7 +250,7 @@ class _CollectionPageState extends State<CollectionPage> {
       productId: productId,
       status: status,
       availableQty: qty,
-      initialSample: line,
+      initialSample: line, // ← contient group_sig
     );
 
     if (changed == true) {
@@ -272,8 +292,32 @@ class _CollectionPageState extends State<CollectionPage> {
   }
 
   /// Récupère les IDs d'items appartenant STRICTEMENT à la "ligne"
+  /// Chemin rapide par group_sig si dispo, sinon fallback par clés.
   Future<List<int>> _collectItemIdsForLine(Map<String, dynamic> line) async {
-    // --- Helpers de normalisation ---
+    final String? groupSig = (line['group_sig']?.toString().isNotEmpty ?? false)
+        ? line['group_sig'].toString()
+        : null;
+
+    // 🔐 filtre org si fourni
+    final Object? orgId =
+        ((widget.orgId ?? '').isNotEmpty) ? widget.orgId as Object : null;
+
+    if (groupSig != null) {
+      var q = _sb
+          .from('item')
+          .select('id')
+          .eq('group_sig', groupSig)
+          .eq('status', (line['status'] ?? '').toString());
+      if (orgId != null) q = q.eq('org_id', orgId);
+      final List<dynamic> raw =
+          await q.order('id', ascending: true).limit(20000);
+      return raw
+          .map((e) => (e as Map)['id'])
+          .whereType<int>()
+          .toList(growable: false);
+    }
+
+    // --- Fallback de normalisation ---
     dynamic norm(dynamic v) {
       if (v == null) return null;
       if (v is String && v.trim().isEmpty) return null; // '' -> NULL
@@ -319,10 +363,7 @@ class _CollectionPageState extends State<CollectionPage> {
     Future<List<int>> runQuery(Set<String> keys) async {
       var q = _sb.from('item').select('id');
 
-      // 🔐 filtre org_id
-      if ((widget.orgId ?? '').isNotEmpty) {
-        q = q.eq('org_id', widget.orgId as Object);
-      }
+      if (orgId != null) q = q.eq('org_id', orgId);
 
       for (final k in keys) {
         if (!line.containsKey(k)) continue;
@@ -415,7 +456,7 @@ class _CollectionPageState extends State<CollectionPage> {
 
   @override
   Widget build(BuildContext context) {
-    final lines = _collectionLines();
+    final lines = _groups; // ✅ plus d’explosion : 1 ligne = 1 group_sig
 
     // jeux distincts pour le dropdown (comme la page principale)
     final gamesForFilter = _groups

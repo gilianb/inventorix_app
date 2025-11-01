@@ -34,9 +34,9 @@ const kAccentA = Color(0xFF6C5CE7);
 const kAccentB = Color(0xFF00D1B2);
 const kAccentC = Color(0xFFFFB545);
 
-/// Colonnes exposées par la vue (pour fetch viewRow strict)
+/// Colonnes exposées par l’ancienne vue (fallback uniquement)
 const List<String> kViewCols = [
-  'org_id', // ← 🔐 ajouté
+  'org_id',
   'product_id',
   'game_id',
   'type',
@@ -83,9 +83,9 @@ const List<String> kViewCols = [
   'sum_grading_fees',
 ];
 
-/// Clef de regroupement (identique à MainInventoryPage)
+/// Clés “strictes” (fallback legacy)
 const Set<String> kStrictLineKeys = {
-  'org_id', // ← 🔐 ajouté
+  'org_id',
   'product_id',
   'game_id',
   'type',
@@ -136,11 +136,13 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
   final _sb = Supabase.instance.client;
 
   bool _loading = true;
-  Map<String, dynamic>? _viewRow; // ligne exacte depuis la vue
+  Map<String, dynamic>?
+      _viewRow; // ligne représentative (v_item_groups ou fallback)
   List<Map<String, dynamic>> _items = []; // items du groupe
   List<Map<String, dynamic>> _movements = []; // historique movements
 
-  String? _localStatusFilter; // filtre de statut
+  String?
+      _localStatusFilter; // filtre de statut (inutile en group_sig strict, mais conservé)
   bool _showItemsTable = true;
   bool _showHistory = true;
   bool _dirty = false; // indique si modification effectuée
@@ -149,6 +151,11 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
 
   String? get _orgIdFromContext {
     final v = (widget.orgId ?? widget.group['org_id'])?.toString();
+    return (v != null && v.isNotEmpty) ? v : null;
+  }
+
+  String? get _groupSig {
+    final v = widget.group['group_sig']?.toString();
     return (v != null && v.isNotEmpty) ? v : null;
   }
 
@@ -177,9 +184,131 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
     try {
       final orgId = _orgIdFromContext;
       final pid = (widget.group['product_id'] as int?);
+      final sig = _groupSig;
 
-      // ---------- Tier 1 : strict ----------
-      var items = await DetailsService.fetchItemsByLineKey(
+      List<Map<String, dynamic>> items = [];
+
+      if (sig != null && orgId != null) {
+        // ======== NOUVEAU CHEMIN PRINCIPAL: group_sig strict ========
+        // 1) Items du groupe strict (toutes colonnes égales → même signature)
+        const itemCols = [
+          'id',
+          'org_id',
+          'product_id',
+          'game_id',
+          'type',
+          'language',
+          'status',
+          'channel_id',
+          'purchase_date',
+          'currency',
+          'supplier_name',
+          'buyer_company',
+          'unit_cost',
+          'unit_fees',
+          'notes',
+          'grade_id',
+          'grading_note',
+          'grading_fees',
+          'sale_date',
+          'sale_price',
+          'tracking',
+          'photo_url',
+          'document_url',
+          'created_at',
+          'estimated_price',
+          'item_location',
+          'shipping_fees',
+          'commission_fees',
+          'payment_type',
+          'buyer_infos',
+          'marge',
+          'group_sig',
+        ];
+
+        final raw = await _sb
+            .from('item')
+            .select(itemCols.join(','))
+            .eq('org_id', orgId)
+            .eq('group_sig', sig)
+            .order('id', ascending: true);
+
+        items = List<Map<String, dynamic>>.from(
+          (raw as List).map((e) => Map<String, dynamic>.from(e as Map)),
+        );
+
+        // 2) ViewRow représentative depuis v_item_groups (si dispo)
+        Map<String, dynamic>? viewRow;
+        try {
+          final vr = await _sb
+              .from('v_item_groups')
+              .select('''group_sig, org_id, type, status,
+                     product_id, product_name, game_id, game_code, game_label,
+                     language, purchase_date, currency, supplier_name, buyer_company, notes,
+                     grade_id, grading_note, sale_date, sale_price, tracking, photo_url, document_url,
+                     estimated_price, item_location, channel_id, payment_type, buyer_infos,
+                     unit_cost, unit_fees,
+                     qty_status, total_cost_with_fees,
+                     sum_shipping_fees, sum_commission_fees, sum_grading_fees''')
+              .eq('org_id', orgId)
+              .eq('group_sig', sig)
+              // Tous les items du groupe ont le même status (inclus dans la sig), mais on fixe par prudence :
+              .eq(
+                  'status',
+                  (items.isNotEmpty
+                      ? items.first['status']
+                      : widget.group['status']))
+              .limit(1)
+              .maybeSingle();
+
+          if (vr != null) {
+            viewRow = Map<String, dynamic>.from(vr);
+          }
+        } catch (_) {
+          // ignore → on tombera sur le fallback viewRow ci-dessous
+        }
+
+        // Fallback viewRow: on reconstruit depuis le 1er item si la vue n’est pas dispo
+        viewRow ??= {
+          if (items.isNotEmpty) ...items.first,
+          // conserve certains champs passés depuis la liste (nom produit / labels)
+          ..._initial,
+        };
+
+        // Détection statut
+        final detectedStatus = items.isNotEmpty
+            ? (items.first['status'] ?? '').toString()
+            : ((widget.group['status'] ?? '').toString());
+        if ((_localStatusFilter ?? '').isEmpty ||
+            _localStatusFilter != detectedStatus) {
+          _localStatusFilter = detectedStatus;
+        }
+
+        // Historique
+        final hist = await DetailsService.fetchHistoryForItems(
+          _sb,
+          items.map((e) => e['id'] as int).toList(),
+        );
+
+        setState(() {
+          _viewRow = viewRow;
+          _items = items;
+          _movements = hist;
+
+          // Sécurité: si le filtre courant ne matche aucun item, on rebascule
+          if (_items.isNotEmpty &&
+              !_items.any((e) =>
+                  (e['status'] ?? '').toString() ==
+                  ((_localStatusFilter ?? '').toString()))) {
+            _localStatusFilter = (_items.first['status'] ?? '').toString();
+          }
+        });
+        return;
+      }
+
+      // ======== CHEMIN FALLBACK (legacy) : sans group_sig ========
+      // Tier 1 : strict par clés
+      items = await DetailsService.fetchItemsByLineKey(
         _sb,
         {
           if (orgId != null) 'org_id': orgId,
@@ -189,7 +318,7 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
         ignoreKeys: const {},
       );
 
-      // ---------- Tier 2 : doux (ignorer les clés volatiles) ----------
+      // Tier 2 : sans les volatiles
       if (items.isEmpty) {
         items = await DetailsService.fetchItemsByLineKey(
           _sb,
@@ -202,12 +331,10 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
         );
       }
 
-      // ---------- Tier 3 : ultra-robuste → par product_id seul ----------
+      // Tier 3 : par product_id seul
       if (items.isEmpty && pid != null) {
         final q = _sb.from('item').select('*').eq('product_id', pid);
-        if (orgId != null) {
-          q.eq('org_id', orgId);
-        }
+        if (orgId != null) q.eq('org_id', orgId);
         final rows = await q.order('created_at', ascending: true);
         items = (rows as List)
             .map<Map<String, dynamic>>(
@@ -216,7 +343,6 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
       }
 
       if (items.isEmpty) {
-        // Rien trouvé malgré Tier 3 : garder header, vider items/historique
         setState(() {
           _items = const [];
           _movements = const [];
@@ -224,8 +350,6 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
         return;
       }
 
-      // ✅ Filtre de statut basé en priorité sur le statut RÉEL des items (après éventuelle édition)
-      //    Fallback sur le statut passé via le groupe si la liste est vide.
       final detectedStatus = items.isNotEmpty
           ? (items.first['status'] ?? '').toString()
           : ((widget.group['status'] ?? '').toString());
@@ -235,7 +359,6 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
         _localStatusFilter = detectedStatus;
       }
 
-      // ViewRow : par product_id (+ org_id)
       final viewRow = await DetailsService.fetchViewRow(
             _sb,
             {
@@ -246,7 +369,6 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
           ) ??
           widget.group;
 
-      // Historique
       final hist = await DetailsService.fetchHistoryForItems(
         _sb,
         items.map((e) => e['id'] as int).toList(),
@@ -257,8 +379,6 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
         _items = items;
         _movements = hist;
 
-        // ✅ Sécurité : si le filtre courant ne matche aucun item,
-        //    on rebascule automatiquement sur le premier statut disponible.
         if (_items.isNotEmpty &&
             !_items.any((e) =>
                 (e['status'] ?? '').toString() ==
@@ -280,6 +400,7 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
     final curStatus =
         (_localStatusFilter ?? widget.group['status'] ?? '').toString();
 
+    // En group_sig strict, tous les items du groupe ont le même statut → ce count est OK
     final qty = _items.where((e) => (e['status'] ?? '') == curStatus).length;
     final productId =
         (_viewRow?['product_id'] ?? widget.group['product_id']) as int?;
@@ -297,12 +418,14 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
       initialSample: {
         ...?_viewRow,
         if (_items.isNotEmpty) ..._items.first,
+        if (_groupSig != null)
+          'group_sig': _groupSig, // au cas où tu l’utilises côté edit
       },
     );
 
     if (changed == true) {
       _dirty = true;
-      await _loadAll(); // re-sync + met à jour _localStatusFilter
+      await _loadAll(); // re-sync + met à jour _localStatusFilter (si statut a changé, sig a changé)
     }
   }
 
@@ -311,7 +434,6 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
     final f = (_localStatusFilter ?? '').toString();
     if (f.isEmpty) return _items;
     return _items.where((e) => (e['status'] ?? '') == f).toList();
-    // (si aucun item ne matche, la sécurité dans _loadAll remettra un statut valide au prochain refresh)
   }
 
   @override
@@ -385,9 +507,9 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
                       status: status,
                       qty: qtyStatus,
                       margin: headerMargin,
-                      historyEvents: _movements, // 👈 fourni au popover
-                      historyTitle: 'Journal des sauvegardes', // (optionnel)
-                      historyCount: _movements.length, // (optionnel)
+                      historyEvents: _movements,
+                      historyTitle: 'Journal des sauvegardes',
+                      historyCount: _movements.length,
                     ),
 
                     const SizedBox(height: 12),
@@ -396,11 +518,7 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
                         final wide = cons.maxWidth >= 760;
 
                         final finance = FinanceOverview(
-                          // ⬅️ On passe directement les items visibles.
-                          // Le widget calcule:
-                          // - Investi: somme coûts (unit_cost+fees...) pour sale_price == null
-                          // - Estimé: Σ estimated_price pour sale_price == null
-                          // - Vendu:  Σ sale_price pour sale_price != null
+                          // On passe directement les items visibles.
                           items: visibleItems,
                           currency: currency,
                           titleInvested: 'Investi (vue)',
@@ -513,6 +631,7 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
                       },
                     ),
                     const SizedBox(height: 16),
+
                     // Items
                     Row(
                       children: [
@@ -534,7 +653,9 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
                     ),
                     if (_showItemsTable)
                       ItemsTable(items: visibleItems, currency: currency),
+
                     const SizedBox(height: 16),
+
                     // Historique
                     Row(
                       children: [
