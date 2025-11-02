@@ -160,22 +160,31 @@ class _MainInventoryPageState extends State<MainInventoryPage>
         .toList();
 
     // filtre texte local
-    final q = _searchCtrl.text.trim().toLowerCase();
-    if (q.isNotEmpty) {
-      rows = rows.where((r) {
-        final n = (r['product_name'] ?? '').toString().toLowerCase();
-        final l = (r['language'] ?? '').toString().toLowerCase();
-        final g = (r['game_label'] ?? '').toString().toLowerCase();
-        final s = (r['supplier_name'] ?? '').toString().toLowerCase();
-        return n.contains(q) || l.contains(q) || g.contains(q) || s.contains(q);
-      }).toList();
-    }
+    final rawQ = _searchCtrl.text.trim().toLowerCase();
+    if (rawQ.isNotEmpty) {
+      // Découpe sur espaces (un ou plusieurs) et supprime les vides
+      final tokens =
+          rawQ.split(RegExp(r'\s+')).where((t) => t.isNotEmpty).toList();
 
-    // filtre jeu
-    if ((_gameFilter ?? '').isNotEmpty) {
-      rows = rows.where((r) => (r['game_label'] ?? '') == _gameFilter).toList();
-    }
+      bool rowMatches(Map<String, dynamic> r) {
+        // Champs sur lesquels on cherche
+        final fields = [
+          (r['product_name'] ?? '').toString(),
+          (r['language'] ?? '').toString(),
+          (r['game_label'] ?? '').toString(),
+          (r['supplier_name'] ?? '').toString(),
+          (r['buyer_company'] ?? '').toString(),
+          (r['tracking'] ?? '').toString(),
+        ].map((s) => s.toLowerCase()).toList();
 
+        // Chaque token doit être présent dans au moins UN champ
+        return tokens.every(
+          (t) => fields.any((f) => f.contains(t)),
+        );
+      }
+
+      rows = rows.where(rowMatches).toList();
+    }
     return rows;
   }
 
@@ -451,11 +460,86 @@ class _MainInventoryPageState extends State<MainInventoryPage>
     );
   }
 
+  // 👉 Version robuste : identifie un item réel (par status) sans champs fragiles
   void _openDetails(Map<String, dynamic> line) async {
+    final String orgId = widget.orgId;
+    final String status = (line['status'] ?? '').toString();
+    final String type = (line['type'] ?? '').toString();
+    final String language = (line['language'] ?? '').toString();
+    final int? productId = line['product_id'] as int?;
+    final int? gameId = line['game_id'] as int?;
+
+    if (productId == null || gameId == null || status.isEmpty) {
+      _snack('Données insuffisantes pour ouvrir les détails.');
+      return;
+    }
+
+    Map<String, dynamic>? rep;
+
+    // Probe générique triée par id DESC (pas de updated_at)
+    Future<Map<String, dynamic>?> _probe(List<List<dynamic>> conds) async {
+      var q = _sb.from('item').select('id, group_sig').eq('org_id', orgId);
+      for (final c in conds) {
+        final k = c[0] as String;
+        final op = c[1] as String;
+        final v = c.length > 2 ? c[2] : null;
+        if (op == 'is') {
+          q = q.filter(k, 'is', null);
+        } else if (op == 'eq') {
+          q = q.eq(k, v);
+        }
+      }
+      final r = await q.order('id', ascending: false).limit(1).maybeSingle();
+      return r == null ? null : Map<String, dynamic>.from(r);
+    }
+
+    try {
+      // PASS 1 — clés fortes + status
+      rep = await _probe([
+        ['status', 'eq', status],
+        ['type', 'eq', type],
+        ['language', 'eq', language],
+        ['product_id', 'eq', productId],
+        ['game_id', 'eq', gameId],
+      ]);
+
+      // PASS 2 — on élargit (si la vue a un type/lang divergent)
+      rep ??= await _probe([
+        ['status', 'eq', status],
+        ['product_id', 'eq', productId],
+        ['game_id', 'eq', gameId],
+      ]);
+
+      // PASS 3 — ultime secours : status + product
+      rep ??= await _probe([
+        ['status', 'eq', status],
+        ['product_id', 'eq', productId],
+      ]);
+
+      if (rep == null || rep['id'] == null) {
+        _snack("Impossible d'identifier le groupe d'items pour cette ligne.");
+        return;
+      }
+    } on PostgrestException catch (e) {
+      _snack('Erreur de résolution du groupe (Supabase): ${e.message}');
+      return;
+    } catch (e) {
+      _snack('Erreur de résolution du groupe: $e');
+      return;
+    }
+
+    final payload = {
+      'org_id': orgId,
+      ...line,
+      'id': rep['id'],
+      if ((rep['group_sig']?.toString().isNotEmpty ?? false))
+        'group_sig': rep['group_sig'],
+    };
+
     final changed = await Navigator.of(context).push<bool>(
       MaterialPageRoute(
         builder: (_) =>
-            GroupDetailsPage(group: Map<String, dynamic>.from(line)),
+            GroupDetailsPage(group: Map<String, dynamic>.from(payload)),
       ),
     );
     if (changed == true) {

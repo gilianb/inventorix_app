@@ -85,18 +85,18 @@ class _CollectionPageState extends State<CollectionPage> {
   /// Lit la vue stricte v_item_groups (1 ligne = 1 group_sig) en ne gardant que status='collection'
   /// + hydratation game_label/game_code depuis la table games
   Future<List<Map<String, dynamic>>> _fetchGroupsFromView() async {
-    // Colonnes exposées par v_item_groups (suivant la définition envoyée)
+    // Colonnes exposées par v_item_groups
     const cols = '''
-      group_sig, org_id, type, status,
-      product_id, product_name, game_id, language,
-      purchase_date, currency,
-      supplier_name, buyer_company, notes,
-      grade_id, grading_note, sale_date, sale_price, tracking, photo_url, document_url,
-      estimated_price, item_location, channel_id, payment_type, buyer_infos,
-      unit_cost, unit_fees,
-      qty_status, total_cost_with_fees,
-      sum_shipping_fees, sum_commission_fees, sum_grading_fees
-    ''';
+    group_sig, org_id, type, status,
+    product_id, product_name, game_id, language,
+    purchase_date, currency,
+    supplier_name, buyer_company, notes,
+    grade_id, grading_note, sale_date, sale_price, tracking, photo_url, document_url,
+    estimated_price, item_location, channel_id, payment_type, buyer_infos,
+    unit_cost, unit_fees,
+    qty_status, total_cost_with_fees,
+    sum_shipping_fees, sum_commission_fees, sum_grading_fees
+  ''';
 
     var q = _sb
         .from('v_item_groups')
@@ -116,7 +116,7 @@ class _CollectionPageState extends State<CollectionPage> {
         .map<Map<String, dynamic>>((e) => Map<String, dynamic>.from(e as Map))
         .toList();
 
-    // ===== Hydrate game_label / game_code (la vue n'expose que game_id) =====
+    // ===== Hydrate game_label / game_code =====
     final gameIds = rows
         .map((r) => r['game_id'])
         .where((v) => v != null)
@@ -143,34 +143,41 @@ class _CollectionPageState extends State<CollectionPage> {
       final g = gid != null ? gamesById[gid] : null;
       return {
         ...r,
-        'game_label': g?['label'] ?? '', // requis par le tableau / filtres
+        'game_label': g?['label'] ?? '',
         'game_code': g?['code'] ?? '',
-        // compat: le tableau s’attend à posséder 'qty_status' (ok),
-        // et n’a plus besoin de qty_collection car status est déjà fixé à 'collection'
       };
     }).toList();
 
-    // filtre texte local (nom produit / langue / jeu / fournisseur)
-    final qtxt = _searchCtrl.text.trim().toLowerCase();
-    if (qtxt.isNotEmpty) {
-      rows = rows.where((r) {
-        final n = (r['product_name'] ?? '').toString().toLowerCase();
-        final l = (r['language'] ?? '').toString().toLowerCase();
-        final g = (r['game_label'] ?? '').toString().toLowerCase();
-        final s = (r['supplier_name'] ?? '').toString().toLowerCase();
-        return n.contains(qtxt) ||
-            l.contains(qtxt) ||
-            g.contains(qtxt) ||
-            s.contains(qtxt);
-      }).toList();
+    // ===== Filtre texte local (multi-mots en AND) =====
+    final rawQ = _searchCtrl.text.trim().toLowerCase();
+    if (rawQ.isNotEmpty) {
+      final tokens =
+          rawQ.split(RegExp(r'\s+')).where((t) => t.isNotEmpty).toList();
+
+      bool rowMatches(Map<String, dynamic> r) {
+        final fields = <String>[
+          (r['product_name'] ?? '').toString(),
+          (r['language'] ?? '').toString(),
+          (r['game_label'] ?? '').toString(),
+          (r['game_code'] ?? '').toString(),
+          (r['supplier_name'] ?? '').toString(),
+          (r['buyer_company'] ?? '').toString(),
+          (r['tracking'] ?? '').toString(),
+        ].map((s) => s.toLowerCase()).toList();
+
+        // Chaque token doit être présent dans AU MOINS un champ
+        return tokens.every((t) => fields.any((f) => f.contains(t)));
+      }
+
+      rows = rows.where(rowMatches).toList();
     }
 
-    // filtre jeu local (par label)
+    // ===== Filtre jeu local (par label) =====
     if ((_gameFilter ?? '').isNotEmpty) {
       rows = rows.where((r) => (r['game_label'] ?? '') == _gameFilter).toList();
     }
 
-    // ✅ forcer le champ 'status' pour le tableau (déjà 'collection' mais on s’assure)
+    // ✅ forcer status pour le tableau (sécurité)
     rows = rows.map((r) => {...r, 'status': 'collection'}).toList();
 
     return rows;

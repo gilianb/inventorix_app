@@ -1,7 +1,6 @@
 // ignore_for_file: unused_local_variable, deprecated_member_use
-/*Rôle : c’est l’écran “Détails” lui-même (StatefulWidget).
-Il orchestre la récupération des données, applique les filtres,
-compose l’UI en assemblant les widgets.*/
+/* Rôle : écran “Détails” (StatefulWidget).
+   Charge les items d’un groupe, l’historique, et compose l’UI. */
 
 import 'dart:async';
 import 'package:flutter/material.dart';
@@ -10,23 +9,23 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../inventory/widgets/edit.dart' show EditItemsDialog;
 
-// Widgets existants (inchangés)
+// Widgets existants
 import 'widgets/history_list.dart';
 import 'widgets/info_extras_card.dart';
 import 'widgets/info_banner.dart';
 
-// Widgets nouvellement factorisés
+// Widgets factorisés
 import 'widgets/details_header.dart';
 import 'widgets/media_thumb.dart';
 import 'widgets/items_table.dart';
 
-// Service factorisé (data + helpers)
+// Service (helpers)
 import 'details_service.dart';
 
-// ✅ Nouveau widget KPI factorisé (basé sur sale_price null / non-null)
+// KPI factorisé
 import '../../inventory/widgets/finance_overview.dart';
 
-/// ✅ Image par défaut locale (asset) si `photo_url` manquante
+/// Image par défaut locale (asset) si `photo_url` manquante
 const String kDefaultAssetPhoto = 'assets/images/default_card.png';
 
 /// Palette locale
@@ -34,63 +33,18 @@ const kAccentA = Color(0xFF6C5CE7);
 const kAccentB = Color(0xFF00D1B2);
 const kAccentC = Color(0xFFFFB545);
 
-/// Colonnes exposées par l’ancienne vue (fallback uniquement)
+/// Colonnes utiles de la vue agrégée
 const List<String> kViewCols = [
   'org_id',
-  'product_id',
-  'game_id',
+  'group_sig',
   'type',
-  'language',
+  'status',
+  'product_id',
   'product_name',
+  'game_id',
   'game_code',
   'game_label',
-  'purchase_date',
-  'currency',
-  'supplier_name',
-  'buyer_company',
-  'notes',
-  'grade_id',
-  'sale_date',
-  'sale_price',
-  'tracking',
-  'photo_url',
-  'document_url',
-  'estimated_price',
-  'sum_estimated_price',
-  'item_location',
-  'channel_id',
-  'payment_type',
-  'buyer_infos',
-  'qty_total',
-  'qty_ordered',
-  'qty_in_transit',
-  'qty_paid',
-  'qty_received',
-  'qty_sent_to_grader',
-  'qty_at_grader',
-  'qty_graded',
-  'qty_listed',
-  'qty_awaiting_payment',
-  'qty_sold',
-  'qty_shipped',
-  'qty_finalized',
-  'qty_collection',
-  'total_cost',
-  'total_cost_with_fees',
-  'realized_revenue',
-  'sum_shipping_fees',
-  'sum_commission_fees',
-  'sum_grading_fees',
-];
-
-/// Clés “strictes” (fallback legacy)
-const Set<String> kStrictLineKeys = {
-  'org_id',
-  'product_id',
-  'game_id',
-  'type',
   'language',
-  'channel_id',
   'purchase_date',
   'currency',
   'supplier_name',
@@ -98,7 +52,6 @@ const Set<String> kStrictLineKeys = {
   'notes',
   'grade_id',
   'grading_note',
-  'grading_fees',
   'sale_date',
   'sale_price',
   'tracking',
@@ -106,26 +59,19 @@ const Set<String> kStrictLineKeys = {
   'document_url',
   'estimated_price',
   'item_location',
-  'unit_cost',
-  'unit_fees',
-};
-
-/// Clefs volatiles (fallback si aucun item strict)
-const Set<String> kVolatileKeys = {
-  'notes',
-  'sale_date',
-  'sale_price',
-  'tracking',
-  'photo_url',
-  'document_url',
-  'estimated_price',
-};
+  'channel_id',
+  'payment_type',
+  'buyer_infos',
+  'qty_status',
+  'total_cost_with_fees',
+  'sum_shipping_fees',
+  'sum_commission_fees',
+  'sum_grading_fees',
+];
 
 class GroupDetailsPage extends StatefulWidget {
   const GroupDetailsPage({super.key, required this.group, this.orgId});
   final Map<String, dynamic> group;
-
-  /// Optionnel : forcer l’org courante (sinon on lit group['org_id'])
   final String? orgId;
 
   @override
@@ -136,13 +82,11 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
   final _sb = Supabase.instance.client;
 
   bool _loading = true;
-  Map<String, dynamic>?
-      _viewRow; // ligne représentative (v_item_groups ou fallback)
-  List<Map<String, dynamic>> _items = []; // items du groupe
+  Map<String, dynamic>? _viewRow; // ligne représentative (vue agrégée)
+  List<Map<String, dynamic>> _items = []; // items du groupe (table item)
   List<Map<String, dynamic>> _movements = []; // historique movements
 
-  String?
-      _localStatusFilter; // filtre de statut (inutile en group_sig strict, mais conservé)
+  String? _localStatusFilter; // pour l’affichage
   bool _showItemsTable = true;
   bool _showHistory = true;
   bool _dirty = false; // indique si modification effectuée
@@ -151,11 +95,6 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
 
   String? get _orgIdFromContext {
     final v = (widget.orgId ?? widget.group['org_id'])?.toString();
-    return (v != null && v.isNotEmpty) ? v : null;
-  }
-
-  String? get _groupSig {
-    final v = widget.group['group_sig']?.toString();
     return (v != null && v.isNotEmpty) ? v : null;
   }
 
@@ -182,15 +121,56 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
   Future<void> _loadAll() async {
     setState(() => _loading = true);
     try {
-      final orgId = _orgIdFromContext;
-      final pid = (widget.group['product_id'] as int?);
-      final sig = _groupSig;
+      // 1) Résoudre org/group_sig/status de manière fiable
+      String? orgId = _orgIdFromContext;
+      String? sig = (widget.group['group_sig']?.toString().isNotEmpty ?? false)
+          ? widget.group['group_sig'].toString()
+          : null;
+      String? clickedStatus = (widget.group['status'] ?? '').toString();
+      final int? clickedId = (widget.group['id'] as num?)?.toInt();
+      final int? pid = (widget.group['product_id'] as num?)?.toInt();
+
+      if (clickedId != null) {
+        // Source de vérité: item
+        final probe = await _sb
+            .from('item')
+            .select('org_id, group_sig, status, product_id')
+            .eq('id', clickedId)
+            .maybeSingle();
+        if (probe != null) {
+          orgId = (probe['org_id']?.toString().isNotEmpty ?? false)
+              ? probe['org_id'].toString()
+              : orgId;
+          if (probe['group_sig'] != null &&
+              probe['group_sig'].toString().isNotEmpty) {
+            sig = probe['group_sig'].toString();
+          }
+          clickedStatus = (probe['status'] ?? clickedStatus)?.toString();
+        }
+      }
+
+      // Si pas encore de sig mais on a org + product (+ éventuellement status),
+      // on va chercher 1 item pour récupérer la sig (secours).
+      if (sig == null && orgId != null && pid != null) {
+        var q = _sb
+            .from('item')
+            .select('group_sig')
+            .eq('org_id', orgId)
+            .eq('product_id', pid);
+        if ((clickedStatus ?? '').isNotEmpty)
+          q = q.eq('status', clickedStatus as Object);
+        final probe =
+            await q.order('id', ascending: false).limit(1).maybeSingle();
+        if (probe != null &&
+            (probe['group_sig']?.toString().isNotEmpty ?? false)) {
+          sig = probe['group_sig'].toString();
+        }
+      }
 
       List<Map<String, dynamic>> items = [];
 
       if (sig != null && orgId != null) {
-        // ======== NOUVEAU CHEMIN PRINCIPAL: group_sig strict ========
-        // 1) Items du groupe strict (toutes colonnes égales → même signature)
+        // 2) CHEMIN STRICT: par signature de groupe
         const itemCols = [
           'id',
           'org_id',
@@ -215,7 +195,6 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
           'tracking',
           'photo_url',
           'document_url',
-          'created_at',
           'estimated_price',
           'item_location',
           'shipping_fees',
@@ -237,54 +216,34 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
           (raw as List).map((e) => Map<String, dynamic>.from(e as Map)),
         );
 
-        // 2) ViewRow représentative depuis v_item_groups (si dispo)
+        // Vue agrégée pour l’entête/carte infos
         Map<String, dynamic>? viewRow;
         try {
           final vr = await _sb
               .from('v_item_groups')
-              .select('''group_sig, org_id, type, status,
-                     product_id, product_name, game_id, game_code, game_label,
-                     language, purchase_date, currency, supplier_name, buyer_company, notes,
-                     grade_id, grading_note, sale_date, sale_price, tracking, photo_url, document_url,
-                     estimated_price, item_location, channel_id, payment_type, buyer_infos,
-                     unit_cost, unit_fees,
-                     qty_status, total_cost_with_fees,
-                     sum_shipping_fees, sum_commission_fees, sum_grading_fees''')
+              .select(kViewCols.join(','))
               .eq('org_id', orgId)
               .eq('group_sig', sig)
-              // Tous les items du groupe ont le même status (inclus dans la sig), mais on fixe par prudence :
-              .eq(
-                  'status',
-                  (items.isNotEmpty
-                      ? items.first['status']
-                      : widget.group['status']))
               .limit(1)
               .maybeSingle();
+          if (vr != null) viewRow = Map<String, dynamic>.from(vr);
+        } catch (_) {}
 
-          if (vr != null) {
-            viewRow = Map<String, dynamic>.from(vr);
-          }
-        } catch (_) {
-          // ignore → on tombera sur le fallback viewRow ci-dessous
-        }
-
-        // Fallback viewRow: on reconstruit depuis le 1er item si la vue n’est pas dispo
+        // Fallback viewRow si la vue ne renvoie rien
         viewRow ??= {
           if (items.isNotEmpty) ...items.first,
-          // conserve certains champs passés depuis la liste (nom produit / labels)
           ..._initial,
+          'group_sig': sig,
+          'org_id': orgId,
         };
 
-        // Détection statut
+        // Status cohérent (tous les items d’une sig ont le même)
         final detectedStatus = items.isNotEmpty
             ? (items.first['status'] ?? '').toString()
-            : ((widget.group['status'] ?? '').toString());
-        if ((_localStatusFilter ?? '').isEmpty ||
-            _localStatusFilter != detectedStatus) {
-          _localStatusFilter = detectedStatus;
-        }
+            : (clickedStatus);
 
-        // Historique
+        _localStatusFilter = (detectedStatus ?? '').toString();
+
         final hist = await DetailsService.fetchHistoryForItems(
           _sb,
           items.map((e) => e['id'] as int).toList(),
@@ -294,49 +253,18 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
           _viewRow = viewRow;
           _items = items;
           _movements = hist;
-
-          // Sécurité: si le filtre courant ne matche aucun item, on rebascule
-          if (_items.isNotEmpty &&
-              !_items.any((e) =>
-                  (e['status'] ?? '').toString() ==
-                  ((_localStatusFilter ?? '').toString()))) {
-            _localStatusFilter = (_items.first['status'] ?? '').toString();
-          }
         });
         return;
       }
 
-      // ======== CHEMIN FALLBACK (legacy) : sans group_sig ========
-      // Tier 1 : strict par clés
-      items = await DetailsService.fetchItemsByLineKey(
-        _sb,
-        {
-          if (orgId != null) 'org_id': orgId,
-          ...widget.group,
-        },
-        kStrictLineKeys,
-        ignoreKeys: const {},
-      );
-
-      // Tier 2 : sans les volatiles
-      if (items.isEmpty) {
-        items = await DetailsService.fetchItemsByLineKey(
-          _sb,
-          {
-            if (orgId != null) 'org_id': orgId,
-            ...widget.group,
-          },
-          kStrictLineKeys,
-          ignoreKeys: kVolatileKeys,
-        );
-      }
-
-      // Tier 3 : par product_id seul
-      if (items.isEmpty && pid != null) {
-        final q = _sb.from('item').select('*').eq('product_id', pid);
-        if (orgId != null) q.eq('org_id', orgId);
-        final rows = await q.order('created_at', ascending: true);
-        items = (rows as List)
+      // 3) ULTIME secours: on tente tout le produit (peu probable maintenant)
+      if (pid != null) {
+        final raw = await _sb
+            .from('item')
+            .select('*')
+            .eq('product_id', pid)
+            .order('id', ascending: true);
+        items = (raw as List)
             .map<Map<String, dynamic>>(
                 (e) => Map<String, dynamic>.from(e as Map))
             .toList();
@@ -346,28 +274,12 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
         setState(() {
           _items = const [];
           _movements = const [];
+          _viewRow = _initial;
         });
         return;
       }
 
-      final detectedStatus = items.isNotEmpty
-          ? (items.first['status'] ?? '').toString()
-          : ((widget.group['status'] ?? '').toString());
-
-      if ((_localStatusFilter ?? '').isEmpty ||
-          _localStatusFilter != detectedStatus) {
-        _localStatusFilter = detectedStatus;
-      }
-
-      final viewRow = await DetailsService.fetchViewRow(
-            _sb,
-            {
-              if (orgId != null) 'org_id': orgId,
-              if (pid != null) 'product_id': pid,
-            },
-            kViewCols,
-          ) ??
-          widget.group;
+      _localStatusFilter = (items.first['status'] ?? '').toString();
 
       final hist = await DetailsService.fetchHistoryForItems(
         _sb,
@@ -375,16 +287,9 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
       );
 
       setState(() {
-        _viewRow = viewRow;
+        _viewRow = {..._initial, ...items.first};
         _items = items;
         _movements = hist;
-
-        if (_items.isNotEmpty &&
-            !_items.any((e) =>
-                (e['status'] ?? '').toString() ==
-                ((_localStatusFilter ?? '').toString()))) {
-          _localStatusFilter = (_items.first['status'] ?? '').toString();
-        }
       });
     } catch (e) {
       _snack('Erreur chargement détails : $e');
@@ -397,10 +302,11 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
 
   Future<void> _onEditGroup() async {
-    final curStatus =
-        (_localStatusFilter ?? widget.group['status'] ?? '').toString();
+    final curStatus = (_items.isNotEmpty
+            ? (_items.first['status'] ?? '').toString()
+            : (_localStatusFilter ?? widget.group['status'] ?? ''))
+        .toString();
 
-    // En group_sig strict, tous les items du groupe ont le même statut → ce count est OK
     final qty = _items.where((e) => (e['status'] ?? '') == curStatus).length;
     final productId =
         (_viewRow?['product_id'] ?? widget.group['product_id']) as int?;
@@ -418,14 +324,14 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
       initialSample: {
         ...?_viewRow,
         if (_items.isNotEmpty) ..._items.first,
-        if (_groupSig != null)
-          'group_sig': _groupSig, // au cas où tu l’utilises côté edit
+        if (_items.isNotEmpty && _items.first['group_sig'] != null)
+          'group_sig': _items.first['group_sig'],
       },
     );
 
     if (changed == true) {
       _dirty = true;
-      await _loadAll(); // re-sync + met à jour _localStatusFilter (si statut a changé, sig a changé)
+      await _loadAll();
     }
   }
 
@@ -518,7 +424,6 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
                         final wide = cons.maxWidth >= 760;
 
                         final finance = FinanceOverview(
-                          // On passe directement les items visibles.
                           items: visibleItems,
                           currency: currency,
                           titleInvested: 'Investi (vue)',
