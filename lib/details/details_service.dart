@@ -169,6 +169,7 @@ class DetailsService {
     int limit = 5000,
   }) async {
     if (itemIds.isEmpty) return [];
+
     final raw = await sb
         .from('v_item_history')
         .select('*')
@@ -176,8 +177,47 @@ class DetailsService {
         .order('ts', ascending: false)
         .limit(limit);
 
-    return List<Map<String, dynamic>>.from(
+    final list = List<Map<String, dynamic>>.from(
       (raw as List).map((e) => Map<String, dynamic>.from(e as Map)),
     );
+
+    // ✅ Déduplication: garder UNE seule ligne pour chaque batch_edit (event_id)
+    final seenBatchIds = <int>{};
+    final out = <Map<String, dynamic>>[];
+
+    for (final e in list) {
+      final kind = (e['kind'] ?? '').toString();
+      final code = (e['code'] ?? '').toString();
+
+      if (kind == 'edit' && code == 'batch_edit') {
+        final eventId = e['event_id'];
+        if (eventId is int) {
+          if (seenBatchIds.contains(eventId)) {
+            continue; // skip doublons du même batch sur d’autres item_id
+          }
+          seenBatchIds.add(eventId);
+        }
+        out.add(e);
+      } else {
+        out.add(e);
+      }
+    }
+
+    // Tri final (déjà trié par ts desc, mais on protège)
+    out.sort((a, b) {
+      final ta = DateTime.tryParse((a['ts'] ?? '').toString())
+              ?.millisecondsSinceEpoch ??
+          0;
+      final tb = DateTime.tryParse((b['ts'] ?? '').toString())
+              ?.millisecondsSinceEpoch ??
+          0;
+      if (tb != ta) return tb.compareTo(ta);
+      // stabiliser si même ts : event_id desc
+      final ea = (a['event_id'] is int) ? a['event_id'] as int : -1;
+      final eb = (b['event_id'] is int) ? b['event_id'] as int : -1;
+      return eb.compareTo(ea);
+    });
+
+    return out;
   }
 }

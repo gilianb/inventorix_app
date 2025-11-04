@@ -657,6 +657,61 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
     return m;
   }
 
+  // ===== Batch diff pour le log (1 événement) =====
+  Map<String, dynamic> _buildBatchChanges(
+    Map<String, dynamic> baseUpdates,
+    Map<String, dynamic> productUpdates,
+  ) {
+    final changes = <String, dynamic>{};
+
+    // Items fields
+    baseUpdates.forEach((code, newV) {
+      final oldV = _sample[code];
+      // on stringify légèrement pour éviter 1.0 vs 1
+      if ((oldV?.toString() ?? '') != (newV?.toString() ?? '')) {
+        changes[code] = {'old': oldV, 'new': newV};
+      }
+    });
+
+    // Product fields mappés
+    if (productUpdates.containsKey('name')) {
+      changes['product_name'] = {
+        'old': _sample['product_name'],
+        'new': productUpdates['name'],
+      };
+    }
+    if (productUpdates.containsKey('type')) {
+      changes['type'] = {'old': _sample['type'], 'new': productUpdates['type']};
+    }
+
+    // language / game_id si modifiés
+    if (_changedSimple('language', _language)) {
+      changes['language'] = {'old': _sample['language'], 'new': _language};
+    }
+    if (_changedSimple('game_id', _gameId)) {
+      changes['game_id'] = {'old': _sample['game_id'], 'new': _gameId};
+    }
+
+    return changes;
+  }
+
+  Future<void> _logBatchEditRPC({
+    required String orgId,
+    required List<int> itemIds,
+    required Map<String, dynamic> baseUpdates,
+    required Map<String, dynamic> productUpdates,
+  }) async {
+    final changes = _buildBatchChanges(baseUpdates, productUpdates);
+    if (changes.isEmpty) return;
+
+    await _sb.rpc('app_log_batch_edit', params: {
+      'p_org_id': orgId,
+      'p_item_ids': itemIds,
+      'p_changes': changes,
+      'p_reason': null, // éventuellement un champ "motif" UI plus tard
+    });
+  }
+
   // ===== FIX group_sig-first =====
   Future<List<int>> _collectIdsForEdit({
     required Map<String, dynamic> sample,
@@ -765,7 +820,6 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
   }
 
   Future<void> _apply() async {
-    // Pas de RBAC ici non plus
     final baseUpdates = _buildItemUpdates();
     final productUpdates = _buildProductUpdates();
 
@@ -778,6 +832,11 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
     try {
       final sample = Map<String, dynamic>.from(_sample)
         ..putIfAbsent('product_id', () => widget.productId);
+
+      // 🚩 org_id pour le RPC
+      final String? orgId = (sample['org_id']?.toString().isNotEmpty ?? false)
+          ? sample['org_id'].toString()
+          : null;
 
       // 1) IDs à mettre à jour
       final ids = await _collectIdsForEdit(
@@ -792,7 +851,7 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
         return;
       }
 
-      // 2) Conversion des frais "total" -> "par unité" (division)
+      // 2) Division des frais totaux en "par unité" (pour l'UPDATE uniquement)
       final updates = Map<String, dynamic>.from(baseUpdates);
       final n = ids.length;
       if (n > 0) {
@@ -806,17 +865,26 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
         }
       }
 
-      // 3) Apply
+      // 3) Apply DB
       final idsCsv = '(${ids.join(",")})';
       if (updates.isNotEmpty) {
         await _sb.from('item').update(updates).filter('id', 'in', idsCsv);
       }
-
       if (productUpdates.isNotEmpty) {
         await _sb
             .from('product')
             .update(productUpdates)
             .eq('id', widget.productId);
+      }
+
+      // 4) ✅ LOG ÉDITION GROUPÉE (1 seul event qui contient TOUTES les modifs)
+      if (orgId != null) {
+        await _logBatchEditRPC(
+          orgId: orgId,
+          itemIds: ids,
+          baseUpdates: baseUpdates, // ← total saisi conservé dans l’historique
+          productUpdates: productUpdates,
+        );
       }
 
       if (mounted) {

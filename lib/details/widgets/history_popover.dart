@@ -23,7 +23,6 @@ class HistoryPopoverCard extends StatelessWidget {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          // Header
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
             child: Row(
@@ -44,8 +43,8 @@ class HistoryPopoverCard extends StatelessWidget {
             ),
           ),
           const Divider(height: 1),
-          // Content
-          Flexible(
+          // Pas de Flexible ici, juste un scroll dans un espace fini
+          Expanded(
             child: SingleChildScrollView(
               padding: const EdgeInsets.only(bottom: 8, top: 4),
               child: HistoryList(movements: events),
