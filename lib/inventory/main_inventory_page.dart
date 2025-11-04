@@ -9,17 +9,20 @@ import '../../inventory/widgets/status_breakdown_panel.dart';
 import '../../inventory/widgets/table_by_status.dart';
 import '../../inventory/utils/status_utils.dart';
 import '../../inventory/widgets/edit.dart';
-import '../../inventory/widgets/finance_overview.dart'; // ⬅️ widget KPI factorisé
+import '../../inventory/widgets/finance_overview.dart';
 
 import 'package:inventorix_app/new_stock/new_stock_page.dart';
 import 'package:inventorix_app/details/details_page.dart';
 import 'package:inventorix_app/collection/collection_page.dart';
 
-import '../top_sold/top_sold_page.dart'; // ⬅️ Top Sold tab
+import '../top_sold/top_sold_page.dart';
 
 // 🔁 Multi-org
 import 'package:inventorix_app/org/organization_models.dart';
 import 'package:inventorix_app/org/organizations_page.dart';
+
+// 🔐 RBAC
+import 'package:inventorix_app/org/roles.dart';
 
 /// Accents (UI only)
 const kAccentA = Color(0xFF6C5CE7); // violet
@@ -29,14 +32,21 @@ const kAccentG = Color(0xFF22C55E); // green
 
 /// Mapping des groupes logiques -> liste de statuts inclus
 const Map<String, List<String>> kGroupToStatuses = {
-  'purchase': ['ordered', 'in_transit', 'paid', 'received'],
+  'purchase': [
+    'ordered',
+    'paid',
+    'in_transit',
+    'received',
+    'waiting_for_gradation'
+  ],
   'grading': ['sent_to_grader', 'at_grader', 'graded'],
   'sale': ['listed', 'awaiting_payment', 'sold', 'shipped', 'finalized'],
   'all': [
     'ordered',
-    'in_transit',
     'paid',
+    'in_transit',
     'received',
+    'waiting_for_gradation',
     'sent_to_grader',
     'at_grader',
     'graded',
@@ -57,7 +67,7 @@ class MainInventoryPage extends StatefulWidget {
 }
 
 class _MainInventoryPageState extends State<MainInventoryPage>
-    with SingleTickerProviderStateMixin {
+    with TickerProviderStateMixin {
   final _sb = Supabase.instance.client;
 
   // UI state
@@ -72,7 +82,7 @@ class _MainInventoryPageState extends State<MainInventoryPage>
   /// 'all' | 'month' (30j) | 'week' (7j)
   String _dateFilter = 'all';
 
-  late final TabController _tabCtrl;
+  TabController? _tabCtrl;
 
   // Données
   List<Map<String, dynamic>> _groups = const [];
@@ -80,23 +90,153 @@ class _MainInventoryPageState extends State<MainInventoryPage>
   // Items servant aux KPI (passés à FinanceOverview)
   List<Map<String, dynamic>> _kpiItems = const [];
 
+  // 🔐 Rôle courant & permissions
+  OrgRole _role = OrgRole.viewer; // par défaut prudent
+  bool _roleLoaded = false; // tant que false, on affiche un loader
+  RolePermissions get _perm => kRoleMatrix[_role]!;
+
+  bool get _isOwner => _role == OrgRole.owner;
+
   @override
   void initState() {
     super.initState();
-    _tabCtrl = TabController(length: 4, vsync: this); // ← 4 onglets (Finalized)
-    _refresh();
+    // On crée un controller minimal (2 onglets visibles pour tout le monde) en attendant le rôle,
+    // OU on attend complètement le rôle : on choisit d’attendre → _tabCtrl = null ici.
+    _init();
+  }
+
+  Future<void> _init() async {
+    await _loadRole();
+    _recreateTabController(); // crée le TabController en fonction du rôle
+    await _refresh();
   }
 
   @override
   void dispose() {
-    _tabCtrl.dispose();
+    _tabCtrl?.dispose();
+    _searchCtrl.dispose();
     super.dispose();
+  }
+
+  /// Liste des Tabs selon rôle
+  List<Tab> _tabs() => <Tab>[
+        const Tab(icon: Icon(Icons.inventory_2), text: 'Inventaire'),
+        const Tab(icon: Icon(Icons.trending_up), text: 'Top Sold'),
+        if (_isOwner)
+          const Tab(icon: Icon(Icons.collections_bookmark), text: 'Collection'),
+        const Tab(icon: Icon(Icons.check_circle), text: 'Finalized'),
+      ];
+
+  /// Pages correspondantes
+  List<Widget> _tabViews() => <Widget>[
+        _buildInventoryBody(),
+        TopSoldPage(
+          orgId: widget.orgId,
+          onOpenDetails: (payload) {
+            _openDetails({
+              'org_id': widget.orgId,
+              ...payload,
+            });
+          },
+        ),
+        if (_isOwner) const CollectionPage(),
+        _buildInventoryBody(forceStatus: 'finalized'),
+      ];
+
+  /// (Re)crée le TabController de façon sûre
+  void _recreateTabController() {
+    final newLen = _tabs().length;
+    final prevIndex = _tabCtrl?.index ?? 0;
+
+    // Dispose AVANT de créer le nouveau (évite 2 tickers actifs en même temps)
+    _tabCtrl?.dispose();
+    _tabCtrl = TabController(
+      length: newLen,
+      vsync: this,
+      initialIndex: prevIndex.clamp(0, newLen - 1),
+    );
+
+    // Forcer rebuild après assignation
+    setState(() {});
+  }
+
+  Future<void> _loadRole() async {
+    try {
+      final uid = _sb.auth.currentUser?.id;
+      if (uid == null) {
+        if (mounted) setState(() => _roleLoaded = true);
+        return;
+      }
+
+      Map<String, dynamic>? row;
+      try {
+        row = await _sb
+            .from('organization_member')
+            .select('role')
+            .eq('org_id', widget.orgId)
+            .eq('user_id', uid)
+            .maybeSingle();
+      } catch (_) {
+        // RLS/erreur — on tombe sur fallback owner si created_by == uid
+      }
+
+      String? roleStr = (row?['role'] as String?);
+
+      if (roleStr == null) {
+        try {
+          final org = await _sb
+              .from('organization')
+              .select('created_by')
+              .eq('id', widget.orgId)
+              .maybeSingle();
+          final createdBy = org?['created_by'] as String?;
+          if (createdBy != null && createdBy == uid) {
+            roleStr = 'owner';
+          }
+        } catch (_) {}
+      }
+
+      final parsed = OrgRole.values.firstWhere(
+        (r) => r.name == (roleStr ?? 'viewer').toLowerCase(),
+        orElse: () => OrgRole.viewer,
+      );
+
+      if (mounted) {
+        setState(() {
+          _role = parsed;
+          _roleLoaded = true;
+        });
+      }
+    } catch (_) {
+      if (mounted) setState(() => _roleLoaded = true);
+    }
   }
 
   void _snack(String m) =>
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
 
-  /// Helper pour la date de début selon le _dateFilter
+  /// ======== BOUTON Login/Logout ========
+  Future<void> _onTapAuthButton() async {
+    final session = _sb.auth.currentSession;
+    if (session != null) {
+      try {
+        await _sb.auth.signOut();
+        if (!mounted) return;
+        _snack('Déconnexion réussie.');
+        Navigator.of(context)
+            .pushNamedAndRemoveUntil('/login', (Route<dynamic> r) => false);
+      } on AuthException catch (e) {
+        _snack('Erreur déconnexion: ${e.message}');
+      } catch (e) {
+        _snack('Erreur déconnexion: $e');
+      }
+    } else {
+      if (!mounted) return;
+      Navigator.of(context)
+          .pushNamedAndRemoveUntil('/login', (Route<dynamic> r) => false);
+    }
+  }
+
   DateTime? _purchaseDateStart() {
     final now = DateTime.now();
     switch (_dateFilter) {
@@ -105,7 +245,7 @@ class _MainInventoryPageState extends State<MainInventoryPage>
       case 'month':
         return now.subtract(const Duration(days: 30));
       default:
-        return null; // all time
+        return null;
     }
   }
 
@@ -113,8 +253,7 @@ class _MainInventoryPageState extends State<MainInventoryPage>
     setState(() => _loading = true);
     try {
       _groups = await _fetchGroupedFromView();
-      _kpiItems =
-          await _fetchItemsForKpis(); // ⬅️ items bruts pour FinanceOverview
+      _kpiItems = await _fetchItemsForKpis();
     } catch (e) {
       _snack('Erreur de chargement : $e');
     } finally {
@@ -123,32 +262,75 @@ class _MainInventoryPageState extends State<MainInventoryPage>
   }
 
   Future<List<Map<String, dynamic>>> _fetchGroupedFromView() async {
-    const cols = 'product_id, game_id, type, language, '
-        'product_name, game_code, game_label, '
-        'purchase_date, currency, '
-        'supplier_name, buyer_company, notes, grade_id, grading_note, sale_date, sale_price, '
-        'tracking, photo_url, document_url, estimated_price, sum_estimated_price, item_location, channel_id, '
-        'payment_type, buyer_infos, '
-        'qty_total, '
-        'qty_ordered, qty_in_transit, qty_paid, qty_received, '
-        'qty_sent_to_grader, qty_at_grader, qty_graded, '
-        'qty_listed, qty_awaiting_payment, qty_sold, qty_shipped, qty_finalized, qty_collection, '
-        'total_cost, total_cost_with_fees, realized_revenue, '
-        'sum_shipping_fees, sum_commission_fees, sum_grading_fees, '
-        'unit_cost, unit_fees, '
-        'org_id';
+    final baseCols = <String>[
+      'product_id',
+      'game_id',
+      'type',
+      'language',
+      'product_name',
+      'game_code',
+      'game_label',
+      'purchase_date',
+      'currency',
+      'supplier_name',
+      'buyer_company',
+      'notes',
+      'grade_id',
+      'grading_note',
+      'sale_date',
+      'sale_price',
+      'tracking',
+      'photo_url',
+      'document_url',
+      'estimated_price',
+      'sum_estimated_price',
+      'item_location',
+      'channel_id',
+      'payment_type',
+      'buyer_infos',
+      'qty_total',
+      'qty_ordered',
+      'qty_paid',
+      'qty_in_transit',
+      'qty_received',
+      'qty_waiting_for_gradation',
+      'qty_sent_to_grader',
+      'qty_at_grader',
+      'qty_graded',
+      'qty_listed',
+      'qty_awaiting_payment',
+      'qty_sold',
+      'qty_shipped',
+      'qty_finalized',
+      'qty_collection',
+      'realized_revenue',
+      'sum_shipping_fees',
+      'sum_commission_fees',
+      'sum_grading_fees',
+      'org_id',
+    ];
 
-    // Base query
+    final costCols = <String>[
+      'total_cost',
+      'total_cost_with_fees',
+      'unit_cost',
+      'unit_fees',
+    ];
+
+    final cols = [
+      ...baseCols,
+      if (_perm.canSeeUnitCosts) ...costCols,
+    ].join(', ');
+
     var query = _sb
-        .from('v_items_by_status')
+        .from('v_items_by_status_masked')
         .select(cols)
         .eq('type', _typeFilter)
-        .eq('org_id', widget.orgId); // ← IMPORTANT : filtre org
+        .eq('org_id', widget.orgId);
 
-    // Filtre période sur purchase_date
     final after = _purchaseDateStart();
     if (after != null) {
-      final afterStr = after.toIso8601String().split('T').first; // 'YYYY-MM-DD'
+      final afterStr = after.toIso8601String().split('T').first;
       query = query.gte('purchase_date', afterStr);
     }
 
@@ -159,15 +341,12 @@ class _MainInventoryPageState extends State<MainInventoryPage>
         .map<Map<String, dynamic>>((e) => Map<String, dynamic>.from(e as Map))
         .toList();
 
-    // filtre texte local
     final rawQ = _searchCtrl.text.trim().toLowerCase();
     if (rawQ.isNotEmpty) {
-      // Découpe sur espaces (un ou plusieurs) et supprime les vides
       final tokens =
           rawQ.split(RegExp(r'\s+')).where((t) => t.isNotEmpty).toList();
 
       bool rowMatches(Map<String, dynamic> r) {
-        // Champs sur lesquels on cherche
         final fields = [
           (r['product_name'] ?? '').toString(),
           (r['language'] ?? '').toString(),
@@ -177,10 +356,7 @@ class _MainInventoryPageState extends State<MainInventoryPage>
           (r['tracking'] ?? '').toString(),
         ].map((s) => s.toLowerCase()).toList();
 
-        // Chaque token doit être présent dans au moins UN champ
-        return tokens.every(
-          (t) => fields.any((f) => f.contains(t)),
-        );
+        return tokens.every((t) => fields.any((f) => f.contains(t)));
       }
 
       rows = rows.where(rowMatches).toList();
@@ -188,9 +364,7 @@ class _MainInventoryPageState extends State<MainInventoryPage>
     return rows;
   }
 
-  /// Items pour KPI (hors collection), respectant tous les filtres actifs.
   Future<List<Map<String, dynamic>>> _fetchItemsForKpis() async {
-    // Statuts à inclure selon le filtre courant (hors 'collection')
     List<String> statuses;
     if ((_statusFilter ?? '').isNotEmpty) {
       final f = _statusFilter!;
@@ -201,28 +375,38 @@ class _MainInventoryPageState extends State<MainInventoryPage>
         statuses = [f];
       }
     } else {
-      // tous les statuts sauf 'collection'
       statuses = kStatusOrder.where((s) => s != 'collection').toList();
     }
 
+    final canSeeCosts = _perm.canSeeUnitCosts;
+    final cols = [
+      if (canSeeCosts) 'unit_cost',
+      if (canSeeCosts) 'unit_fees',
+      if (canSeeCosts) 'shipping_fees',
+      if (canSeeCosts) 'commission_fees',
+      if (canSeeCosts) 'grading_fees',
+      'estimated_price',
+      if (_perm.canSeeRevenue) 'sale_price',
+      'game_id',
+      'org_id',
+      'type',
+      'status',
+      'purchase_date',
+    ].join(', ');
+
     var q = _sb
-        .from('item')
-        .select('''
-          unit_cost, unit_fees, shipping_fees, commission_fees, grading_fees,
-          estimated_price, sale_price, game_id, org_id, type, status, purchase_date
-        ''')
+        .from('item_masked')
+        .select(cols)
         .eq('org_id', widget.orgId)
         .eq('type', _typeFilter)
         .inFilter('status', statuses);
 
-    // Période (purchase_date)
     final after = _purchaseDateStart();
     if (after != null) {
       final d = after.toIso8601String().split('T').first;
       q = q.gte('purchase_date', d);
     }
 
-    // Filtre jeu (par label → id)
     if ((_gameFilter ?? '').isNotEmpty) {
       final row = await _sb
           .from('games')
@@ -239,13 +423,8 @@ class _MainInventoryPageState extends State<MainInventoryPage>
         .toList();
   }
 
-  // ===== Explosion des lignes (avec option de forcer un statut) =====
-  // ⚠️ Par défaut (pas de filtre), on CACHE les lignes "finalized" uniquement dans la liste.
-  // Si un filtre est actif OU override, on affiche normalement.
   List<Map<String, dynamic>> _explodeLines({String? overrideFilter}) {
     final out = <Map<String, dynamic>>[];
-
-    // Déplie v_items_by_status -> lignes par statut (sauf collection)
     for (final r in _groups) {
       for (final s in kStatusOrder) {
         if (s == 'collection') continue;
@@ -256,7 +435,6 @@ class _MainInventoryPageState extends State<MainInventoryPage>
       }
     }
 
-    // Filtre effectif (override prioritaire)
     final effectiveFilter = (overrideFilter ?? _statusFilter)?.toString() ?? '';
 
     if (effectiveFilter.isNotEmpty) {
@@ -270,13 +448,10 @@ class _MainInventoryPageState extends State<MainInventoryPage>
       }
     }
 
-    // 👉 Aucun filtre : on MASQUE uniquement les lignes 'finalized' (affichage)
     return out.where((e) => e['status'] != 'finalized').toList();
   }
 
-  // ====== Body d’inventaire réutilisable (optionnellement forcé sur un statut) ======
   Widget _buildInventoryBody({String? forceStatus}) {
-    // KPI : si on force un statut, on filtre localement _kpiItems au lieu de re-fetch.
     final effectiveKpiItems = (forceStatus == null)
         ? _kpiItems
         : _kpiItems
@@ -336,7 +511,6 @@ class _MainInventoryPageState extends State<MainInventoryPage>
                         onSearch: _refresh,
                       ),
                       const SizedBox(height: 8),
-                      // Ligne de filtres: Type + Période
                       Wrap(
                         spacing: 8,
                         runSpacing: 8,
@@ -377,24 +551,24 @@ class _MainInventoryPageState extends State<MainInventoryPage>
 
           if (_groups.isNotEmpty) ...[
             const SizedBox(height: 8),
-            // KPIs (prennent les items effectifs)
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12),
-              child: FinanceOverview(
-                items: effectiveKpiItems,
-                currency: lines.isNotEmpty
-                    ? (lines.first['currency']?.toString() ?? 'USD')
-                    : 'USD',
-                titleInvested: 'Investi (vue)',
-                titleEstimated: 'Revenu potentiel',
-                titleSold: 'Revenu réel',
-                subtitleInvested: 'Σ coûts (non vendus) — hors collection',
-                subtitleEstimated:
-                    'Σ estimated_price (non vendus) — hors collection',
-                subtitleSold: 'Σ sale_price (vendus) — hors collection',
+            if (_perm.canSeeFinanceOverview)
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                child: FinanceOverview(
+                  items: effectiveKpiItems,
+                  currency: lines.isNotEmpty
+                      ? (lines.first['currency']?.toString() ?? 'USD')
+                      : 'USD',
+                  titleInvested: 'Investi (vue)',
+                  titleEstimated: 'Revenu potentiel',
+                  titleSold: 'Revenu réel',
+                  subtitleInvested: 'Σ coûts (non vendus) — hors collection',
+                  subtitleEstimated:
+                      'Σ estimated_price (non vendus) — hors collection',
+                  subtitleSold: 'Σ sale_price (vendus) — hors collection',
+                ),
               ),
-            ),
-            const SizedBox(height: 12),
+            if (_perm.canSeeFinanceOverview) const SizedBox(height: 12),
             StatusBreakdownPanel(
               expanded: _breakdownExpanded,
               onToggle: (v) => setState(() => _breakdownExpanded = v),
@@ -405,14 +579,12 @@ class _MainInventoryPageState extends State<MainInventoryPage>
                 if (s == 'collection') return;
 
                 if (forceStatus != null) {
-                  // Depuis l’onglet Finalized : si on clique un autre statut,
-                  // on bascule sur l’onglet Inventaire avec ce filtre.
                   if (s != forceStatus) {
                     setState(() => _statusFilter = s);
-                    _tabCtrl.index = 0; // go Inventaire
+                    _tabCtrl?.index = 0;
                     _refresh();
                   }
-                  return; // si "finalized", on reste
+                  return;
                 }
 
                 setState(() => _statusFilter = (_statusFilter == s ? null : s));
@@ -420,8 +592,6 @@ class _MainInventoryPageState extends State<MainInventoryPage>
               },
             ),
             const SizedBox(height: 12),
-
-            // Barre de filtre actif : inutile si forceStatus (car fixé par l’onglet)
             if (forceStatus == null)
               ActiveStatusFilterBar(
                 statusFilter: _statusFilter,
@@ -451,8 +621,11 @@ class _MainInventoryPageState extends State<MainInventoryPage>
           InventoryTableByStatus(
             lines: lines,
             onOpen: _openDetails,
-            onEdit: _openEdit,
-            onDelete: _deleteLine,
+            onEdit: _perm.canEditItems ? _openEdit : null,
+            onDelete: _perm.canDeleteLines ? _deleteLine : null,
+            showDelete: _perm.canDeleteLines,
+            showUnitCosts: _perm.canSeeUnitCosts,
+            showRevenue: _perm.canSeeRevenue,
           ),
           const SizedBox(height: 48),
         ],
@@ -476,8 +649,7 @@ class _MainInventoryPageState extends State<MainInventoryPage>
 
     Map<String, dynamic>? rep;
 
-    // Probe générique triée par id DESC (pas de updated_at)
-    Future<Map<String, dynamic>?> _probe(List<List<dynamic>> conds) async {
+    Future<Map<String, dynamic>?> probe(List<List<dynamic>> conds) async {
       var q = _sb.from('item').select('id, group_sig').eq('org_id', orgId);
       for (final c in conds) {
         final k = c[0] as String;
@@ -494,8 +666,7 @@ class _MainInventoryPageState extends State<MainInventoryPage>
     }
 
     try {
-      // PASS 1 — clés fortes + status
-      rep = await _probe([
+      rep = await probe([
         ['status', 'eq', status],
         ['type', 'eq', type],
         ['language', 'eq', language],
@@ -503,15 +674,13 @@ class _MainInventoryPageState extends State<MainInventoryPage>
         ['game_id', 'eq', gameId],
       ]);
 
-      // PASS 2 — on élargit (si la vue a un type/lang divergent)
-      rep ??= await _probe([
+      rep ??= await probe([
         ['status', 'eq', status],
         ['product_id', 'eq', productId],
         ['game_id', 'eq', gameId],
       ]);
 
-      // PASS 3 — ultime secours : status + product
-      rep ??= await _probe([
+      rep ??= await probe([
         ['status', 'eq', status],
         ['product_id', 'eq', productId],
       ]);
@@ -599,7 +768,6 @@ class _MainInventoryPageState extends State<MainInventoryPage>
   }
 
   Future<List<int>> _collectItemIdsForLine(Map<String, dynamic> line) async {
-    // Helpers de normalisation
     dynamic norm(dynamic v) {
       if (v == null) return null;
       if (v is String && v.trim().isEmpty) return null;
@@ -609,11 +777,10 @@ class _MainInventoryPageState extends State<MainInventoryPage>
     String? dateStr(dynamic v) {
       if (v == null) return null;
       if (v is DateTime) return v.toIso8601String().split('T').first;
-      if (v is String) return v; // supposé déjà 'YYYY-MM-DD'
+      if (v is String) return v;
       return v.toString();
     }
 
-    // 1) Sélection des clés raisonnables (on supprime photo_url/document_url)
     const primaryKeys = <String>{
       'product_id',
       'game_id',
@@ -640,25 +807,19 @@ class _MainInventoryPageState extends State<MainInventoryPage>
       'buyer_infos',
     };
 
-    // Construit la requête avec normalisation NULL/vides et dates
     Future<List<int>> runQuery(Set<String> keys) async {
-      var q = _sb
-          .from('item')
-          .select('id')
-          .eq('org_id', widget.orgId); // ← filtre org
+      var q = _sb.from('item').select('id').eq('org_id', widget.orgId);
 
       for (final k in keys) {
         if (!line.containsKey(k)) continue;
         var v = line[k];
 
-        // normalisation
         v = norm(v);
         if (v == null) {
           q = q.filter(k, 'is', null);
           continue;
         }
 
-        // dates -> 'YYYY-MM-DD'
         if (k == 'purchase_date' || k == 'sale_date') {
           final ds = dateStr(v);
           if (ds == null) {
@@ -671,7 +832,6 @@ class _MainInventoryPageState extends State<MainInventoryPage>
         }
       }
 
-      // statut toujours requis
       q = q.eq('status', (line['status'] ?? '').toString());
 
       final List<dynamic> raw =
@@ -682,14 +842,12 @@ class _MainInventoryPageState extends State<MainInventoryPage>
           .toList(growable: false);
     }
 
-    // 2) essai avec l’ensemble “primary”
     var ids = await runQuery(primaryKeys);
     if (ids.isNotEmpty) return ids;
 
-    // 3) Fallback : ne garder que les champs "forts"
     const strongKeys = <String>{
       'product_id',
-      'status', // géré à part mais on le garde conceptuellement
+      'status',
       'type',
       'language',
       'game_id',
@@ -719,12 +877,12 @@ class _MainInventoryPageState extends State<MainInventoryPage>
       await _sb
           .from('movement')
           .delete()
-          .eq('org_id', widget.orgId) // ← sécurité org
+          .eq('org_id', widget.orgId)
           .filter('item_id', 'in', idsCsv);
       await _sb
           .from('item')
           .delete()
-          .eq('org_id', widget.orgId) // ← sécurité org
+          .eq('org_id', widget.orgId)
           .filter('id', 'in', idsCsv);
 
       _snack('Ligne supprimée (${ids.length} item(s) + mouvements).');
@@ -738,10 +896,26 @@ class _MainInventoryPageState extends State<MainInventoryPage>
 
   @override
   Widget build(BuildContext context) {
+    // Tant que le rôle n'est pas chargé OU pas de TabController, on affiche un loader
+    if (!_roleLoaded || _tabCtrl == null) {
+      return const Scaffold(
+        body: Center(child: CircularProgressIndicator()),
+      );
+    }
+
+    final isLoggedIn = _sb.auth.currentSession != null;
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('Inventorix'),
         actions: [
+          // 🔐 Bouton Login/Logout
+          IconButton(
+            tooltip: isLoggedIn ? 'Se déconnecter' : 'Se connecter',
+            icon: Icon(isLoggedIn ? Icons.logout : Icons.login),
+            onPressed: _onTapAuthButton,
+          ),
+          // 👥 Changer d’organisation
           IconButton(
             tooltip: 'Changer d’organisation',
             icon: const Icon(Icons.switch_account),
@@ -762,12 +936,7 @@ class _MainInventoryPageState extends State<MainInventoryPage>
         ],
         bottom: TabBar(
           controller: _tabCtrl,
-          tabs: const [
-            Tab(icon: Icon(Icons.inventory_2), text: 'Inventaire'),
-            Tab(icon: Icon(Icons.trending_up), text: 'Top Sold'),
-            Tab(icon: Icon(Icons.collections_bookmark), text: 'Collection'),
-            Tab(icon: Icon(Icons.check_circle), text: 'Finalized'), // ← NEW
-          ],
+          tabs: _tabs(),
         ),
         flexibleSpace: Container(
           decoration: const BoxDecoration(
@@ -781,33 +950,14 @@ class _MainInventoryPageState extends State<MainInventoryPage>
       ),
       body: TabBarView(
         controller: _tabCtrl,
-        children: [
-          // Onglet 0 : Inventaire (normal, finalized masqué par défaut)
-          _buildInventoryBody(),
-
-          // Onglet 1 : Top Sold
-          TopSoldPage(
-            orgId: widget.orgId, // ✅ passe l’org à TopSold
-            onOpenDetails: (payload) {
-              _openDetails({
-                'org_id': widget.orgId, // 🔐 utile pour les requêtes Détails
-                ...payload,
-              });
-            },
-          ),
-
-          // Onglet 2 : Collection
-          const CollectionPage(),
-
-          // Onglet 3 : Finalized — même page, filtre forcé
-          _buildInventoryBody(forceStatus: 'finalized'),
-        ],
+        children: _tabViews(),
       ),
-      // FAB visible uniquement sur l’onglet Inventaire
       floatingActionButton: AnimatedBuilder(
-        animation: _tabCtrl,
+        animation: _tabCtrl!,
         builder: (context, _) {
-          if (_tabCtrl.index != 0) return const SizedBox.shrink();
+          if (_tabCtrl!.index != 0 || !_perm.canCreateStock) {
+            return const SizedBox.shrink();
+          }
           return FloatingActionButton.extended(
             backgroundColor: kAccentA,
             foregroundColor: Colors.white,

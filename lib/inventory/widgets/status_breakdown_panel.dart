@@ -21,9 +21,10 @@ class StatusBreakdownPanel extends StatelessWidget {
 
   static const List<String> _purchase = [
     'ordered',
-    'in_transit',
     'paid',
-    'received'
+    'in_transit',
+    'received',
+    'waiting_for_gradation'
   ];
   static const List<String> _grading = [
     'sent_to_grader',

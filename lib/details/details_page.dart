@@ -82,6 +82,9 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
   final _sb = Supabase.instance.client;
 
   bool _loading = true;
+  bool _roleLoaded = false; // ⬅️ charge du rôle
+  bool _isOwner = false; // ⬅️ owner ?
+
   Map<String, dynamic>? _viewRow; // ligne représentative (vue agrégée)
   List<Map<String, dynamic>> _items = []; // items du groupe (table item)
   List<Map<String, dynamic>> _movements = []; // historique movements
@@ -115,7 +118,61 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
   @override
   void initState() {
     super.initState();
+    // On charge en parallèle
+    unawaited(_loadRole());
     _loadAll();
+  }
+
+  /// Charge le rôle et détermine si owner (member.owner OU creator de l’org).
+  Future<void> _loadRole() async {
+    try {
+      final uid = _sb.auth.currentUser?.id;
+      final orgId = _orgIdFromContext;
+      if (uid == null || orgId == null) {
+        setState(() {
+          _roleLoaded = true;
+          _isOwner = false;
+        });
+        return;
+      }
+
+      Map<String, dynamic>? mem;
+      try {
+        mem = await _sb
+            .from('organization_member')
+            .select('role')
+            .eq('org_id', orgId)
+            .eq('user_id', uid)
+            .maybeSingle();
+      } catch (_) {}
+
+      var isOwner = (mem?['role']?.toString().toLowerCase() == 'owner');
+
+      if (!isOwner) {
+        try {
+          final org = await _sb
+              .from('organization')
+              .select('created_by')
+              .eq('id', orgId)
+              .maybeSingle();
+          if ((org?['created_by'] as String?) == uid) isOwner = true;
+        } catch (_) {}
+      }
+
+      if (mounted) {
+        setState(() {
+          _isOwner = isOwner;
+          _roleLoaded = true;
+        });
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _roleLoaded = true;
+          _isOwner = false;
+        });
+      }
+    }
   }
 
   Future<void> _loadAll() async {
@@ -157,8 +214,9 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
             .select('group_sig')
             .eq('org_id', orgId)
             .eq('product_id', pid);
-        if ((clickedStatus ?? '').isNotEmpty)
+        if ((clickedStatus ?? '').isNotEmpty) {
           q = q.eq('status', clickedStatus as Object);
+        }
         final probe =
             await q.order('id', ascending: false).limit(1).maybeSingle();
         if (probe != null &&
@@ -257,7 +315,7 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
         return;
       }
 
-      // 3) ULTIME secours: on tente tout le produit (peu probable maintenant)
+      // 3) ULTIME secours: tout le produit
       if (pid != null) {
         final raw = await _sb
             .from('item')
@@ -296,6 +354,31 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
     } finally {
       if (mounted) setState(() => _loading = false);
     }
+  }
+
+  // -------- Permissions d’affichage : masquage prix/unit --------
+
+  /// Retourne une copie de la map avec les champs unitaires masqués si non-owner.
+  Map<String, dynamic> _maskUnitInMap(Map<String, dynamic> m) {
+    if (_isOwner) return m;
+    final c = Map<String, dynamic>.from(m);
+    // Liste des champs “prix / unité” à masquer
+    for (final k in const [
+      'unit_cost',
+      'unit_fees',
+      'grading_fees', // si affiché comme coût/unité
+      'price_per_unit', // si utilisé par tes widgets
+      // ajoute ici d’autres clés “/u.” si besoin
+    ]) {
+      if (c.containsKey(k)) c[k] = null;
+    }
+    return c;
+  }
+
+  /// Applique le masquage sur une liste d’items.
+  List<Map<String, dynamic>> _maskUnitInList(List<Map<String, dynamic>> list) {
+    if (_isOwner) return list;
+    return list.map(_maskUnitInMap).toList(growable: false);
   }
 
   void _snack(String m) =>
@@ -344,6 +427,13 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
 
   @override
   Widget build(BuildContext context) {
+    // tant que rôle ou data non chargés → loader
+    if (_loading || !_roleLoaded) {
+      return const Scaffold(
+        body: Center(child: CircularProgressIndicator()),
+      );
+    }
+
     final status = (_localStatusFilter ??
             (_items.isNotEmpty
                 ? (_items.first['status']?.toString())
@@ -351,9 +441,10 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
             '')
         .toString();
 
-    final visibleItems = _filteredItems();
+    final sourceItems = _filteredItems();
+    final visibleItems = _maskUnitInList(sourceItems); // ⬅️ masque si non-owner
 
-    // marge moyenne pour le header
+    // marge moyenne pour le header (sur liste filtrée)
     final soldMargins = visibleItems
         .map((e) => e['marge'] as num?)
         .where((m) => m != null)
@@ -375,10 +466,12 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
     final bool hasPhoto = photoUrl != null && photoUrl.isNotEmpty;
     final displayImageUrl = hasPhoto ? photoUrl : kDefaultAssetPhoto;
 
-    final info = {
+    // Données d’extras (masquées pour unitaires si besoin)
+    final infoRaw = {
       ...?_viewRow,
       if (_items.isNotEmpty) ..._items.first,
     };
+    final info = _maskUnitInMap(infoRaw);
     final uDoc = (info['document_url'] ?? '').toString();
 
     return WillPopScope(
@@ -400,31 +493,31 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
           ],
           flexibleSpace: const _AppbarGradient(),
         ),
-        body: _loading
-            ? const Center(child: CircularProgressIndicator())
-            : RefreshIndicator(
-                onRefresh: _loadAll,
-                child: ListView(
-                  padding: const EdgeInsets.fromLTRB(12, 12, 12, 24),
-                  children: [
-                    DetailsHeader(
-                      title: _title,
-                      subtitle: _subtitle,
-                      status: status,
-                      qty: qtyStatus,
-                      margin: headerMargin,
-                      historyEvents: _movements,
-                      historyTitle: 'Journal des sauvegardes',
-                      historyCount: _movements.length,
-                    ),
+        body: RefreshIndicator(
+          onRefresh: _loadAll,
+          child: ListView(
+            padding: const EdgeInsets.fromLTRB(12, 12, 12, 24),
+            children: [
+              DetailsHeader(
+                title: _title,
+                subtitle: _subtitle,
+                status: status,
+                qty: qtyStatus,
+                margin: headerMargin,
+                historyEvents: _movements,
+                historyTitle: 'Journal des sauvegardes',
+                historyCount: _movements.length,
+              ),
 
-                    const SizedBox(height: 12),
-                    LayoutBuilder(
-                      builder: (ctx, cons) {
-                        final wide = cons.maxWidth >= 760;
+              const SizedBox(height: 12),
+              LayoutBuilder(
+                builder: (ctx, cons) {
+                  final wide = cons.maxWidth >= 760;
 
-                        final finance = FinanceOverview(
-                          items: visibleItems,
+                  // ⬇️ OVERVIEW visible uniquement si owner
+                  final finance = _isOwner
+                      ? FinanceOverview(
+                          items: sourceItems, // ⚠️ items “bruts” pour calculs
                           currency: currency,
                           titleInvested: 'Investi (vue)',
                           titleEstimated: 'Valeur estimée',
@@ -432,67 +525,16 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
                           subtitleInvested: 'Σ coûts (items non vendus)',
                           subtitleEstimated: 'Σ estimated_price (non vendus)',
                           subtitleSold: 'Σ sale_price (vendus)',
-                        );
+                        )
+                      : const SizedBox.shrink();
 
-                        if (wide) {
-                          return Row(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              SizedBox(
-                                width: 320,
-                                child: Column(
-                                  children: [
-                                    MediaThumb(
-                                      imageUrl: displayImageUrl,
-                                      isAsset: !hasPhoto,
-                                      aspectRatio: 0.72,
-                                      onOpen: hasPhoto
-                                          ? () async {
-                                              final uri =
-                                                  Uri.tryParse(photoUrl);
-                                              if (uri != null) {
-                                                await launchUrl(uri,
-                                                    mode: LaunchMode
-                                                        .externalApplication);
-                                              }
-                                            }
-                                          : null,
-                                    ),
-                                    const SizedBox(height: 8),
-                                    if (uDoc.isNotEmpty)
-                                      InfoBanner(
-                                        icon: Icons.description,
-                                        message:
-                                            'Document disponible — appuyez pour ouvrir',
-                                        onTap: () async {
-                                          final uri = Uri.tryParse(uDoc);
-                                          if (uri != null) {
-                                            await launchUrl(uri,
-                                                mode: LaunchMode
-                                                    .externalApplication);
-                                          }
-                                        },
-                                      ),
-                                  ],
-                                ),
-                              ),
-                              const SizedBox(width: 12),
-                              Expanded(
-                                child: Column(
-                                  children: [
-                                    finance,
-                                    const SizedBox(height: 12),
-                                    InfoExtrasCard(
-                                      data: info,
-                                      currencyFallback: currency,
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ],
-                          );
-                        } else {
-                          return Column(
+                  if (wide) {
+                    return Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        SizedBox(
+                          width: 320,
+                          child: Column(
                             children: [
                               MediaThumb(
                                 imageUrl: displayImageUrl,
@@ -523,68 +565,119 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
                                     }
                                   },
                                 ),
-                              const SizedBox(height: 12),
-                              finance,
-                              const SizedBox(height: 12),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            children: [
+                              finance, // ⬅️ masqué si non-owner
+                              if (_isOwner) const SizedBox(height: 12),
                               InfoExtrasCard(
-                                data: info,
+                                data: info, // ⬅️ unitaires masqués
                                 currencyFallback: currency,
                               ),
                             ],
-                          );
-                        }
-                      },
-                    ),
-                    const SizedBox(height: 16),
-
-                    // Items
-                    Row(
-                      children: [
-                        Text('Items',
-                            style: Theme.of(context)
-                                .textTheme
-                                .titleMedium
-                                ?.copyWith(fontWeight: FontWeight.w700)),
-                        const SizedBox(width: 8),
-                        IconButton(
-                          tooltip: _showItemsTable ? 'Masquer' : 'Afficher',
-                          icon: Icon(_showItemsTable
-                              ? Icons.expand_less
-                              : Icons.expand_more),
-                          onPressed: () => setState(
-                              () => _showItemsTable = !_showItemsTable),
+                          ),
                         ),
                       ],
-                    ),
-                    if (_showItemsTable)
-                      ItemsTable(items: visibleItems, currency: currency),
-
-                    const SizedBox(height: 16),
-
-                    // Historique
-                    Row(
+                    );
+                  } else {
+                    return Column(
                       children: [
-                        Text('Historique complet',
-                            style: Theme.of(context)
-                                .textTheme
-                                .titleMedium
-                                ?.copyWith(fontWeight: FontWeight.w700)),
+                        MediaThumb(
+                          imageUrl: displayImageUrl,
+                          isAsset: !hasPhoto,
+                          aspectRatio: 0.72,
+                          onOpen: hasPhoto
+                              ? () async {
+                                  final uri = Uri.tryParse(photoUrl);
+                                  if (uri != null) {
+                                    await launchUrl(uri,
+                                        mode: LaunchMode.externalApplication);
+                                  }
+                                }
+                              : null,
+                        ),
                         const SizedBox(height: 8),
-                        IconButton(
-                          tooltip: _showHistory ? 'Masquer' : 'Afficher',
-                          icon: Icon(_showHistory
-                              ? Icons.expand_less
-                              : Icons.expand_more),
-                          onPressed: () =>
-                              setState(() => _showHistory = !_showHistory),
+                        if (uDoc.isNotEmpty)
+                          InfoBanner(
+                            icon: Icons.description,
+                            message:
+                                'Document disponible — appuyez pour ouvrir',
+                            onTap: () async {
+                              final uri = Uri.tryParse(uDoc);
+                              if (uri != null) {
+                                await launchUrl(uri,
+                                    mode: LaunchMode.externalApplication);
+                              }
+                            },
+                          ),
+                        const SizedBox(height: 12),
+                        finance, // ⬅️ masqué si non-owner
+                        if (_isOwner) const SizedBox(height: 12),
+                        InfoExtrasCard(
+                          data: info, // ⬅️ unitaires masqués
+                          currencyFallback: currency,
                         ),
                       ],
-                    ),
-                    const SizedBox(height: 8),
-                    if (_showHistory) HistoryList(movements: _movements),
-                  ],
-                ),
+                    );
+                  }
+                },
               ),
+              const SizedBox(height: 16),
+
+              // Items
+              Row(
+                children: [
+                  Text('Items',
+                      style: Theme.of(context)
+                          .textTheme
+                          .titleMedium
+                          ?.copyWith(fontWeight: FontWeight.w700)),
+                  const SizedBox(width: 8),
+                  IconButton(
+                    tooltip: _showItemsTable ? 'Masquer' : 'Afficher',
+                    icon: Icon(_showItemsTable
+                        ? Icons.expand_less
+                        : Icons.expand_more),
+                    onPressed: () =>
+                        setState(() => _showItemsTable = !_showItemsTable),
+                  ),
+                ],
+              ),
+              if (_showItemsTable)
+                ItemsTable(
+                  items: visibleItems, // ⬅️ unitaires masqués si non-owner
+                  currency: currency,
+                ),
+
+              const SizedBox(height: 16),
+
+              // Historique
+              Row(
+                children: [
+                  Text('Historique complet',
+                      style: Theme.of(context)
+                          .textTheme
+                          .titleMedium
+                          ?.copyWith(fontWeight: FontWeight.w700)),
+                  const SizedBox(width: 8),
+                  IconButton(
+                    tooltip: _showHistory ? 'Masquer' : 'Afficher',
+                    icon: Icon(
+                        _showHistory ? Icons.expand_less : Icons.expand_more),
+                    onPressed: () =>
+                        setState(() => _showHistory = !_showHistory),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              if (_showHistory) HistoryList(movements: _movements),
+            ],
+          ),
+        ),
       ),
     );
   }

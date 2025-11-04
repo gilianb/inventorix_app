@@ -104,22 +104,35 @@ class ItemsTable extends StatelessWidget {
   /// Couleur de chip par statut (visuel uniquement)
   Color _statusColor(String status) {
     switch (status) {
+      case 'ordered':
+        return Colors.grey;
       case 'paid':
-      case 'received':
-        return kAccentB;
-      case 'listed':
-        return kAccentA;
-      case 'sold':
-      case 'shipped':
-      case 'finalized':
-        return const Color(0xFF22C55E); // green
+        return Colors.teal;
       case 'in_transit':
-        return const Color(0xFF3B82F6); // blue
+        return Colors.blueGrey;
+      case 'received':
+        return Colors.green;
+      case 'waiting_for_gradation':
+        return Colors.orangeAccent;
+      case 'sent_to_grader':
+        return Colors.orange;
       case 'at_grader':
+        return Colors.deepOrange;
       case 'graded':
-        return const Color(0xFFa855f7); // purple
+        return const Color.fromARGB(255, 255, 7, 164);
+      case 'listed':
+        return Colors.blue;
+      case 'awaiting_payment':
+        return const Color.fromARGB(
+            255, 11, 206, 245); // amber-ish / ou ta palette
+      case 'sold':
+        return Colors.purple;
+      case 'shipped':
+        return Colors.indigo;
+      case 'finalized':
+        return const Color.fromARGB(255, 7, 76, 9);
       default:
-        return kAccentC; // amber
+        return const Color.fromARGB(255, 235, 231, 231);
     }
   }
 }

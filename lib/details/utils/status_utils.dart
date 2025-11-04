@@ -3,9 +3,10 @@ import 'package:flutter/material.dart';
 /// Ordre canonique des statuts
 const kStatusOrder = <String>[
   'ordered',
-  'in_transit',
   'paid',
+  'in_transit',
   'received',
+  'waiting_for_gradation', // ⬅️ AJOUT
   'sent_to_grader',
   'at_grader',
   'graded',
@@ -22,28 +23,31 @@ Color statusColor(BuildContext context, String s) {
   switch (s) {
     case 'ordered':
       return Colors.grey;
-    case 'in_transit':
-      return Colors.blueGrey;
     case 'paid':
       return Colors.teal;
+    case 'in_transit':
+      return Colors.blueGrey;
     case 'received':
       return Colors.green;
+    case 'waiting_for_gradation':
+      return Colors.orangeAccent;
     case 'sent_to_grader':
       return Colors.orange;
     case 'at_grader':
       return Colors.deepOrange;
     case 'graded':
-      return Colors.amber;
+      return const Color.fromARGB(255, 255, 7, 164);
     case 'listed':
       return Colors.blue;
     case 'awaiting_payment':
-      return const Color(0xFFF59E0B); // amber-ish / ou ta palette
+      return const Color.fromARGB(
+          255, 11, 206, 245); // amber-ish / ou ta palette
     case 'sold':
       return Colors.purple;
     case 'shipped':
       return Colors.indigo;
     case 'finalized':
-      return cs.primary;
+      return const Color.fromARGB(255, 7, 76, 9);
     default:
       return cs.outline;
   }

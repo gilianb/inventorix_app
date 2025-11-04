@@ -8,10 +8,10 @@ import '../details/widgets/marge.dart'; // MarginChip
 import '../inventory/main_inventory_page.dart'
     show kAccentA, kAccentB, kAccentC, kAccentG;
 import 'package:inventorix_app/details/details_page.dart'
-    hide
-        kAccentA,
-        kAccentC,
-        kAccentB; // ⬅️ pour ouverture locale si pas de callback
+    hide kAccentA, kAccentC, kAccentB;
+
+// 🔐 RBAC
+import 'package:inventorix_app/org/roles.dart';
 
 class TopSoldPage extends StatefulWidget {
   const TopSoldPage({super.key, this.orgId, this.onOpenDetails});
@@ -30,6 +30,13 @@ class _TopSoldPageState extends State<TopSoldPage> {
   final _sb = Supabase.instance.client;
 
   bool _loading = true;
+  bool _roleLoaded = false;
+
+  // RBAC
+  OrgRole _role = OrgRole.viewer;
+  RolePermissions get _perm => kRoleMatrix[_role]!;
+  bool get _isOwner => _role == OrgRole.owner;
+
   String _typeFilter = 'all'; // 'all' | 'single' | 'sealed'
   String? _gameFilter; // games.label (nullable)
   List<Map<String, dynamic>> _rows = [];
@@ -42,12 +49,9 @@ class _TopSoldPageState extends State<TopSoldPage> {
 
   static const String _kDefaultAsset = 'assets/images/default_card.png';
 
-  static const List<String> _wantedStatuses = [
-    'sold',
-    'shipped',
-    'finalized',
-    'collection'
-  ];
+  // Base de statuts éligibles à l'onglet "Top Sold" (sans "collection")
+  static const List<String> _soldLike = ['sold', 'shipped', 'finalized'];
+  static const String _collectionStatus = 'collection';
 
   /// ⚠️ Clé de regroupement STRICTE — identique à MainInventory
   static const Set<String> _strictLineKeys = {
@@ -79,13 +83,79 @@ class _TopSoldPageState extends State<TopSoldPage> {
   @override
   void initState() {
     super.initState();
-    _fetch();
+    _init();
+  }
+
+  Future<void> _init() async {
+    await _loadRole();
+    await _fetch();
   }
 
   @override
   void dispose() {
     _searchCtrl.dispose();
     super.dispose();
+  }
+
+  // --------- RBAC ----------
+  Future<void> _loadRole() async {
+    try {
+      final uid = _sb.auth.currentUser?.id;
+      if (uid == null) {
+        setState(() => _roleLoaded = true);
+        return;
+      }
+
+      final orgId = widget.orgId;
+      if ((orgId ?? '').isEmpty) {
+        // Sans filtre d'org, on n'applique pas de masque dur ici
+        setState(() {
+          _role = OrgRole.owner;
+          _roleLoaded = true;
+        });
+        return;
+      }
+
+      Map<String, dynamic>? row;
+      try {
+        row = await _sb
+            .from('organization_member')
+            .select('role')
+            .eq('org_id', orgId!)
+            .eq('user_id', uid)
+            .maybeSingle();
+      } catch (_) {}
+
+      String? roleStr = (row?['role'] as String?);
+
+      if (roleStr == null) {
+        try {
+          final org = await _sb
+              .from('organization')
+              .select('created_by')
+              .eq('id', orgId as Object)
+              .maybeSingle();
+          final createdBy = org?['created_by'] as String?;
+          if (createdBy != null && createdBy == uid) {
+            roleStr = 'owner';
+          }
+        } catch (_) {}
+      }
+
+      final parsed = OrgRole.values.firstWhere(
+        (r) => r.name == (roleStr ?? 'viewer').toLowerCase(),
+        orElse: () => OrgRole.viewer,
+      );
+
+      if (mounted) {
+        setState(() {
+          _role = parsed;
+          _roleLoaded = true;
+        });
+      }
+    } catch (_) {
+      if (mounted) setState(() => _roleLoaded = true);
+    }
   }
 
   // --------- Helpers ----------
@@ -116,15 +186,41 @@ class _TopSoldPageState extends State<TopSoldPage> {
   Future<void> _fetch() async {
     setState(() => _loading = true);
     try {
-      // 1) Base query
-      PostgrestFilterBuilder q = _sb.from('item').select('''
-            id, product_id, type, language, game_id,
-            status, sale_date, sale_price, currency, marge,
-            unit_cost, unit_fees, shipping_fees, commission_fees, grading_fees,
-            photo_url, buyer_company, supplier_name, purchase_date,
-            channel_id, notes, grade_id, grading_note, document_url,
-            estimated_price, item_location, org_id
-          ''');
+      // 1) Base query — sur la VUE MASQUÉE
+      final canSeeCosts = _perm.canSeeUnitCosts;
+      final canSeeRevenue = _perm.canSeeRevenue;
+
+      final selectedCols = <String>[
+        'id',
+        'product_id',
+        'type',
+        'language',
+        'game_id',
+        'status',
+        'sale_date',
+        if (canSeeRevenue) 'sale_price',
+        'currency',
+        'marge',
+        if (canSeeCosts) 'unit_cost',
+        if (canSeeCosts) 'unit_fees',
+        if (canSeeCosts) 'shipping_fees',
+        if (canSeeCosts) 'commission_fees',
+        if (canSeeCosts) 'grading_fees',
+        'photo_url',
+        'buyer_company',
+        'supplier_name',
+        'purchase_date',
+        'channel_id',
+        'notes',
+        'grade_id',
+        'grading_note',
+        'document_url',
+        'estimated_price',
+        'item_location',
+        'org_id',
+      ].join(', ');
+
+      PostgrestFilterBuilder q = _sb.from('item_masked').select(selectedCols);
 
       if (_typeFilter != 'all') {
         q = q.eq('type', _typeFilter);
@@ -148,11 +244,16 @@ class _TopSoldPageState extends State<TopSoldPage> {
           .map<Map<String, dynamic>>((e) => Map<String, dynamic>.from(e as Map))
           .toList();
 
-      // 2) Filtre statuts: ventes/collection effectives
+      // 2) Statuts autorisés selon le rôle
+      final wantedStatuses = _isOwner
+          ? [..._soldLike, _collectionStatus]
+          : List<String>.from(_soldLike);
+
+      // 2.bis) Filtre statuts + contrainte revenu si nécessaire
       items = items.where((r) {
         final s = (r['status'] ?? '').toString();
-        final hasSale = r['sale_price'] != null; // clé: vente existante
-        return _wantedStatuses.contains(s) && hasSale;
+        final hasSale = canSeeRevenue ? r['sale_price'] != null : true;
+        return wantedStatuses.contains(s) && hasSale;
       }).toList();
 
       // 3) Lookups product & games (pour nom/sku/jeu)
@@ -186,12 +287,12 @@ class _TopSoldPageState extends State<TopSoldPage> {
         };
       }
 
-      // 3.bis) Fallback: noms depuis la vue v_items_by_status
+      // 3.bis) Fallback: noms depuis la vue MASQUÉE
       Map<int, Map<String, dynamic>> vInfoByProductId = {};
       if (productIds.isNotEmpty) {
         final String idsCsv = '(${productIds.join(",")})';
         final List<dynamic> vrows = await _sb
-            .from('v_items_by_status')
+            .from('v_items_by_status_masked')
             .select(
                 'product_id, game_id, product_name, game_label, game_code, language')
             .filter('product_id', 'in', idsCsv)
@@ -303,20 +404,24 @@ class _TopSoldPageState extends State<TopSoldPage> {
         });
 
         g['_count'] = (g['_count'] as int) + 1;
-        g['_sum_marge'] = (g['_sum_marge'] as num).toDouble() +
-            (_asNum(r['marge']) ?? 0).toDouble();
-        g['_sum_sale'] =
-            (g['_sum_sale'] as num).toDouble() + (_asNum(r['sale_price']) ?? 0);
-        g['_sum_ucost'] =
-            (g['_sum_ucost'] as num).toDouble() + (_asNum(r['unit_cost']) ?? 0);
-        g['_sum_ufees'] =
-            (g['_sum_ufees'] as num).toDouble() + (_asNum(r['unit_fees']) ?? 0);
-        g['_sum_ship'] = (g['_sum_ship'] as num).toDouble() +
-            (_asNum(r['shipping_fees']) ?? 0);
-        g['_sum_comm'] = (g['_sum_comm'] as num).toDouble() +
-            (_asNum(r['commission_fees']) ?? 0);
-        g['_sum_grad'] = (g['_sum_grad'] as num).toDouble() +
-            (_asNum(r['grading_fees']) ?? 0);
+        g['_sum_marge'] =
+            (g['_sum_marge'] as num).toDouble() + (_asNum(r['marge']) ?? 0);
+        if (_perm.canSeeRevenue) {
+          g['_sum_sale'] = (g['_sum_sale'] as num).toDouble() +
+              (_asNum(r['sale_price']) ?? 0);
+        }
+        if (_perm.canSeeUnitCosts) {
+          g['_sum_ucost'] = (g['_sum_ucost'] as num).toDouble() +
+              (_asNum(r['unit_cost']) ?? 0);
+          g['_sum_ufees'] = (g['_sum_ufees'] as num).toDouble() +
+              (_asNum(r['unit_fees']) ?? 0);
+          g['_sum_ship'] = (g['_sum_ship'] as num).toDouble() +
+              (_asNum(r['shipping_fees']) ?? 0);
+          g['_sum_comm'] = (g['_sum_comm'] as num).toDouble() +
+              (_asNum(r['commission_fees']) ?? 0);
+          g['_sum_grad'] = (g['_sum_grad'] as num).toDouble() +
+              (_asNum(r['grading_fees']) ?? 0);
+        }
 
         final curPhoto = (g['_any_photo'] ?? '').toString();
         if (curPhoto.isEmpty) {
@@ -325,7 +430,7 @@ class _TopSoldPageState extends State<TopSoldPage> {
         }
       }
 
-      // 6) Lignes d’affichage (moyennes par groupe)
+// 6) Lignes d’affichage (moyennes par groupe)
       final rows = <Map<String, dynamic>>[];
       for (final g in groups.values) {
         final cnt = (g['_count'] as int);
@@ -334,10 +439,29 @@ class _TopSoldPageState extends State<TopSoldPage> {
         final pid = g['product_id'] as int?;
         final gid = g['game_id'] as int?;
 
-        final product = pid != null ? (productById[pid] ?? const {}) : const {};
-        final game = gid != null ? (gameById[gid] ?? const {}) : const {};
-        final vinfo =
-            pid != null ? (vInfoByProductId[pid] ?? const {}) : const {};
+        // Récup des infos
+        final prod = (pid != null)
+            ? (productById[pid] ?? const <String, dynamic>{})
+            : const <String, dynamic>{};
+        final game = (gid != null)
+            ? (gameById[gid] ?? const <String, dynamic>{})
+            : const <String, dynamic>{};
+        final vinfo = (pid != null)
+            ? (vInfoByProductId[pid] ?? const <String, dynamic>{})
+            : const <String, dynamic>{};
+
+        // Résolution des libellés avec fallback
+        final resolvedProductName = _safeStr(prod['name']).isNotEmpty
+            ? _safeStr(prod['name'])
+            : _safeStr(vinfo['product_name']);
+
+        final resolvedGameLabel = _safeStr(game['label']).isNotEmpty
+            ? _safeStr(game['label'])
+            : _safeStr(vinfo['game_label']);
+
+        final resolvedGameCode = _safeStr(game['code']).isNotEmpty
+            ? _safeStr(game['code'])
+            : _safeStr(vinfo['game_code']);
 
         rows.add({
           for (final k in _strictLineKeys) k: g[k],
@@ -348,28 +472,27 @@ class _TopSoldPageState extends State<TopSoldPage> {
           'language': g['language'],
           'org_id': g['org_id'],
 
-          // Affichage + Détails
-          'product_name':
-              (product['name'] ?? vinfo['product_name'] ?? '').toString(),
-          'language_display': (product['language'] ??
-                  vinfo['language'] ??
-                  (g['language'] ?? ''))
-              .toString(),
-          'game_label': (game['label'] ?? vinfo['game_label'] ?? '').toString(),
-          'game_code': (game['code'] ?? vinfo['game_code'] ?? '').toString(),
+          // 🔧 on met les bonnes valeurs ICI
+          'product_name': resolvedProductName,
+          'language_display': (g['language'] ?? '').toString(),
+          'game_label': resolvedGameLabel,
+          'game_code': resolvedGameCode,
 
-          'product': product,
+          'product': prod,
           'game': game,
           'photo_url': (g['_any_photo'] ?? '').toString(),
           'currency': g['currency'] ?? 'USD',
 
           'marge': avg((g['_sum_marge'] as num)),
-          'sale_price': avg((g['_sum_sale'] as num)),
-          'unit_cost': avg((g['_sum_ucost'] as num)),
-          'unit_fees': avg((g['_sum_ufees'] as num)),
-          'shipping_fees': avg((g['_sum_ship'] as num)),
-          'commission_fees': avg((g['_sum_comm'] as num)),
-          'grading_fees': avg((g['_sum_grad'] as num)),
+          if (_perm.canSeeRevenue) 'sale_price': avg((g['_sum_sale'] as num)),
+          if (_perm.canSeeUnitCosts) 'unit_cost': avg((g['_sum_ucost'] as num)),
+          if (_perm.canSeeUnitCosts) 'unit_fees': avg((g['_sum_ufees'] as num)),
+          if (_perm.canSeeUnitCosts)
+            'shipping_fees': avg((g['_sum_ship'] as num)),
+          if (_perm.canSeeUnitCosts)
+            'commission_fees': avg((g['_sum_comm'] as num)),
+          if (_perm.canSeeUnitCosts)
+            'grading_fees': avg((g['_sum_grad'] as num)),
           'qty': cnt,
         });
       }
@@ -394,8 +517,7 @@ class _TopSoldPageState extends State<TopSoldPage> {
     }
   }
 
-  // --------- Ouverture Détails (robuste, comme MainInventory) ----------
-// --------- Ouverture Détails (robuste, sans updated_at) ----------
+  // --------- Ouverture Détails (robuste, sans updated_at) ----------
   Future<void> _openDetails(Map<String, dynamic> line) async {
     final String? orgId = ((widget.orgId ?? '').isNotEmpty)
         ? widget.orgId
@@ -416,8 +538,7 @@ class _TopSoldPageState extends State<TopSoldPage> {
 
     Map<String, dynamic>? rep;
 
-    // ⬇️ même logique que sur MainInventory, mais on ne touche plus updated_at
-    Future<Map<String, dynamic>?> _probe(List<List<dynamic>> conds) async {
+    Future<Map<String, dynamic>?> probe(List<List<dynamic>> conds) async {
       var q = _sb.from('item').select('id, group_sig').eq('org_id', orgId);
       for (final c in conds) {
         final k = c[0] as String;
@@ -429,13 +550,12 @@ class _TopSoldPageState extends State<TopSoldPage> {
           q = q.eq(k, v);
         }
       }
-      // 🔁 on choisit l’ID le plus récent — pas de dépendance à updated_at
       return await q.order('id', ascending: false).limit(1).maybeSingle();
     }
 
     try {
       // PASS 1 — clés fortes
-      rep = await _probe([
+      rep = await probe([
         ['status', 'eq', status],
         ['type', 'eq', type],
         ['language', 'eq', language],
@@ -444,14 +564,14 @@ class _TopSoldPageState extends State<TopSoldPage> {
       ]);
 
       // PASS 2
-      rep ??= await _probe([
+      rep ??= await probe([
         ['status', 'eq', status],
         ['product_id', 'eq', productId],
         ['game_id', 'eq', gameId],
       ]);
 
       // PASS 3 — ultime secours
-      rep ??= await _probe([
+      rep ??= await probe([
         ['status', 'eq', status],
         ['product_id', 'eq', productId],
       ]);
@@ -476,6 +596,7 @@ class _TopSoldPageState extends State<TopSoldPage> {
     if (widget.onOpenDetails != null) {
       widget.onOpenDetails!(payload);
     } else {
+      // ignore: use_build_context_synchronously
       await Navigator.of(context).push<bool>(
         MaterialPageRoute(
           builder: (_) =>
@@ -490,7 +611,7 @@ class _TopSoldPageState extends State<TopSoldPage> {
   /// Vignette format "carte" (≈100×72) avec fallback asset si pas d'image.
   Widget _cardThumb(String photoUrl) {
     const double h = 100;
-    const double w = 72; // ~ h * 0.72
+    const double w = 72;
     final hasNet = photoUrl.isNotEmpty;
 
     Widget img;
@@ -522,6 +643,10 @@ class _TopSoldPageState extends State<TopSoldPage> {
 
   @override
   Widget build(BuildContext context) {
+    if (!_roleLoaded) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
     return Column(
       children: [
         // === Barre filtres ===
@@ -553,7 +678,7 @@ class _TopSoldPageState extends State<TopSoldPage> {
                   runSpacing: 8,
                   crossAxisAlignment: WrapCrossAlignment.center,
                   children: [
-                    // Type (avec "Tous")
+                    // Type
                     SegmentedButton<String>(
                       segments: const [
                         ButtonSegment(value: 'all', label: Text('Tous')),
@@ -590,7 +715,7 @@ class _TopSoldPageState extends State<TopSoldPage> {
                         final safeValue =
                             (_gameFilter != null && games.contains(_gameFilter))
                                 ? _gameFilter
-                                : null; // évite valeur hors-liste
+                                : null;
                         return DropdownButton<String?>(
                           value: safeValue,
                           hint: const Text('Filtrer par jeu'),
@@ -612,7 +737,7 @@ class _TopSoldPageState extends State<TopSoldPage> {
                       },
                     ),
 
-                    // Search (multi-mots, Enter pour lancer)
+                    // Search
                     SizedBox(
                       width: 260,
                       child: TextField(
@@ -629,11 +754,11 @@ class _TopSoldPageState extends State<TopSoldPage> {
                                   icon: const Icon(Icons.clear),
                                   onPressed: () {
                                     _searchCtrl.clear();
-                                    _fetch(); // relance à vide
+                                    _fetch();
                                   },
                                 ),
                         ),
-                        onSubmitted: (_) => _fetch(), // ⬅️ Enter
+                        onSubmitted: (_) => _fetch(),
                       ),
                     ),
 
@@ -655,7 +780,8 @@ class _TopSoldPageState extends State<TopSoldPage> {
               ? const Center(child: CircularProgressIndicator())
               : (_rows.isEmpty
                   ? const Center(
-                      child: Text('Aucune vente/collection trouvée.'))
+                      child: Text(
+                          'Aucune vente trouvée.')) // "collection" masqué si non-owner
                   : ListView.builder(
                       padding: const EdgeInsets.fromLTRB(12, 8, 12, 24),
                       itemCount: _rows.length,
@@ -690,12 +816,16 @@ class _TopSoldPageState extends State<TopSoldPage> {
                             : _safeStr(r['currency']);
 
                         final num? marge = _asNum(r['marge']);
-                        final num unitCost = (_asNum(r['unit_cost']) ?? 0) +
-                            (_asNum(r['unit_fees']) ?? 0) +
-                            (_asNum(r['shipping_fees']) ?? 0) +
-                            (_asNum(r['commission_fees']) ?? 0) +
-                            (_asNum(r['grading_fees']) ?? 0);
-                        final num? salePrice = _asNum(r['sale_price']);
+                        final num unitCost = _perm.canSeeUnitCosts
+                            ? ((_asNum(r['unit_cost']) ?? 0) +
+                                (_asNum(r['unit_fees']) ?? 0) +
+                                (_asNum(r['shipping_fees']) ?? 0) +
+                                (_asNum(r['commission_fees']) ?? 0) +
+                                (_asNum(r['grading_fees']) ?? 0))
+                            : 0;
+                        final num? salePrice = _perm.canSeeRevenue
+                            ? _asNum(r['sale_price'])
+                            : null;
 
                         return Card(
                           elevation: 0.8,
@@ -704,7 +834,7 @@ class _TopSoldPageState extends State<TopSoldPage> {
                               borderRadius: BorderRadius.circular(14)),
                           child: InkWell(
                             borderRadius: BorderRadius.circular(14),
-                            onTap: () => _openDetails(r), // ✅ robuste
+                            onTap: () => _openDetails(r),
                             child: Padding(
                               padding: const EdgeInsets.all(12),
                               child: Row(
@@ -768,30 +898,33 @@ class _TopSoldPageState extends State<TopSoldPage> {
                                                   _statusColor(status),
                                             ),
                                             MarginChip(marge: marge),
-                                            Chip(
-                                              avatar: const Icon(Icons.sell,
-                                                  size: 16,
-                                                  color: Colors.white),
-                                              label: Text(
-                                                (salePrice == null)
-                                                    ? '—'
-                                                    : '${_money(salePrice)} $currency',
-                                                style: const TextStyle(
+                                            if (_perm.canSeeRevenue)
+                                              Chip(
+                                                avatar: const Icon(Icons.sell,
+                                                    size: 16,
                                                     color: Colors.white),
+                                                label: Text(
+                                                  (salePrice == null)
+                                                      ? '—'
+                                                      : '${_money(salePrice)} $currency',
+                                                  style: const TextStyle(
+                                                      color: Colors.white),
+                                                ),
+                                                backgroundColor: kAccentB,
                                               ),
-                                              backgroundColor: kAccentB,
-                                            ),
-                                            Chip(
-                                              avatar: const Icon(Icons.savings,
-                                                  size: 16,
-                                                  color: Colors.white),
-                                              label: Text(
-                                                '${_money(unitCost)} $currency',
-                                                style: const TextStyle(
+                                            if (_perm.canSeeUnitCosts)
+                                              Chip(
+                                                avatar: const Icon(
+                                                    Icons.savings,
+                                                    size: 16,
                                                     color: Colors.white),
+                                                label: Text(
+                                                  '${_money(unitCost)} $currency',
+                                                  style: const TextStyle(
+                                                      color: Colors.white),
+                                                ),
+                                                backgroundColor: kAccentC,
                                               ),
-                                              backgroundColor: kAccentC,
-                                            ),
                                           ],
                                         ),
                                       ],
@@ -816,7 +949,7 @@ class _TopSoldPageState extends State<TopSoldPage> {
       case 'finalized':
         return kAccentG;
       default:
-        return kAccentA; // collection & autres
+        return kAccentA; // 'collection' & autres (mais 'collection' est masqué si non-owner)
     }
   }
 

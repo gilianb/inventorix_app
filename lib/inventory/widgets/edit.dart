@@ -1,7 +1,10 @@
-// edit.dart (extrait complet du fichier, avec la partie _apply modifiée)
+// ignore_for_file: deprecated_member_use
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'storage_upload_tile.dart';
+
+// 🔐 RBAC (conservé mais NON utilisé pour masquer quoi que ce soit)
+import 'package:inventorix_app/org/roles.dart';
 
 class EditItemsDialog extends StatefulWidget {
   const EditItemsDialog({
@@ -63,6 +66,10 @@ class EditItemsDialog extends StatefulWidget {
 class _EditItemsDialogState extends State<EditItemsDialog> {
   final _sb = Supabase.instance.client;
 
+  // RBAC
+  final OrgRole _role = OrgRole.viewer;
+  bool _roleLoaded = false;
+  RolePermissions get _perm => kRoleMatrix[_role]!;
   // combien d'items modifier dans ce groupe
   late int _countToEdit;
 
@@ -87,7 +94,7 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
   final _documentUrlCtrl = TextEditingController();
   final _unitCostCtrl = TextEditingController();
 
-  // Nouveaux contrôleurs
+  // Nouveaux contrôleurs (tête produit / item)
   String _newType = 'single'; // 'single' | 'sealed'
   final _productNameCtrl = TextEditingController();
   String _language = 'EN';
@@ -105,9 +112,10 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
   // Statuts
   static const List<String> kAllStatuses = [
     'ordered',
-    'in_transit',
     'paid',
+    'in_transit',
     'received',
+    'waiting_for_gradation',
     'sent_to_grader',
     'at_grader',
     'graded',
@@ -124,30 +132,16 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
 
   Map<String, dynamic> get _sample => (widget.initialSample ?? const {});
 
-  // Helpers de coercition
-  String _coerceString(String? value, List<String> allowed, String fallback) {
-    final v = (value ?? '').trim();
-    return allowed.contains(v) ? v : fallback;
-  }
-
-  List<DropdownMenuItem<String>> _stringItems(List<String> allowed,
-      {String? extra}) {
-    final seen = <String>{...allowed};
-    final out = <DropdownMenuItem<String>>[
-      for (final s in allowed) DropdownMenuItem(value: s, child: Text(s)),
-    ];
-    if (extra != null && extra.isNotEmpty && !seen.contains(extra)) {
-      out.insert(0, DropdownMenuItem(value: extra, child: Text(extra)));
-    }
-    return out;
-  }
-
   @override
   void initState() {
     super.initState();
     _countToEdit = widget.availableQty.clamp(1, 999999);
-    final s = _sample;
+    _init();
+  }
 
+  Future<void> _init() async {
+    // 1) Pré-remplissage avec l’échantillon passé (peut être incomplet)
+    final s = _sample;
     _newStatus = _coerceString(widget.status, kAllStatuses, kAllStatuses.first);
 
     _gradeIdCtrl.text = (s['grade_id'] ?? '').toString();
@@ -176,7 +170,94 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
     _paymentTypeCtrl.text = (s['payment_type'] ?? '').toString();
     _buyerInfosCtrl.text = (s['buyer_infos'] ?? '').toString();
 
-    _loadGames();
+    // 2) Rôle (non bloquant ici)
+    await _loadRole();
+
+    // 3) Jeux (pour dropdown)
+    await _loadGames();
+
+    // 4) 🔥 HYDRATATION depuis la DB : on complète chaque champ manquant
+    await _hydrateFromDb();
+
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _loadRole() async {
+    try {
+      final uid = _sb.auth.currentUser?.id;
+      final orgId = (_sample['org_id']?.toString().isNotEmpty ?? false)
+          ? _sample['org_id'].toString()
+          : null;
+
+      if (uid == null) {
+        setState(() => _roleLoaded = true);
+        return;
+      }
+
+      if (orgId == null) {
+        setState(() {
+          _roleLoaded = true;
+        });
+        return;
+      }
+
+      Map<String, dynamic>? row;
+      try {
+        row = await _sb
+            .from('organization_member')
+            .select('role')
+            .eq('org_id', orgId)
+            .eq('user_id', uid)
+            .maybeSingle();
+      } catch (_) {}
+
+      String? roleStr = (row?['role'] as String?);
+
+      if (roleStr == null) {
+        try {
+          final org = await _sb
+              .from('organization')
+              .select('created_by')
+              .eq('id', orgId)
+              .maybeSingle();
+          final createdBy = org?['created_by'] as String?;
+          if (createdBy != null && createdBy == uid) {
+            roleStr = 'owner';
+          }
+        } catch (_) {}
+      }
+
+      OrgRole.values.firstWhere(
+        (r) => r.name == (roleStr ?? 'viewer').toLowerCase(),
+        orElse: () => OrgRole.viewer,
+      );
+
+      if (mounted) {
+        setState(() {
+          _roleLoaded = true;
+        });
+      }
+    } catch (_) {
+      if (mounted) setState(() => _roleLoaded = true);
+    }
+  }
+
+  // ======= utils =======
+  String _coerceString(String? value, List<String> allowed, String fallback) {
+    final v = (value ?? '').trim();
+    return allowed.contains(v) ? v : fallback;
+  }
+
+  List<DropdownMenuItem<String>> _stringItems(List<String> allowed,
+      {String? extra}) {
+    final seen = <String>{...allowed};
+    final out = <DropdownMenuItem<String>>[
+      for (final s in allowed) DropdownMenuItem(value: s, child: Text(s)),
+    ];
+    if (extra != null && extra.isNotEmpty && !seen.contains(extra)) {
+      out.insert(0, DropdownMenuItem(value: extra, child: Text(extra)));
+    }
+    return out;
   }
 
   Future<void> _loadGames() async {
@@ -191,10 +272,7 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
 
         final sampleGameId = _asInt(_sample['game_id']);
         if (sampleGameId != null && !list.any((g) => g['id'] == sampleGameId)) {
-          list.insert(0, {
-            'id': sampleGameId,
-            'label': 'Game #$sampleGameId',
-          });
+          list.insert(0, {'id': sampleGameId, 'label': 'Game #$sampleGameId'});
         }
 
         _games = list;
@@ -225,6 +303,190 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
       return DateTime.tryParse(s.length > 10 ? s : '${s}T00:00:00');
     } catch (_) {
       return null;
+    }
+  }
+
+  // ========= HYDRATATION DB =========
+  Future<void> _hydrateFromDb() async {
+    final sample = _sample;
+    final orgId = (sample['org_id']?.toString().isNotEmpty ?? false)
+        ? sample['org_id']
+        : null;
+    final String? groupSig =
+        (sample['group_sig']?.toString().isNotEmpty ?? false)
+            ? sample['group_sig'].toString()
+            : null;
+
+    // Champs qu’on souhaite hydrater depuis 'item'
+    const itemCols = <String>[
+      'grade_id',
+      'grading_note',
+      'grading_fees',
+      'estimated_price',
+      'sale_price',
+      'sale_date',
+      'item_location',
+      'tracking',
+      'channel_id',
+      'buyer_company',
+      'supplier_name',
+      'notes',
+      'photo_url',
+      'document_url',
+      'unit_cost',
+      'shipping_fees',
+      'commission_fees',
+      'payment_type',
+      'buyer_infos',
+      'type',
+      'language',
+      'game_id',
+      'currency',
+    ];
+
+    List<Map<String, dynamic>> rows = const [];
+
+    try {
+      if (groupSig != null && groupSig.isNotEmpty) {
+        // Cas le plus fiable : group_sig
+        var q = _sb
+            .from('item')
+            .select(itemCols.join(', '))
+            .eq('group_sig', groupSig)
+            .eq('status', widget.status);
+        if (orgId != null) q = q.eq('org_id', orgId);
+        final List<dynamic> raw =
+            await q.order('id', ascending: false).limit(50);
+        rows = raw
+            .map<Map<String, dynamic>>(
+                (e) => Map<String, dynamic>.from(e as Map))
+            .toList();
+      } else {
+        // Fallback : filtre par product_id + status + clés fortes présentes
+        const strongKeys = <String>{
+          'game_id',
+          'type',
+          'language',
+          'channel_id',
+          'purchase_date',
+          'supplier_name',
+          'buyer_company',
+          'item_location',
+          'tracking',
+        };
+
+        var q = _sb
+            .from('item')
+            .select(itemCols.join(', '))
+            .eq('product_id', widget.productId)
+            .eq('status', widget.status);
+        if (orgId != null) q = q.eq('org_id', orgId);
+
+        // Appliquer seulement les clés présentes dans l’échantillon
+        for (final k in strongKeys) {
+          if (sample.containsKey(k) &&
+              (sample[k] != null) &&
+              sample[k].toString().isNotEmpty) {
+            var v = sample[k];
+            if (k == 'purchase_date') {
+              final d = v is DateTime
+                  ? v.toIso8601String().substring(0, 10)
+                  : v.toString().substring(0, 10);
+              q = q.eq(k, d);
+            } else {
+              q = q.eq(k, v);
+            }
+          }
+        }
+
+        final List<dynamic> raw =
+            await q.order('id', ascending: false).limit(50);
+        rows = raw
+            .map<Map<String, dynamic>>(
+                (e) => Map<String, dynamic>.from(e as Map))
+            .toList();
+      }
+    } catch (_) {
+      rows = const [];
+    }
+
+    // Helper pour trouver la 1ère valeur non nulle pour une clé
+    dynamic firstNonNull(String key) {
+      for (final r in rows) {
+        final v = r[key];
+        if (v != null && v.toString().isNotEmpty) return v;
+      }
+      return null;
+    }
+
+    // Remplir les contrôleurs qui sont vides
+    void fillIfEmpty(TextEditingController c, dynamic value,
+        {bool intCast = false}) {
+      if (c.text.trim().isEmpty && value != null) {
+        if (intCast && value is num) {
+          c.text = value.toInt().toString();
+        } else {
+          c.text = value.toString();
+        }
+      }
+    }
+
+    fillIfEmpty(_gradeIdCtrl, firstNonNull('grade_id'));
+    fillIfEmpty(_gradingNoteCtrl, firstNonNull('grading_note'));
+    fillIfEmpty(_gradingFeesCtrl, firstNonNull('grading_fees'));
+    fillIfEmpty(_estimatedPriceCtrl, firstNonNull('estimated_price'));
+    fillIfEmpty(_salePriceCtrl, firstNonNull('sale_price'));
+    fillIfEmpty(_itemLocationCtrl, firstNonNull('item_location'));
+    fillIfEmpty(_trackingCtrl, firstNonNull('tracking'));
+    fillIfEmpty(_channelIdCtrl, firstNonNull('channel_id'), intCast: true);
+    fillIfEmpty(_buyerCompanyCtrl, firstNonNull('buyer_company'));
+    fillIfEmpty(_supplierNameCtrl, firstNonNull('supplier_name'));
+    fillIfEmpty(_notesCtrl, firstNonNull('notes'));
+    fillIfEmpty(_photoUrlCtrl, firstNonNull('photo_url'));
+    fillIfEmpty(_documentUrlCtrl, firstNonNull('document_url'));
+    fillIfEmpty(_unitCostCtrl, firstNonNull('unit_cost'));
+    fillIfEmpty(_shippingFeesCtrl, firstNonNull('shipping_fees'));
+    fillIfEmpty(_commissionFeesCtrl, firstNonNull('commission_fees'));
+    fillIfEmpty(_paymentTypeCtrl, firstNonNull('payment_type'));
+    fillIfEmpty(_buyerInfosCtrl, firstNonNull('buyer_infos'));
+
+    // Champs simples hors contrôleurs (type/lang/game/date)
+    final maybeType = firstNonNull('type')?.toString();
+    if (maybeType != null && maybeType.isNotEmpty) {
+      _newType = _coerceString(maybeType, itemTypes, _newType);
+    }
+
+    final maybeLang = firstNonNull('language')?.toString();
+    if (maybeLang != null && maybeLang.isNotEmpty) {
+      _language = _coerceString(maybeLang, langs, _language);
+    }
+
+    final maybeGame = firstNonNull('game_id');
+    if (maybeGame != null) {
+      final gid = _asInt(maybeGame);
+      if (gid != null) _gameId = gid;
+    }
+
+    final maybeSaleDate = firstNonNull('sale_date');
+    if (_saleDate == null && maybeSaleDate != null) {
+      _saleDate = _parseDate(maybeSaleDate);
+    }
+
+    // 🔎 Produit : si product_name vide, essayer depuis 'product'
+    if (_productNameCtrl.text.trim().isEmpty) {
+      try {
+        final prod = await _sb
+            .from('product')
+            .select('name, type')
+            .eq('id', widget.productId)
+            .maybeSingle();
+        final pName = (prod?['name']?.toString() ?? '');
+        if (pName.isNotEmpty) _productNameCtrl.text = pName;
+        final pType = (prod?['type']?.toString() ?? '');
+        if (pType.isNotEmpty) {
+          _newType = _coerceString(pType, itemTypes, _newType);
+        }
+      } catch (_) {}
     }
   }
 
@@ -323,6 +585,7 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
       }
     }
 
+    // Tous les champs sont libres (plus de RBAC ici)
     putText('grade_id', _gradeIdCtrl);
     putText('grading_note', _gradingNoteCtrl);
     putNum('grading_fees', _gradingFeesCtrl);
@@ -342,7 +605,7 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
     if (_changedSimple('language', _language)) m['language'] = _language;
     if (_changedSimple('game_id', _gameId)) m['game_id'] = _gameId;
 
-    // ⬇️ On laisse la saisie brute ici (total), la division se fera dans _apply()
+    // Frais totaux (répartis plus tard)
     if (_changedNum('shipping_fees', _shippingFeesCtrl.text)) {
       m['shipping_fees'] = _tryNum(_shippingFeesCtrl.text);
     }
@@ -502,6 +765,7 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
   }
 
   Future<void> _apply() async {
+    // Pas de RBAC ici non plus
     final baseUpdates = _buildItemUpdates();
     final productUpdates = _buildProductUpdates();
 
@@ -528,7 +792,7 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
         return;
       }
 
-      // 2) Conversion des frais "total" -> "par unité" selon le nombre réel d'IDs
+      // 2) Conversion des frais "total" -> "par unité" (division)
       final updates = Map<String, dynamic>.from(baseUpdates);
       final n = ids.length;
       if (n > 0) {
@@ -542,7 +806,7 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
         }
       }
 
-      // 3) Apply updates UNIQUEMENT aux IDs
+      // 3) Apply
       final idsCsv = '(${ids.join(",")})';
       if (updates.isNotEmpty) {
         await _sb.from('item').update(updates).filter('id', 'in', idsCsv);
@@ -589,10 +853,18 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
 
+    if (!_roleLoaded) {
+      return const SizedBox(
+        height: 320,
+        child: Center(child: CircularProgressIndicator()),
+      );
+    }
+
     Widget numberField(TextEditingController c, String hint,
-        {bool decimal = true}) {
+        {bool decimal = true, bool enabled = true}) {
       return TextField(
         controller: c,
+        enabled: enabled,
         keyboardType: TextInputType.numberWithOptions(decimal: decimal),
         decoration: InputDecoration(hintText: hint),
       );
@@ -706,7 +978,7 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
               child: labelWithField(
                 'Type',
                 DropdownButtonFormField<String>(
-                  initialValue: _newType,
+                  value: _newType,
                   items: _stringItems(itemTypes, extra: _newType),
                   onChanged: (v) => setState(() => _newType = v ?? 'single'),
                   decoration: const InputDecoration(hintText: 'Type'),
@@ -721,7 +993,7 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
               child: labelWithField(
                 'Language',
                 DropdownButtonFormField<String>(
-                  initialValue: _language,
+                  value: _language,
                   items: _stringItems(langs, extra: _language),
                   onChanged: (v) => setState(() => _language = v ?? 'EN'),
                   decoration: const InputDecoration(hintText: 'Langue'),
@@ -733,7 +1005,7 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
               child: labelWithField(
                 'Jeu',
                 DropdownButtonFormField<int>(
-                  initialValue: _gameId,
+                  value: _gameId,
                   items: _games
                       .map((g) => DropdownMenuItem<int>(
                             value: g['id'] as int,
@@ -752,8 +1024,7 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
           labelWithField(
             'Status',
             DropdownButtonFormField<String>(
-              initialValue:
-                  (_newStatus.isNotEmpty ? _newStatus : widget.status),
+              value: (_newStatus.isNotEmpty ? _newStatus : widget.status),
               items: _stringItems(kAllStatuses,
                   extra: _newStatus.isNotEmpty ? _newStatus : widget.status),
               onChanged: (v) => setState(() => _newStatus = v ?? widget.status),
@@ -810,7 +1081,15 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
             Expanded(
               child: labelWithField(
                 'Unit cost (USD)',
-                numberField(_unitCostCtrl, 'ex: 95.00', decimal: true),
+                _perm.canSeeUnitCosts
+                    ? numberField(_unitCostCtrl, 'ex: 95.00', decimal: true)
+                    : const InputDecorator(
+                        decoration: InputDecoration(),
+                        child: Padding(
+                          padding: EdgeInsets.symmetric(vertical: 8),
+                          child: Text('—'),
+                        ),
+                      ),
               ),
             ),
             const SizedBox(width: 12),
@@ -828,6 +1107,7 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
               ),
             ),
           ]),
+          const SizedBox(height: 8),
 
           // ====== LIGNE 3 ======
           Row(children: [
@@ -883,7 +1163,12 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
             Expanded(
               child: labelWithField(
                 'Endroit de vente (Channel ID)',
-                numberField(_channelIdCtrl, 'ex: 12', decimal: false),
+                TextField(
+                  controller: _channelIdCtrl,
+                  keyboardType:
+                      const TextInputType.numberWithOptions(decimal: false),
+                  decoration: const InputDecoration(hintText: 'ex: 12'),
+                ),
               ),
             ),
             const SizedBox(width: 12),
