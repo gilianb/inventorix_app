@@ -561,30 +561,6 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
               onPressed: visibleItems.isEmpty ? null : _onEditGroup,
             ),
             // Bouton QR (AppBar)
-            QrLineButton.appBar(
-              publicUrl: publicUrl,
-              appLink: appLink,
-              onCopy: (link) async {
-                await Clipboard.setData(ClipboardData(text: link));
-                _snack('Lien copié');
-              },
-            ),
-            // Aperçu public
-            TextButton(
-              onPressed: (publicUrl == null)
-                  ? null
-                  : () {
-                      Navigator.of(context).push(MaterialPageRoute(
-                        builder: (_) => PublicLinePage(
-                          org: _currentOrgId(),
-                          groupSig: _currentGroupSig(),
-                          status: _currentStatus(),
-                        ),
-                      ));
-                    },
-              child: const Text('Aperçu public',
-                  style: TextStyle(color: Colors.white)),
-            ),
           ],
           flexibleSpace: const _AppbarGradient(),
         ),
