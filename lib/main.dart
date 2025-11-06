@@ -1,10 +1,12 @@
 // lib/main.dart
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'auth/auth_gate.dart';
+import 'public/public_line_page.dart';
 
 /// Initialise .env puis Supabase si les credentials existent.
 /// Renvoie true si Supabase est bien initialisé, sinon false (mode dégradé).
@@ -26,12 +28,8 @@ Future<bool> _initEnvAndSupabase() async {
       await Supabase.initialize(
         url: supabaseUrl,
         anonKey: supabaseAnonKey,
-        // ⚠️ 'persistSession' n'existe pas dans FlutterAuthClientOptions v2
-        // Auto-persist et auto-refresh sont gérés par défaut.
         authOptions: const FlutterAuthClientOptions(
           autoRefreshToken: true,
-          // detectSessionInUri: true, // valeur par défaut
-          // authFlowType: AuthFlowType.pkce, // par défaut aussi
         ),
       );
       return true;
@@ -53,11 +51,24 @@ void main() async {
 
 class InventorixApp extends StatelessWidget {
   const InventorixApp({super.key, required this.hasSupabase});
-
   final bool hasSupabase;
+
+  bool get _isAuthenticated {
+    try {
+      return Supabase.instance.client.auth.currentSession != null;
+    } catch (_) {
+      return false;
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
+    // Chemin demandé (utile sur Web pour l'accès direct à /public)
+    final String path = kIsWeb ? Uri.base.path : '/';
+
+    Route<dynamic> buildRoute(Widget page) =>
+        MaterialPageRoute(builder: (_) => page);
+
     return MaterialApp(
       title: 'Inventorix',
       theme: ThemeData(
@@ -68,13 +79,49 @@ class InventorixApp extends StatelessWidget {
         ),
       ),
       debugShowCheckedModeBanner: false,
-      home: hasSupabase ? const AuthGate() : const _DegradedHome(),
+
+      // Router unique : on force les non-authentifiés à rester sur /public
+      onGenerateRoute: (settings) {
+        final String routeName = settings.name ?? path;
+
+        final bool isAuth = hasSupabase && _isAuthenticated;
+        final bool isPublicRoute = routeName == '/public';
+
+        if (!isAuth) {
+          // Non connecté → on autorise uniquement /public
+          if (isPublicRoute) {
+            return buildRoute(const PublicLinePage());
+          } else {
+            // Force l'affichage de la page publique même si l'URL n'est pas /public
+            return buildRoute(const PublicLinePage());
+          }
+        }
+
+        // Authentifié → routes normales de l'app
+        if (isPublicRoute) {
+          return buildRoute(const PublicLinePage());
+        }
+
+        // Route par défaut (dashboard / auth gate)
+        return buildRoute(const AuthGate());
+      },
+
+      // Si Vercel réécrit vers index.html et qu'une route inconnue arrive,
+      // on retombe ici. On applique la même logique que ci-dessus.
+      onUnknownRoute: (settings) {
+        final bool isAuth = hasSupabase && _isAuthenticated;
+        if (!isAuth) {
+          return MaterialPageRoute(builder: (_) => const PublicLinePage());
+        }
+        return MaterialPageRoute(builder: (_) => const AuthGate());
+      },
     );
   }
 }
 
 /// Ecran minimal quand Supabase n’est pas configuré.
-/// Permet de tester l’UI sans planter.
+/// (On garde pour le dev local, mais la logique de routes ci-dessus gère déjà /public)
+// ignore: unused_element
 class _DegradedHome extends StatelessWidget {
   const _DegradedHome();
 

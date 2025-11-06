@@ -163,6 +163,7 @@ class QrLineButton extends StatelessWidget {
 
 // ignore: unused_element
 class _QrFullScreen extends StatelessWidget {
+  // ignore: unused_element_parameter
   const _QrFullScreen({required this.link, this.appLink, this.onCopy});
   final String link;
   final String? appLink;
@@ -222,10 +223,11 @@ class _QrFullScreen extends StatelessWidget {
                       label: const Text('Copier'),
                       onPressed: () async {
                         if (onCopy != null) await onCopy!(link);
-                        if (context.mounted)
+                        if (context.mounted) {
                           ScaffoldMessenger.of(context).showSnackBar(
                             const SnackBar(content: Text('Lien copié')),
                           );
+                        }
                       },
                     ),
                   ],

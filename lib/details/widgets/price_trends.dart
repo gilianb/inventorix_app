@@ -4,7 +4,8 @@
 // n'écrase jamais les prix avec null).
 // CardTrader: cache mémoire TTL 24h. Aucun appel à l’ouverture; uniquement au clic “Rafraîchir”.
 
-import 'dart:ui';
+// ignore_for_file: deprecated_member_use
+
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 

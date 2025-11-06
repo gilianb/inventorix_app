@@ -31,7 +31,7 @@ const kAccentC = Color(0xFFFFB545);
 // Base URL publique de la fiche "ligne" (surchargable au build)
 const kPublicQrBaseUrl = String.fromEnvironment(
   'INV_PUBLIC_QR_BASE',
-  defaultValue: 'https://inventorix-web.vercel.app/#/public',
+  defaultValue: 'https://inventorix-web.vercel.app/public',
 );
 
 const List<String> kViewCols = [

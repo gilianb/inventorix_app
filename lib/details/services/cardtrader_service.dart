@@ -94,8 +94,9 @@ class CardTraderService {
     final cleaned = s.replaceAll(RegExp(r'[^a-z]'), ' ');
     final tokens = cleaned.split(RegExp(r'\s+')).where((t) => t.isNotEmpty);
     for (final t in tokens) {
-      if (t == 'en' || t == 'eng' || t == 'english' || t == 'anglais')
+      if (t == 'en' || t == 'eng' || t == 'english' || t == 'anglais') {
         return true;
+      }
     }
     return false;
   }

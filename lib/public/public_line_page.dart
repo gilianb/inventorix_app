@@ -1,8 +1,10 @@
 // lib/public/public_line_page.dart
-// Page publique minimaliste : Titre • Image • Prix estimé.
+// Page publique : Titre pleine largeur • Image "carte" à gauche • Prix estimé à droite.
 // - Pas d’auth requise
-// - Responsive + scroll (pas d’overflow)
+// - Responsive (deux colonnes en large, vertical en étroit)
 // - Lien appelée via /public?org=...&g=...&s=...
+
+// ignore_for_file: deprecated_member_use
 
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
@@ -48,7 +50,7 @@ class _PublicLinePageState extends State<PublicLinePage> {
     });
 
     try {
-      // On récupère d’abord les params éventuellement fournis par la route web.
+      // Params éventuels transmis par l’URL
       final uri = Uri.base;
       final org = widget.org ?? uri.queryParameters['org'];
       final sig = widget.groupSig ?? uri.queryParameters['g'];
@@ -60,12 +62,10 @@ class _PublicLinePageState extends State<PublicLinePage> {
         throw 'Lien invalide (org/g/s manquants).';
       }
 
-      // On tente d’obtenir une vue agrégée s’il y en a une,
-      // sinon on retombe sur item/product.
+      // Tente la vue agrégée, sinon fallback item+product
       Map<String, dynamic>? row;
 
       try {
-        // v_item_groups (si dispo) — 1 ligne suffit
         row = await _sb
             .from('v_item_groups')
             .select('product_name, photo_url, estimated_price')
@@ -75,11 +75,10 @@ class _PublicLinePageState extends State<PublicLinePage> {
             .limit(1)
             .maybeSingle();
       } catch (_) {
-        // Ignorer et fallback
+        // ignore
       }
 
       if (row == null) {
-        // Fallback : n’importe quel item de cette ligne
         final item = await _sb
             .from('item')
             .select('product_id, estimated_price, photo_url')
@@ -154,10 +153,10 @@ class _PublicLinePageState extends State<PublicLinePage> {
                 )
               : SafeArea(
                   child: SingleChildScrollView(
-                    padding: const EdgeInsets.fromLTRB(16, 24, 16, 32),
+                    padding: const EdgeInsets.fromLTRB(16, 20, 16, 28),
                     child: Center(
                       child: ConstrainedBox(
-                        constraints: const BoxConstraints(maxWidth: 820),
+                        constraints: const BoxConstraints(maxWidth: 1200),
                         child: _PublicContent(
                           title: _title,
                           photoUrl: _photoUrl,
@@ -188,104 +187,266 @@ class _PublicContent extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final mq = MediaQuery.of(context);
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.center,
-      children: [
-        // Titre
-        Text(
-          title,
-          textAlign: TextAlign.center,
-          style: theme.textTheme.headlineSmall?.copyWith(
-            fontWeight: FontWeight.w700,
-            height: 1.3,
-          ),
-        ),
+    return LayoutBuilder(
+      builder: (ctx, cons) {
+        final wide = cons.maxWidth >= 900;
 
-        const SizedBox(height: 16),
-
-        // Image responsive sans overflow (hauteur cappée)
-        LayoutBuilder(
-          builder: (ctx, cons) {
-            final maxW = cons.maxWidth; // <= 820
-            final screenH = mq.size.height;
-            final idealH = maxW / kCardAspect;
-            final cappedH = math.min(idealH, screenH * 0.60); // cap 60% écran
-
-            final img = (photoUrl == null || photoUrl!.isEmpty)
-                ? Image.asset(
-                    kFallbackAsset,
-                    fit: BoxFit.cover,
-                  )
-                : Image.network(
-                    photoUrl!,
-                    fit: BoxFit.cover,
-                    errorBuilder: (c, e, s) =>
-                        Image.asset(kFallbackAsset, fit: BoxFit.cover),
-                  );
-
-            return SizedBox(
-              width: maxW,
-              height: cappedH,
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(16),
-                child: Material(
-                  color: Colors.transparent,
-                  child: Ink.image(
-                    image: (photoUrl == null || photoUrl!.isEmpty)
-                        ? const AssetImage(kFallbackAsset) as ImageProvider
-                        : NetworkImage(photoUrl!),
-                    fit: BoxFit.cover,
+        // ---------- Titre pleine largeur ----------
+        final header = Padding(
+          padding: const EdgeInsets.fromLTRB(8, 4, 8, 18),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Text(
+                title,
+                textAlign: TextAlign.center,
+                style: theme.textTheme.headlineMedium?.copyWith(
+                  fontWeight: FontWeight.w800,
+                  height: 1.15,
+                  letterSpacing: -0.3,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Container(
+                height: 4,
+                width: 120,
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(999),
+                  gradient: LinearGradient(
+                    colors: [
+                      theme.colorScheme.primary,
+                      theme.colorScheme.secondary,
+                    ],
                   ),
                 ),
               ),
-            );
-          },
-        ),
-
-        const SizedBox(height: 20),
-
-        // Prix estimé
-        _PriceBadge(value: estimated),
-        const SizedBox(height: 8),
-        Text(
-          'Prix estimé (interne)',
-          style: theme.textTheme.labelMedium?.copyWith(
-            color: theme.colorScheme.onSurface.withOpacity(0.55),
-            letterSpacing: 0.5,
+            ],
           ),
-        ),
-      ],
+        );
+
+        // ---------- Image (gauche) ----------
+        Widget buildCardImage() {
+          // Hauteur “idéale” basée sur la largeur dispo
+          final double maxW = wide ? (cons.maxWidth * 0.55) : cons.maxWidth;
+          // limite haute pour éviter que ça dépasse trop la hauteur écran
+          final screenH = MediaQuery.of(context).size.height;
+          final idealH = maxW / kCardAspect;
+          final cappedH = math.min(idealH, screenH * (wide ? 0.8 : 0.6));
+
+          final imageProvider = (photoUrl == null || photoUrl!.isEmpty)
+              ? const AssetImage(kFallbackAsset) as ImageProvider
+              : NetworkImage(photoUrl!);
+
+          return ClipRRect(
+            borderRadius: BorderRadius.circular(20),
+            child: Material(
+              elevation: 6,
+              shadowColor:
+                  theme.colorScheme.shadow.withOpacity(0.25), // soft shadow
+              borderRadius: BorderRadius.circular(20),
+              child: Ink.image(
+                image: imageProvider,
+                fit: BoxFit.cover,
+                width: maxW,
+                height: cappedH,
+              ),
+            ),
+          );
+        }
+
+        // ---------- Panneau Prix (droite) ----------
+        Widget buildPricePanel() {
+          return _PricePanel(
+            value: estimated,
+          );
+        }
+
+        if (wide) {
+          // Disposition 2 colonnes
+          return Column(
+            children: [
+              header,
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Image à gauche (grand)
+                  Expanded(flex: 11, child: buildCardImage()),
+                  const SizedBox(width: 16),
+                  // Prix à droite
+                  Expanded(flex: 9, child: buildPricePanel()),
+                ],
+              ),
+            ],
+          );
+        } else {
+          // Disposition verticale (mobile)
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              header,
+              buildCardImage(),
+              const SizedBox(height: 16),
+              buildPricePanel(),
+            ],
+          );
+        }
+      },
     );
   }
 }
 
-class _PriceBadge extends StatelessWidget {
-  const _PriceBadge({required this.value});
+class _PricePanel extends StatelessWidget {
+  const _PricePanel({required this.value});
   final double? value;
+
+  String _formatUsd(double? v) {
+    if (v == null) return '—';
+    final s = v.toStringAsFixed(0);
+    // Ajoute des séparateurs de milliers simples (1 234 567)
+    final regex = RegExp(r'\B(?=(\d{3})+(?!\d))');
+    return '${s.replaceAllMapped(regex, (m) => ' ')} USD';
+  }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final txt = (value == null)
-        ? '—'
-        : '${value!.toStringAsFixed(0)} USD'; // simple & large
+    final priceTxt = _formatUsd(value);
 
-    return DecoratedBox(
+    return Container(
+      padding: const EdgeInsets.fromLTRB(18, 18, 18, 18),
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(12),
-        border:
-            Border.all(color: theme.colorScheme.onSurface.withOpacity(0.12)),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 17, vertical: 13),
-        child: Text(
-          txt,
-          style: theme.textTheme.headlineSmall?.copyWith(
-            fontWeight: FontWeight.w800,
-          ),
+        borderRadius: BorderRadius.circular(20),
+        // joli gradient “carte prix”
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            theme.colorScheme.primary.withOpacity(0.12),
+            theme.colorScheme.secondary.withOpacity(0.10),
+          ],
         ),
+        border: Border.all(
+          color: theme.colorScheme.outline.withOpacity(0.14),
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: theme.colorScheme.shadow.withOpacity(0.12),
+            blurRadius: 18,
+            offset: const Offset(0, 10),
+          ),
+        ],
+      ),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(minHeight: 220),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Badge “Prix estimé”
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: theme.colorScheme.primary.withOpacity(0.10),
+                borderRadius: BorderRadius.circular(999),
+                border: Border.all(
+                  color: theme.colorScheme.primary.withOpacity(0.25),
+                ),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.trending_up,
+                      size: 16, color: theme.colorScheme.primary),
+                  const SizedBox(width: 6),
+                  Text(
+                    'Prix de vente estimé',
+                    style: theme.textTheme.labelLarge?.copyWith(
+                      color: theme.colorScheme.primary,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 0.2,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+
+            // Montant en GROS
+            FittedBox(
+              fit: BoxFit.scaleDown,
+              alignment: Alignment.centerLeft,
+              child: Text(
+                priceTxt,
+                maxLines: 1,
+                style: theme.textTheme.displaySmall?.copyWith(
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: -0.5,
+                  height: 1.0,
+                ),
+              ),
+            ),
+
+            const SizedBox(height: 10),
+
+            // Sous-texte
+            Text(
+              'Valeur indicative — données internes',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurface.withOpacity(0.6),
+                letterSpacing: 0.2,
+              ),
+            ),
+
+            const Spacer(),
+
+            // Petit bloc décoratif (tags)
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                _ChipOutline(icon: Icons.shield_moon, label: 'Read-only'),
+                _ChipOutline(icon: Icons.public, label: 'Public'),
+                _ChipOutline(icon: Icons.currency_exchange, label: 'USD'),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ChipOutline extends StatelessWidget {
+  const _ChipOutline({required this.icon, required this.label});
+  final IconData icon;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(
+          color: theme.colorScheme.onSurface.withOpacity(0.16),
+        ),
+        color: theme.colorScheme.surface.withOpacity(0.5),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon,
+              size: 16, color: theme.colorScheme.onSurface.withOpacity(0.75)),
+          const SizedBox(width: 6),
+          Text(
+            label,
+            style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                  fontWeight: FontWeight.w600,
+                  letterSpacing: 0.2,
+                ),
+          ),
+        ],
       ),
     );
   }
