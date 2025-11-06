@@ -3,6 +3,7 @@
 
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -15,15 +16,23 @@ import 'widgets/details_header.dart';
 import 'widgets/media_thumb.dart';
 import 'widgets/items_table.dart';
 import 'widgets/price_trends.dart';
+import 'widgets/qr_line_button.dart'; // <-- QR widget
 
 import 'details_service.dart';
 import '../../inventory/widgets/finance_overview.dart';
+import '../public/public_line_page.dart'; // <-- Aperçu public
 
 const String kDefaultAssetPhoto = 'assets/images/default_card.png';
 
 const kAccentA = Color(0xFF6C5CE7);
 const kAccentB = Color(0xFF00D1B2);
 const kAccentC = Color(0xFFFFB545);
+
+// Base URL publique de la fiche "ligne" (surchargable au build)
+const kPublicQrBaseUrl = String.fromEnvironment(
+  'INV_PUBLIC_QR_BASE',
+  defaultValue: 'https://inventorix-web.vercel.app/public',
+);
 
 const List<String> kViewCols = [
   'org_id',
@@ -438,6 +447,49 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
     return _items.where((e) => (e['status'] ?? '') == f).toList();
   }
 
+  // ----- URL de la "ligne" (org + group_sig + status) -----
+
+  String? _currentOrgId() => _orgIdFromContext;
+
+  String? _currentGroupSig() {
+    final s = (_viewRow?['group_sig'] ?? widget.group['group_sig'])?.toString();
+    return (s != null && s.isNotEmpty) ? s : null;
+  }
+
+  String? _currentStatus() {
+    final s = (_localStatusFilter ??
+        (_items.isNotEmpty ? _items.first['status']?.toString() : null) ??
+        widget.group['status']?.toString());
+    return (s != null && s.isNotEmpty) ? s : null;
+  }
+
+  String? _buildLinePublicUrl() {
+    final org = _currentOrgId();
+    final sig = _currentGroupSig();
+    final st = _currentStatus();
+    if (org == null || sig == null || st == null) return null;
+
+    final uri = Uri.parse(kPublicQrBaseUrl).replace(queryParameters: {
+      'org': org,
+      'g': sig,
+      's': st,
+    });
+    return uri.toString();
+  }
+
+  String? _buildLineAppDeepLink() {
+    final org = _currentOrgId();
+    final sig = _currentGroupSig();
+    final st = _currentStatus();
+    if (org == null || sig == null || st == null) return null;
+
+    return Uri(
+      scheme: 'inventorix',
+      host: 'i',
+      queryParameters: {'org': org, 'g': sig, 's': st},
+    ).toString();
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_loading || !_roleLoaded) {
@@ -491,6 +543,9 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
         (_productExtras?['tcg_player_id'] as String?) ??
         (widget.group['tcg_player_id']?.toString());
 
+    final publicUrl = _buildLinePublicUrl();
+    final appLink = _buildLineAppDeepLink();
+
     return WillPopScope(
       onWillPop: () async {
         Navigator.pop(context, _dirty);
@@ -504,6 +559,31 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
               tooltip: 'Modifier N items',
               icon: const Icon(Icons.edit),
               onPressed: visibleItems.isEmpty ? null : _onEditGroup,
+            ),
+            // Bouton QR (AppBar)
+            QrLineButton.appBar(
+              publicUrl: publicUrl,
+              appLink: appLink,
+              onCopy: (link) async {
+                await Clipboard.setData(ClipboardData(text: link));
+                _snack('Lien copié');
+              },
+            ),
+            // Aperçu public
+            TextButton(
+              onPressed: (publicUrl == null)
+                  ? null
+                  : () {
+                      Navigator.of(context).push(MaterialPageRoute(
+                        builder: (_) => PublicLinePage(
+                          org: _currentOrgId(),
+                          groupSig: _currentGroupSig(),
+                          status: _currentStatus(),
+                        ),
+                      ));
+                    },
+              child: const Text('Aperçu public',
+                  style: TextStyle(color: Colors.white)),
             ),
           ],
           flexibleSpace: const _AppbarGradient(),
@@ -579,6 +659,40 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
                                     }
                                   },
                                 ),
+                              const SizedBox(height: 8),
+                              // Bouton QR sous la vignette (wide)
+                              Align(
+                                alignment: Alignment.centerLeft,
+                                child: QrLineButton.inline(
+                                  publicUrl: publicUrl,
+                                  appLink: appLink,
+                                  onCopy: (link) async {
+                                    await Clipboard.setData(
+                                        ClipboardData(text: link));
+                                    _snack('Lien copié');
+                                  },
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              Align(
+                                alignment: Alignment.centerLeft,
+                                child: TextButton(
+                                  onPressed: (publicUrl == null)
+                                      ? null
+                                      : () {
+                                          Navigator.of(context).push(
+                                            MaterialPageRoute(
+                                              builder: (_) => PublicLinePage(
+                                                org: _currentOrgId(),
+                                                groupSig: _currentGroupSig(),
+                                                status: _currentStatus(),
+                                              ),
+                                            ),
+                                          );
+                                        },
+                                  child: const Text('Aperçu public'),
+                                ),
+                              ),
                             ],
                           ),
                         ),
@@ -628,6 +742,39 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
                               }
                             },
                           ),
+                        const SizedBox(height: 8),
+                        // Bouton QR (narrow)
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: QrLineButton.inline(
+                            publicUrl: publicUrl,
+                            appLink: appLink,
+                            onCopy: (link) async {
+                              await Clipboard.setData(
+                                  ClipboardData(text: link));
+                              _snack('Lien copié');
+                            },
+                          ),
+                        ),
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: TextButton(
+                            onPressed: (publicUrl == null)
+                                ? null
+                                : () {
+                                    Navigator.of(context).push(
+                                      MaterialPageRoute(
+                                        builder: (_) => PublicLinePage(
+                                          org: _currentOrgId(),
+                                          groupSig: _currentGroupSig(),
+                                          status: _currentStatus(),
+                                        ),
+                                      ),
+                                    );
+                                  },
+                            child: const Text('Aperçu public'),
+                          ),
+                        ),
                         const SizedBox(height: 12),
                         finance,
                         if (_isOwner) const SizedBox(height: 12),

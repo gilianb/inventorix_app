@@ -1,13 +1,15 @@
 // lib/details/widgets/price_trends.dart
 // 2 lignes (Collectr / CardTrader) — pas de graph.
-// TTL Collectr 24h strict respecté (même sur "Rafraîchir").
-// Design : contraste fort, valeurs très lisibles, couleurs par source.
+// Collectr: passe par CollectrEdgeService.ensureFreshAndPersist (TTL 24h côté DB,
+// n'écrase jamais les prix avec null).
+// CardTrader: cache mémoire TTL 24h. Aucun appel à l’ouverture; uniquement au clic “Rafraîchir”.
 
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../services/cardtrader_service.dart';
+import '../services/collectr_api.dart'; // <--- service sécurisé Collectr
 
 // ⚠️ Token CardTrader (si 401: régénérer ou passer par Edge Function)
 const String kCardTraderToken =
@@ -20,7 +22,7 @@ class PriceTrendsCard extends StatefulWidget {
     required this.productType, // 'single' | 'sealed'
     required this.currency, // 'USD'
     this.photoUrl,
-    this.tcgPlayerId, // utile si collectr_id absent
+    this.tcgPlayerId, // utile si collectr_id absent (géré par l'EF via service)
     this.blueprintId, // CardTrader
     this.reloadTick,
   });
@@ -38,14 +40,14 @@ class PriceTrendsCard extends StatefulWidget {
 }
 
 class _PriceTrendsCardState extends State<PriceTrendsCard> {
-  // Collectr (DB + TTL 24h)
+  // ---------------- COLLECTR (via DB + Edge) ----------------
   bool _loadingCollectr = false;
   String? _errCollectr;
   double? _collectrRaw;
   double? _collectrPsa10;
   DateTime? _lastUpdate;
 
-  // CardTrader (client)
+  // ---------------- CARDTRADER (client) ----------------
   bool _loadingCtRaw = false;
   String? _errCtRaw;
   double? _ctMedianRaw;
@@ -54,10 +56,19 @@ class _PriceTrendsCardState extends State<PriceTrendsCard> {
   String? _errCtGraded;
   double? _ctMedianGraded;
 
+  /// Cache mémoire TTL 24h pour CardTrader par blueprint.
+  static final Map<int, _CtCacheEntry> _ctRawCache = {};
+  static final Map<int, _CtCacheEntry> _ctGradedCache = {};
+  static const Duration _ctTtl = Duration(hours: 24);
+
   @override
   void initState() {
     super.initState();
-    _fetchAll();
+    // Au premier affichage :
+    // - Collectr passe par le service (respect TTL DB, pas d’écrasement avec null)
+    // - CardTrader ne fait PAS d’appel réseau (hydrate depuis cache mémoire uniquement)
+    _loadCollectrWithTTL();
+    _hydrateCtFromCache();
   }
 
   @override
@@ -67,19 +78,23 @@ class _PriceTrendsCardState extends State<PriceTrendsCard> {
         oldWidget.reloadTick != widget.reloadTick ||
         oldWidget.blueprintId != widget.blueprintId ||
         oldWidget.productType != widget.productType;
-    if (changed) _fetchAll();
+
+    if (changed) {
+      _loadCollectrWithTTL(); // TTL côté DB, no-spam
+      _hydrateCtFromCache(); // pas de réseau ici
+    }
   }
 
-  Future<void> _fetchAll() async {
+  Future<void> _onRefreshPressed() async {
     await Future.wait([
-      _loadCollectrWithTTL(), // respecte strictement TTL 24h
-      _fetchCardTraderRaw(),
+      _loadCollectrWithTTL(), // respecte TTL DB Collectr
+      _fetchCardTraderRawWithTtl(),
       if (widget.productType.toLowerCase() == 'single')
-        _fetchCardTraderGraded(),
+        _fetchCardTraderGradedWithTtl(),
     ]);
   }
 
-  /// Collectr avec TTL 24h.
+  // ---- Collectr (via service sécurisé + TTL 24h DB) ----
   Future<void> _loadCollectrWithTTL() async {
     final pid = widget.productId;
     if (pid == null) return;
@@ -92,101 +107,28 @@ class _PriceTrendsCardState extends State<PriceTrendsCard> {
     final sb = Supabase.instance.client;
 
     try {
-      // 1) Lire product
+      // 1) Service: vérifie TTL, résout ID si besoin, appelle EF si nécessaire,
+      //    et met à jour la DB sans jamais écraser avec null.
+      final svc = CollectrEdgeService(sb);
+      await svc.ensureFreshAndPersist(pid);
+
+      // 2) Re-lire la ligne produit actualisée pour alimenter l’UI
       final product = await sb
           .from('product')
-          .select(
-              'id,type,collectr_id,tcg_player_id,price_raw,price_graded,last_update')
+          .select('type, price_raw, price_graded, last_update')
           .eq('id', pid)
           .maybeSingle();
 
-      if (product == null) {
-        setState(() => _errCollectr = 'Produit introuvable');
-        return;
-      }
+      final isSingle =
+          (product?['type']?.toString().toLowerCase() ?? 'single') == 'single';
 
-      final bool isSingle =
-          (product['type']?.toString().toLowerCase() ?? 'single') == 'single';
-      final double? dbRaw = (product['price_raw'] as num?)?.toDouble();
-      final double? dbGraded = (product['price_graded'] as num?)?.toDouble();
-      final DateTime? dbLast = product['last_update'] != null
-          ? DateTime.tryParse(product['last_update'].toString())
-          : null;
-
-      // 2) TTL
-      bool needsRefresh = false;
-      if (dbRaw == null) needsRefresh = true;
-      if (isSingle && dbGraded == null) needsRefresh = true;
-      if (dbLast == null) needsRefresh = true;
-      if (!needsRefresh &&
-          DateTime.now().toUtc().difference(dbLast!.toUtc()).inHours >= 24) {
-        needsRefresh = true;
-      }
-
-      // 3) Pas besoin => pas d'appel API
-      if (!needsRefresh) {
-        setState(() {
-          _collectrRaw = dbRaw;
-          _collectrPsa10 = isSingle ? dbGraded : null;
-          _lastUpdate = dbLast?.toLocal();
-        });
-        return;
-      }
-
-      // 4) Besoin d’un refresh
-      final collectrId = (product['collectr_id'] as String?)?.trim();
-      final tcgId =
-          (product['tcg_player_id'] as String?)?.trim() ?? widget.tcgPlayerId;
-
-      if ((collectrId == null || collectrId.isEmpty) &&
-          (tcgId == null || tcgId.isEmpty)) {
-        setState(() {
-          _collectrRaw = dbRaw;
-          _collectrPsa10 = isSingle ? dbGraded : null;
-          _lastUpdate = dbLast?.toLocal();
-          _errCollectr = 'Collectr: missing id — do it manually';
-        });
-        return;
-      }
-
-      final res = await sb.functions.invoke(
-        'collectr_resolve_and_price',
-        body: {
-          if (collectrId != null && collectrId.isNotEmpty)
-            'collectr_id': collectrId,
-          if ((collectrId == null || collectrId.isEmpty) && tcgId != null)
-            'tcg_player_id': tcgId,
-        },
-      );
-
-      final data = Map<String, dynamic>.from(res.data as Map);
-      final double? priceRaw = (data['price_raw'] as num?)?.toDouble();
-      final double? pricePSA10 = (data['price_psa10'] as num?)?.toDouble();
-      final String? opaqueId = (data['opaqueId'] as String?);
-
-      // MAJ collectr_id si découvert
-      if ((collectrId == null || collectrId.isEmpty) &&
-          opaqueId != null &&
-          opaqueId.isNotEmpty) {
-        await sb
-            .from('product')
-            .update({'collectr_id': opaqueId}).eq('id', pid);
-      }
-
-      // MAJ product (pas d’historique ici)
-      final nowIso = DateTime.now().toUtc().toIso8601String();
-      final upd = <String, dynamic>{
-        'price_raw': priceRaw,
-        'last_update': nowIso,
-      };
-      if (isSingle) upd['price_graded'] = pricePSA10;
-      await sb.from('product').update(upd).eq('id', pid);
-
-      // UI
       setState(() {
-        _collectrRaw = priceRaw;
-        _collectrPsa10 = isSingle ? pricePSA10 : null;
-        _lastUpdate = DateTime.now();
+        _collectrRaw = (product?['price_raw'] as num?)?.toDouble();
+        _collectrPsa10 =
+            isSingle ? (product?['price_graded'] as num?)?.toDouble() : null;
+        _lastUpdate = product?['last_update'] != null
+            ? DateTime.tryParse(product!['last_update'].toString())?.toLocal()
+            : null;
       });
     } catch (e) {
       setState(() => _errCollectr = e.toString());
@@ -195,8 +137,32 @@ class _PriceTrendsCardState extends State<PriceTrendsCard> {
     }
   }
 
-  // -------- CardTrader ----------
-  Future<void> _fetchCardTraderRaw() async {
+  // ---- CardTrader: lecture cache sans réseau au premier affichage ----
+  void _hydrateCtFromCache() {
+    final bp = widget.blueprintId;
+    if (bp == null || bp <= 0) {
+      setState(() {
+        _ctMedianRaw = null;
+        _ctMedianGraded = null;
+      });
+      return;
+    }
+    final now = DateTime.now();
+    final rawEntry = _ctRawCache[bp];
+    final gradedEntry = _ctGradedCache[bp];
+    setState(() {
+      _ctMedianRaw = (rawEntry != null && now.difference(rawEntry.at) < _ctTtl)
+          ? rawEntry.value
+          : null;
+      _ctMedianGraded =
+          (gradedEntry != null && now.difference(gradedEntry.at) < _ctTtl)
+              ? gradedEntry.value
+              : null;
+    });
+  }
+
+  // ---- CardTrader RAW avec TTL mémoire (réseau UNIQUEMENT sur refresh) ----
+  Future<void> _fetchCardTraderRawWithTtl() async {
     final bp = widget.blueprintId;
     if (bp == null || bp <= 0) {
       setState(() {
@@ -205,6 +171,17 @@ class _PriceTrendsCardState extends State<PriceTrendsCard> {
       });
       return;
     }
+    // TTL check
+    final now = DateTime.now();
+    final cached = _ctRawCache[bp];
+    if (cached != null && now.difference(cached.at) < _ctTtl) {
+      setState(() {
+        _ctMedianRaw = cached.value;
+        _errCtRaw = null;
+      });
+      return;
+    }
+
     setState(() {
       _loadingCtRaw = true;
       _errCtRaw = null;
@@ -216,6 +193,7 @@ class _PriceTrendsCardState extends State<PriceTrendsCard> {
         graded: false,
         languageParam: 'en',
       );
+      _ctRawCache[bp] = _CtCacheEntry(value: stats.medianUSD, at: now);
       setState(() => _ctMedianRaw = stats.medianUSD);
     } catch (e) {
       setState(() => _errCtRaw = e.toString());
@@ -224,7 +202,8 @@ class _PriceTrendsCardState extends State<PriceTrendsCard> {
     }
   }
 
-  Future<void> _fetchCardTraderGraded() async {
+  // ---- CardTrader GRADED avec TTL mémoire (réseau UNIQUEMENT sur refresh) ----
+  Future<void> _fetchCardTraderGradedWithTtl() async {
     final bp = widget.blueprintId;
     if (bp == null || bp <= 0) {
       setState(() {
@@ -233,6 +212,16 @@ class _PriceTrendsCardState extends State<PriceTrendsCard> {
       });
       return;
     }
+    final now = DateTime.now();
+    final cached = _ctGradedCache[bp];
+    if (cached != null && now.difference(cached.at) < _ctTtl) {
+      setState(() {
+        _ctMedianGraded = cached.value;
+        _errCtGraded = null;
+      });
+      return;
+    }
+
     setState(() {
       _loadingCtGraded = true;
       _errCtGraded = null;
@@ -244,6 +233,7 @@ class _PriceTrendsCardState extends State<PriceTrendsCard> {
         graded: true,
         languageParam: 'en',
       );
+      _ctGradedCache[bp] = _CtCacheEntry(value: stats.medianUSD, at: now);
       setState(() => _ctMedianGraded = stats.medianUSD);
     } catch (e) {
       setState(() => _errCtGraded = e.toString());
@@ -292,8 +282,8 @@ class _PriceTrendsCardState extends State<PriceTrendsCard> {
               ),
             ),
             trailing: IconButton.filledTonal(
-              tooltip: 'Rafraîchir (TTL Collectr respecté)',
-              onPressed: refreshing ? null : _fetchAll,
+              tooltip: 'Rafraîchir (Collectr TTL DB + CardTrader TTL mémoire)',
+              onPressed: refreshing ? null : _onRefreshPressed,
               icon: refreshing
                   ? const SizedBox(
                       width: 18,
@@ -308,7 +298,7 @@ class _PriceTrendsCardState extends State<PriceTrendsCard> {
           _SourceRow(
             icon: Icons.stacked_line_chart,
             title: 'Collectr (fiable)',
-            caption: 'TTL 24h • prix DB si récent',
+            caption: 'TTL 24h — DB source (pas d’écrasement si pas de prix)',
             loading: _loadingCollectr,
             error: _errCollectr,
             accent: collectrAccent,
@@ -321,8 +311,9 @@ class _PriceTrendsCardState extends State<PriceTrendsCard> {
           // LIGNE CARDTRADER
           _SourceRow(
             icon: Icons.store_rounded,
-            title: 'CardTrader ( prix à prendre avec des pincettes)',
-            caption: 'Médianes (EN) marketplace',
+            title: 'CardTrader (indicatif)',
+            caption:
+                'Médianes marketplace — TTL 24h (mémoire) • Refresh manuel',
             loading: _loadingCtRaw || (isSingle && _loadingCtGraded),
             error: _errCtRaw ?? (isSingle ? _errCtGraded : null),
             accent: ctAccent,
@@ -344,6 +335,12 @@ class _PriceTrendsCardState extends State<PriceTrendsCard> {
     String two(int x) => x.toString().padLeft(2, '0');
     return '${d.year}-${two(d.month)}-${two(d.day)} ${two(d.hour)}:${two(d.minute)}';
   }
+}
+
+class _CtCacheEntry {
+  final double? value;
+  final DateTime at;
+  _CtCacheEntry({required this.value, required this.at});
 }
 
 /// Petite pastille d’icône ronde pour l’entête
@@ -368,14 +365,12 @@ class _CircleIcon extends StatelessWidget {
   }
 }
 
-/// Modèle d’un indicateur (capsule valeur)
 class _Metric {
   final String label;
   final double? valueUSD;
   const _Metric({required this.label, required this.valueUSD});
 }
 
-/// Ligne source (Collectr / CardTrader)
 class _SourceRow extends StatelessWidget {
   const _SourceRow({
     required this.icon,
@@ -400,7 +395,6 @@ class _SourceRow extends StatelessWidget {
     final theme = Theme.of(context);
     final hasError = (error != null && error!.isNotEmpty);
 
-    // Conteneur subtil avec bord + fond dépendant de l’accent
     final bg = accent.withOpacity(0.08);
     final border = accent.withOpacity(0.22);
     final iconBg = accent.withOpacity(0.15);
@@ -474,7 +468,6 @@ class _SourceRow extends StatelessWidget {
   }
 }
 
-/// Capsule visuelle d’un indicateur (ex: Raw, PSA10, Median…)
 class _MetricChip extends StatelessWidget {
   const _MetricChip({
     required this.label,
@@ -493,7 +486,6 @@ class _MetricChip extends StatelessWidget {
     final theme = Theme.of(context);
     final hasError = error != null && error!.isNotEmpty;
 
-    // Palette capsule : contraste fort, avec bord
     final bg = hasError
         ? theme.colorScheme.errorContainer.withOpacity(0.30)
         : Colors.white.withOpacity(
@@ -544,7 +536,7 @@ class _MetricChip extends StatelessWidget {
                     text: valueUSD != null ? valueUSD!.toStringAsFixed(2) : '—',
                     style: TextStyle(
                       fontWeight: FontWeight.w900,
-                      fontSize: 18, // 👀 valeur bien visible
+                      fontSize: 18, // valeur bien visible
                       color: valueColor,
                       fontFeatures: const [FontFeature.tabularFigures()],
                     ),
