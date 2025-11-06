@@ -1,13 +1,5 @@
 // lib/details/group_details_page.dart
 // ignore_for_file: unused_local_variable, deprecated_member_use
-/* Rôle : écran “Détails” (StatefulWidget).
-   - Charge les items d’un groupe, l’historique, et compose l’UI
-   - Vérifie à chaque entrée si les prix Collectr doivent être rafraîchis
-     (NULL ou last_update >= 24h) et, si oui, les met à jour via l’Edge Function:
-        * si collectr_id => /product/{id}
-        * sinon si tcg_player_id => resolve via page publique => id opaque => /product
-        * sinon => message "missing id — do it manually"
-*/
 
 import 'dart:async';
 import 'package:flutter/material.dart';
@@ -16,23 +8,15 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../inventory/widgets/edit.dart' show EditItemsDialog;
 
-// Widgets existants
 import 'widgets/info_extras_card.dart';
 import 'widgets/info_banner.dart';
 
-// Widgets factorisés
 import 'widgets/details_header.dart';
 import 'widgets/media_thumb.dart';
 import 'widgets/items_table.dart';
 import 'widgets/price_trends.dart';
 
-// Service (helpers)
 import 'details_service.dart';
-
-// Collectr (Edge Service)
-import 'services/collectr_api.dart';
-
-// KPI factorisé
 import '../../inventory/widgets/finance_overview.dart';
 
 const String kDefaultAssetPhoto = 'assets/images/default_card.png';
@@ -100,8 +84,7 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
   bool _showItemsTable = true;
   bool _dirty = false;
 
-  Map<String, dynamic>?
-      _productExtras; // { blueprint_id:int?, tcg_player_id:String? }
+  Map<String, dynamic>? _productExtras; // { blueprint_id, tcg_player_id }
   int _trendsReloadTick = 0;
 
   Map<String, dynamic> get _initial => widget.group;
@@ -317,18 +300,13 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
           items.map((e) => e['id'] as int).toList(),
         );
 
-        // ⚠️ Mise à jour Collectr via Edge Function si nécessaire
-        if (pidEff != null) {
-          await _ensureCollectrPrices(pidEff);
-        }
-
         _productExtras = await _fetchProductExtras(pidEff);
 
         setState(() {
           _viewRow = viewRow;
           _items = items;
           _movements = hist;
-          _trendsReloadTick++; // force PriceTrendsCard (simple) à relire la DB
+          _trendsReloadTick++;
         });
         return;
       }
@@ -363,11 +341,8 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
         items.map((e) => e['id'] as int).toList(),
       );
 
-      final pid = (items.first['product_id'] as num?)?.toInt();
-      if (pid != null) {
-        await _ensureCollectrPrices(pid);
-      }
-      _productExtras = await _fetchProductExtras(pid);
+      pidEff = pidEff ?? (items.first['product_id'] as num?)?.toInt();
+      _productExtras = await _fetchProductExtras(pidEff);
 
       setState(() {
         _viewRow = {..._initial, ...items.first};
@@ -379,38 +354,6 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
       _snack('Erreur chargement détails : $e');
     } finally {
       if (mounted) setState(() => _loading = false);
-    }
-  }
-
-  /// Appelle l’Edge Function via CollectrEdgeService si (prix manquants) ou (last_update >= 24h).
-  /// Met à jour product.price_raw, price_graded (si single), last_update et éventuellement collectr_id.
-  Future<void> _ensureCollectrPrices(int productId) async {
-    try {
-      final svc = CollectrEdgeService(_sb);
-
-      // Charge la ligne pour appliquer la logique TTL
-      final row = await _sb
-          .from('product')
-          .select(
-              'id,type,collectr_id,tcg_player_id,price_raw,price_graded,last_update')
-          .eq('id', productId)
-          .single();
-
-      if (!CollectrEdgeService.needsRefresh(row)) return;
-
-      final result = await svc.ensureFreshAndPersist(productId);
-
-      if (result['missingId'] == true) {
-        _snack('Collectr: missing id — do it manually');
-        return;
-      }
-
-      if (result['updated'] == true) {
-        // Forcer PriceTrendsCard à relire la DB
-        setState(() => _trendsReloadTick++);
-      }
-    } catch (e) {
-      _snack('Collectr update failed: $e');
     }
   }
 
@@ -541,7 +484,6 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
     final info = _maskUnitInMap(infoRaw);
     final uDoc = (info['document_url'] ?? '').toString();
 
-    // Extras gardés si utiles plus tard
     final int? blueprintId = ((_viewRow?['blueprint_id']) as num?)?.toInt() ??
         (_productExtras?['blueprint_id'] as int?) ??
         (widget.group['blueprint_id'] as int?);
@@ -727,18 +669,15 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
 
               const SizedBox(height: 16),
 
-              // Prix (version simple = lecture DB après mise à jour éventuelle)
+              // Prix (simple)
               Row(
-                children: [
+                children: const [
                   Text('Tendances des prix',
-                      style: Theme.of(context)
-                          .textTheme
-                          .titleMedium
-                          ?.copyWith(fontWeight: FontWeight.w700)),
-                  const SizedBox(width: 8),
-                  const Tooltip(
+                      style: TextStyle(fontWeight: FontWeight.w700)),
+                  SizedBox(width: 8),
+                  Tooltip(
                     message:
-                        'Affiche les champs Collectr stockés en base (price_raw / price_graded) après mise à jour automatique (TTL 24h).',
+                        'Collectr (Edge) + CardTrader — Pas de graph pour l’instant.',
                     child: Icon(Icons.info_outline, size: 18),
                   ),
                 ],
@@ -755,6 +694,12 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
                 currency: currency,
                 photoUrl: (_viewRow?['photo_url'] ?? widget.group['photo_url'])
                     ?.toString(),
+                blueprintId: ((_viewRow?['blueprint_id']) as num?)?.toInt() ??
+                    (_productExtras?['blueprint_id'] as int?) ??
+                    (widget.group['blueprint_id'] as int?),
+                tcgPlayerId: (_viewRow?['tcg_player_id']?.toString()) ??
+                    (_productExtras?['tcg_player_id'] as String?) ??
+                    (widget.group['tcg_player_id']?.toString()),
                 reloadTick: _trendsReloadTick,
               ),
             ],
