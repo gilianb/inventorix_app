@@ -1,3 +1,4 @@
+// lib/details/group_details_page.dart
 // ignore_for_file: unused_local_variable, deprecated_member_use
 /* Rôle : écran “Détails” (StatefulWidget).
    Charge les items d’un groupe, l’historique, et compose l’UI. */
@@ -10,7 +11,6 @@ import 'package:url_launcher/url_launcher.dart';
 import '../inventory/widgets/edit.dart' show EditItemsDialog;
 
 // Widgets existants
-import 'widgets/history_list.dart';
 import 'widgets/info_extras_card.dart';
 import 'widgets/info_banner.dart';
 
@@ -18,6 +18,7 @@ import 'widgets/info_banner.dart';
 import 'widgets/details_header.dart';
 import 'widgets/media_thumb.dart';
 import 'widgets/items_table.dart';
+import 'widgets/price_trends.dart';
 
 // Service (helpers)
 import 'details_service.dart';
@@ -25,15 +26,12 @@ import 'details_service.dart';
 // KPI factorisé
 import '../../inventory/widgets/finance_overview.dart';
 
-/// Image par défaut locale (asset) si `photo_url` manquante
 const String kDefaultAssetPhoto = 'assets/images/default_card.png';
 
-/// Palette locale
 const kAccentA = Color(0xFF6C5CE7);
 const kAccentB = Color(0xFF00D1B2);
 const kAccentC = Color(0xFFFFB545);
 
-/// Colonnes utiles de la vue agrégée
 const List<String> kViewCols = [
   'org_id',
   'group_sig',
@@ -82,17 +80,20 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
   final _sb = Supabase.instance.client;
 
   bool _loading = true;
-  bool _roleLoaded = false; // ⬅️ charge du rôle
-  bool _isOwner = false; // ⬅️ owner ?
+  bool _roleLoaded = false;
+  bool _isOwner = false;
 
-  Map<String, dynamic>? _viewRow; // ligne représentative (vue agrégée)
-  List<Map<String, dynamic>> _items = []; // items du groupe (table item)
-  List<Map<String, dynamic>> _movements = []; // historique movements
+  Map<String, dynamic>? _viewRow;
+  List<Map<String, dynamic>> _items = [];
+  List<Map<String, dynamic>> _movements = [];
 
-  String? _localStatusFilter; // pour l’affichage
+  String? _localStatusFilter;
   bool _showItemsTable = true;
-  bool _showHistory = true;
-  bool _dirty = false; // indique si modification effectuée
+  bool _dirty = false;
+
+  Map<String, dynamic>?
+      _productExtras; // { blueprint_id:int?, tcg_player_id:String? }
+  int _trendsReloadTick = 0;
 
   Map<String, dynamic> get _initial => widget.group;
 
@@ -118,12 +119,10 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
   @override
   void initState() {
     super.initState();
-    // On charge en parallèle
     unawaited(_loadRole());
     _loadAll();
   }
 
-  /// Charge le rôle et détermine si owner (member.owner OU creator de l’org).
   Future<void> _loadRole() async {
     try {
       final uid = _sb.auth.currentUser?.id;
@@ -178,17 +177,17 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
   Future<void> _loadAll() async {
     setState(() => _loading = true);
     try {
-      // 1) Résoudre org/group_sig/status de manière fiable
       String? orgId = _orgIdFromContext;
       String? sig = (widget.group['group_sig']?.toString().isNotEmpty ?? false)
           ? widget.group['group_sig'].toString()
           : null;
       String? clickedStatus = (widget.group['status'] ?? '').toString();
       final int? clickedId = (widget.group['id'] as num?)?.toInt();
-      final int? pid = (widget.group['product_id'] as num?)?.toInt();
+      final int? pidFromWidget = (widget.group['product_id'] as num?)?.toInt();
+
+      int? pidEff = pidFromWidget;
 
       if (clickedId != null) {
-        // Source de vérité: item
         final probe = await _sb
             .from('item')
             .select('org_id, group_sig, status, product_id')
@@ -203,17 +202,17 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
             sig = probe['group_sig'].toString();
           }
           clickedStatus = (probe['status'] ?? clickedStatus)?.toString();
+          final pidProbe = (probe['product_id'] as num?)?.toInt();
+          if (pidProbe != null) pidEff = pidProbe;
         }
       }
 
-      // Si pas encore de sig mais on a org + product (+ éventuellement status),
-      // on va chercher 1 item pour récupérer la sig (secours).
-      if (sig == null && orgId != null && pid != null) {
+      if (sig == null && orgId != null && pidEff != null) {
         var q = _sb
             .from('item')
             .select('group_sig')
             .eq('org_id', orgId)
-            .eq('product_id', pid);
+            .eq('product_id', pidEff);
         if ((clickedStatus ?? '').isNotEmpty) {
           q = q.eq('status', clickedStatus as Object);
         }
@@ -228,7 +227,6 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
       List<Map<String, dynamic>> items = [];
 
       if (sig != null && orgId != null) {
-        // 2) CHEMIN STRICT: par signature de groupe
         const itemCols = [
           'id',
           'org_id',
@@ -274,7 +272,6 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
           (raw as List).map((e) => Map<String, dynamic>.from(e as Map)),
         );
 
-        // Vue agrégée pour l’entête/carte infos
         Map<String, dynamic>? viewRow;
         try {
           final vr = await _sb
@@ -287,7 +284,6 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
           if (vr != null) viewRow = Map<String, dynamic>.from(vr);
         } catch (_) {}
 
-        // Fallback viewRow si la vue ne renvoie rien
         viewRow ??= {
           if (items.isNotEmpty) ...items.first,
           ..._initial,
@@ -295,7 +291,12 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
           'org_id': orgId,
         };
 
-        // Status cohérent (tous les items d’une sig ont le même)
+        pidEff = (viewRow['product_id'] as num?)?.toInt() ??
+            pidEff ??
+            (items.isNotEmpty
+                ? (items.first['product_id'] as num?)?.toInt()
+                : null);
+
         final detectedStatus = items.isNotEmpty
             ? (items.first['status'] ?? '').toString()
             : (clickedStatus);
@@ -307,20 +308,22 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
           items.map((e) => e['id'] as int).toList(),
         );
 
+        _productExtras = await _fetchProductExtras(pidEff);
+
         setState(() {
           _viewRow = viewRow;
           _items = items;
           _movements = hist;
+          _trendsReloadTick++; // force PriceTrendsCard à refetch
         });
         return;
       }
 
-      // 3) ULTIME secours: tout le produit
-      if (pid != null) {
+      if (pidEff != null) {
         final raw = await _sb
             .from('item')
             .select('*')
-            .eq('product_id', pid)
+            .eq('product_id', pidEff)
             .order('id', ascending: true);
         items = (raw as List)
             .map<Map<String, dynamic>>(
@@ -333,6 +336,8 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
           _items = const [];
           _movements = const [];
           _viewRow = _initial;
+          _productExtras = null;
+          _trendsReloadTick++;
         });
         return;
       }
@@ -344,10 +349,14 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
         items.map((e) => e['id'] as int).toList(),
       );
 
+      pidEff = pidEff ?? (items.first['product_id'] as num?)?.toInt();
+      _productExtras = await _fetchProductExtras(pidEff);
+
       setState(() {
         _viewRow = {..._initial, ...items.first};
         _items = items;
         _movements = hist;
+        _trendsReloadTick++;
       });
     } catch (e) {
       _snack('Erreur chargement détails : $e');
@@ -356,26 +365,39 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
     }
   }
 
-  // -------- Permissions d’affichage : masquage prix/unit --------
+  Future<Map<String, dynamic>?> _fetchProductExtras(int? productId) async {
+    if (productId == null) return null;
+    try {
+      final p = await _sb
+          .from('product')
+          .select('blueprint_id, tcg_player_id')
+          .eq('id', productId)
+          .maybeSingle();
 
-  /// Retourne une copie de la map avec les champs unitaires masqués si non-owner.
+      if (p != null) {
+        return {
+          'blueprint_id': (p['blueprint_id'] as num?)?.toInt(),
+          'tcg_player_id': p['tcg_player_id']?.toString(),
+        };
+      }
+    } catch (_) {}
+    return null;
+  }
+
   Map<String, dynamic> _maskUnitInMap(Map<String, dynamic> m) {
     if (_isOwner) return m;
     final c = Map<String, dynamic>.from(m);
-    // Liste des champs “prix / unité” à masquer
     for (final k in const [
       'unit_cost',
       'unit_fees',
-      'grading_fees', // si affiché comme coût/unité
-      'price_per_unit', // si utilisé par tes widgets
-      // ajoute ici d’autres clés “/u.” si besoin
+      'grading_fees',
+      'price_per_unit',
     ]) {
       if (c.containsKey(k)) c[k] = null;
     }
     return c;
   }
 
-  /// Applique le masquage sur une liste d’items.
   List<Map<String, dynamic>> _maskUnitInList(List<Map<String, dynamic>> list) {
     if (_isOwner) return list;
     return list.map(_maskUnitInMap).toList(growable: false);
@@ -418,7 +440,6 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
     }
   }
 
-  // Helpers d’affichage
   List<Map<String, dynamic>> _filteredItems() {
     final f = (_localStatusFilter ?? '').toString();
     if (f.isEmpty) return _items;
@@ -427,7 +448,6 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
 
   @override
   Widget build(BuildContext context) {
-    // tant que rôle ou data non chargés → loader
     if (_loading || !_roleLoaded) {
       return const Scaffold(
         body: Center(child: CircularProgressIndicator()),
@@ -442,9 +462,8 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
         .toString();
 
     final sourceItems = _filteredItems();
-    final visibleItems = _maskUnitInList(sourceItems); // ⬅️ masque si non-owner
+    final visibleItems = _maskUnitInList(sourceItems);
 
-    // marge moyenne pour le header (sur liste filtrée)
     final soldMargins = visibleItems
         .map((e) => e['marge'] as num?)
         .where((m) => m != null)
@@ -466,13 +485,19 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
     final bool hasPhoto = photoUrl != null && photoUrl.isNotEmpty;
     final displayImageUrl = hasPhoto ? photoUrl : kDefaultAssetPhoto;
 
-    // Données d’extras (masquées pour unitaires si besoin)
     final infoRaw = {
       ...?_viewRow,
       if (_items.isNotEmpty) ..._items.first,
     };
     final info = _maskUnitInMap(infoRaw);
     final uDoc = (info['document_url'] ?? '').toString();
+
+    final int? blueprintId = ((_viewRow?['blueprint_id']) as num?)?.toInt() ??
+        (_productExtras?['blueprint_id'] as int?) ??
+        (widget.group['blueprint_id'] as int?);
+    final String? tcgPlayerId = (_viewRow?['tcg_player_id']?.toString()) ??
+        (_productExtras?['tcg_player_id'] as String?) ??
+        (widget.group['tcg_player_id']?.toString());
 
     return WillPopScope(
       onWillPop: () async {
@@ -481,9 +506,7 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
       },
       child: Scaffold(
         appBar: AppBar(
-          leading: BackButton(
-            onPressed: () => Navigator.pop(context, _dirty),
-          ),
+          leading: BackButton(onPressed: () => Navigator.pop(context, _dirty)),
           actions: [
             IconButton(
               tooltip: 'Modifier N items',
@@ -514,10 +537,9 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
                 builder: (ctx, cons) {
                   final wide = cons.maxWidth >= 760;
 
-                  // ⬇️ OVERVIEW visible uniquement si owner
                   final finance = _isOwner
                       ? FinanceOverview(
-                          items: sourceItems, // ⚠️ items “bruts” pour calculs
+                          items: sourceItems,
                           currency: currency,
                           titleInvested: 'Investi (vue)',
                           titleEstimated: 'Valeur estimée',
@@ -572,10 +594,10 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
                         Expanded(
                           child: Column(
                             children: [
-                              finance, // ⬅️ masqué si non-owner
+                              finance,
                               if (_isOwner) const SizedBox(height: 12),
                               InfoExtrasCard(
-                                data: info, // ⬅️ unitaires masqués
+                                data: info,
                                 currencyFallback: currency,
                               ),
                             ],
@@ -615,10 +637,10 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
                             },
                           ),
                         const SizedBox(height: 12),
-                        finance, // ⬅️ masqué si non-owner
+                        finance,
                         if (_isOwner) const SizedBox(height: 12),
                         InfoExtrasCard(
-                          data: info, // ⬅️ unitaires masqués
+                          data: info,
                           currencyFallback: currency,
                         ),
                       ],
@@ -649,32 +671,48 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
               ),
               if (_showItemsTable)
                 ItemsTable(
-                  items: visibleItems, // ⬅️ unitaires masqués si non-owner
+                  items: visibleItems,
                   currency: currency,
                 ),
 
               const SizedBox(height: 16),
 
-              // Historique
+              // Tendances prix
               Row(
                 children: [
-                  Text('Historique complet',
+                  Text('Tendances des prix',
                       style: Theme.of(context)
                           .textTheme
                           .titleMedium
                           ?.copyWith(fontWeight: FontWeight.w700)),
                   const SizedBox(width: 8),
-                  IconButton(
-                    tooltip: _showHistory ? 'Masquer' : 'Afficher',
-                    icon: Icon(
-                        _showHistory ? Icons.expand_less : Icons.expand_more),
-                    onPressed: () =>
-                        setState(() => _showHistory = !_showHistory),
+                  const Tooltip(
+                    message:
+                        'CardTrader intégré (USD). eBay & Collectr arrivent.',
+                    child: Icon(Icons.info_outline, size: 18),
                   ),
                 ],
               ),
               const SizedBox(height: 8),
-              if (_showHistory) HistoryList(movements: _movements),
+              PriceTrendsCard(
+                key: ValueKey(
+                  'trends_${(_viewRow?['product_id'] ?? widget.group['product_id'])}_$_trendsReloadTick',
+                ),
+                productId: (_viewRow?['product_id'] ??
+                    widget.group['product_id']) as int?,
+                productType: (_viewRow?['type'] ?? widget.group['type'] ?? '')
+                    .toString(),
+                currency: currency,
+                photoUrl: (_viewRow?['photo_url'] ?? widget.group['photo_url'])
+                    ?.toString(),
+                blueprintId: ((_viewRow?['blueprint_id']) as num?)?.toInt() ??
+                    (_productExtras?['blueprint_id'] as int?) ??
+                    (widget.group['blueprint_id'] as int?),
+                tcgPlayerId: (_viewRow?['tcg_player_id']?.toString()) ??
+                    (_productExtras?['tcg_player_id'] as String?) ??
+                    (widget.group['tcg_player_id']?.toString()),
+                reloadTick: _trendsReloadTick,
+              ),
             ],
           ),
         ),
