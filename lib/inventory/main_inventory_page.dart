@@ -121,25 +121,26 @@ class _MainInventoryPageState extends State<MainInventoryPage>
   /// Liste des Tabs selon rôle
   List<Tab> _tabs() => <Tab>[
         const Tab(icon: Icon(Icons.inventory_2), text: 'Inventaire'),
-        const Tab(icon: Icon(Icons.trending_up), text: 'Top Sold'),
         if (_isOwner)
-          const Tab(icon: Icon(Icons.collections_bookmark), text: 'Collection'),
+          const Tab(icon: Icon(Icons.trending_up), text: 'Top Sold'),
+        const Tab(icon: Icon(Icons.collections_bookmark), text: 'Collection'),
         const Tab(icon: Icon(Icons.check_circle), text: 'Finalized'),
       ];
 
   /// Pages correspondantes
   List<Widget> _tabViews() => <Widget>[
         _buildInventoryBody(),
-        TopSoldPage(
-          orgId: widget.orgId,
-          onOpenDetails: (payload) {
-            _openDetails({
-              'org_id': widget.orgId,
-              ...payload,
-            });
-          },
-        ),
-        if (_isOwner) const CollectionPage(),
+        if (_isOwner)
+          TopSoldPage(
+            orgId: widget.orgId,
+            onOpenDetails: (payload) {
+              _openDetails({
+                'org_id': widget.orgId,
+                ...payload,
+              });
+            },
+          ),
+        const CollectionPage(),
         _buildInventoryBody(forceStatus: 'finalized'),
       ];
 

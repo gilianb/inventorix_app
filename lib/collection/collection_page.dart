@@ -13,6 +13,7 @@ import 'package:inventorix_app/new_stock/new_stock_page.dart';
 
 // ✅ KPI factorisé (Investi / Estimé / Vendu) basé sur sale_price null / non-null
 import '../../../inventory/widgets/finance_overview.dart';
+import '../org/roles.dart';
 
 const kAccentA = Color(0xFF6C5CE7);
 const kAccentB = Color(0xFF00D1B2);
@@ -36,6 +37,9 @@ class _CollectionPageState extends State<CollectionPage> {
   final _searchCtrl = TextEditingController();
   String? _gameFilter; // valeur = game_label
   String _typeFilter = 'single'; // 'single' | 'sealed'
+  OrgRole _role = OrgRole.viewer; // par défaut prudent
+// tant que false, on affiche un loader
+  RolePermissions get _perm => kRoleMatrix[_role]!;
 
   // Données pour le tableau (groupes)
   List<Map<String, dynamic>> _groups = const [];
@@ -43,19 +47,11 @@ class _CollectionPageState extends State<CollectionPage> {
   // Données brutes items pour le KPI factorisé
   List<Map<String, dynamic>> _kpiItems = const [];
 
-  bool get _isGilian =>
-      (_sb.auth.currentUser?.email ?? '').toLowerCase() ==
-      'gilian.bns@gmail.com';
-
   @override
   void initState() {
     super.initState();
     // contrôle d’accès basique
-    if (!_isGilian) {
-      // ignore: use_build_context_synchronously
-      Future.microtask(() => Navigator.of(context).pop());
-      return;
-    }
+
     _refresh();
   }
 
@@ -426,7 +422,6 @@ class _CollectionPageState extends State<CollectionPage> {
   }
 
   Future<void> _deleteLine(Map<String, dynamic> line) async {
-    if (!_isGilian) return; // sécurité supplémentaire UI
     final ok = await _confirmDeleteDialog(line);
     if (!ok) return;
 
@@ -544,21 +539,22 @@ class _CollectionPageState extends State<CollectionPage> {
                 const SizedBox(height: 10),
 
                 // ===== KPI factorisé, réutilisable partout =====
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 12),
-                  child: FinanceOverview(
-                    items: _kpiItems,
-                    currency: lines.isNotEmpty
-                        ? (lines.first['currency']?.toString() ?? 'USD')
-                        : 'USD',
-                    titleInvested: 'Investi (collection)',
-                    titleEstimated: 'Valeur estimée',
-                    titleSold: 'Total sold',
-                    subtitleInvested: 'Σ coûts (items non vendus)',
-                    subtitleEstimated: 'Σ estimated_price (non vendus)',
-                    subtitleSold: 'Σ sale_price (vendus)',
+                if (_perm.canSeeFinanceOverview)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    child: FinanceOverview(
+                      items: _kpiItems,
+                      currency: lines.isNotEmpty
+                          ? (lines.first['currency']?.toString() ?? 'USD')
+                          : 'USD',
+                      titleInvested: 'Investi (collection)',
+                      titleEstimated: 'Valeur estimée',
+                      titleSold: 'Total sold',
+                      subtitleInvested: 'Σ coûts (items non vendus)',
+                      subtitleEstimated: 'Σ estimated_price (non vendus)',
+                      subtitleSold: 'Σ sale_price (vendus)',
+                    ),
                   ),
-                ),
 
                 const SizedBox(height: 12),
 
@@ -577,7 +573,7 @@ class _CollectionPageState extends State<CollectionPage> {
                   lines: lines,
                   onOpen: _openDetails,
                   onEdit: _openEdit,
-                  onDelete: _isGilian ? _deleteLine : null,
+                  onDelete: _deleteLine,
                 ),
 
                 const SizedBox(height: 48),
