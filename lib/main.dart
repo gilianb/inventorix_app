@@ -53,14 +53,6 @@ class InventorixApp extends StatelessWidget {
   const InventorixApp({super.key, required this.hasSupabase});
   final bool hasSupabase;
 
-  bool get _isAuthenticated {
-    try {
-      return Supabase.instance.client.auth.currentSession != null;
-    } catch (_) {
-      return false;
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     // Chemin demandé (utile sur Web pour l'accès direct à /public)
@@ -80,39 +72,36 @@ class InventorixApp extends StatelessWidget {
       ),
       debugShowCheckedModeBanner: false,
 
-      // Router unique : on force les non-authentifiés à rester sur /public
+      // Router : ne force plus les non-authentifiés sur /public
       onGenerateRoute: (settings) {
         final String routeName = settings.name ?? path;
 
-        final bool isAuth = hasSupabase && _isAuthenticated;
-        final bool isPublicRoute = routeName == '/public';
-
-        if (!isAuth) {
-          // Non connecté → on autorise uniquement /public
-          if (isPublicRoute) {
-            return buildRoute(const PublicLinePage());
-          } else {
-            // Force l'affichage de la page publique même si l'URL n'est pas /public
-            return buildRoute(const PublicLinePage());
-          }
+        // 1) Si Supabase n'est pas configuré → écran dégradé
+        if (!hasSupabase) {
+          return buildRoute(const _DegradedHome());
         }
 
-        // Authentifié → routes normales de l'app
-        if (isPublicRoute) {
+        // 2) Routes publiques explicites
+        if (routeName == '/public') {
           return buildRoute(const PublicLinePage());
         }
 
-        // Route par défaut (dashboard / auth gate)
+        // 3) Route de login utilisée ailleurs (pushNamed '/login')
+        if (routeName == '/login') {
+          return buildRoute(const AuthGate());
+        }
+
+        // 4) Routes par défaut : AuthGate (gère connecté / non connecté)
+        //    - Si connecté → dashboard
+        //    - Si non connecté → écran d'auth
         return buildRoute(const AuthGate());
       },
 
-      // Si Vercel réécrit vers index.html et qu'une route inconnue arrive,
-      // on retombe ici. On applique la même logique que ci-dessus.
       onUnknownRoute: (settings) {
-        final bool isAuth = hasSupabase && _isAuthenticated;
-        if (!isAuth) {
-          return MaterialPageRoute(builder: (_) => const PublicLinePage());
+        if (!hasSupabase) {
+          return MaterialPageRoute(builder: (_) => const _DegradedHome());
         }
+        // Fallback pareil : on laisse AuthGate décider
         return MaterialPageRoute(builder: (_) => const AuthGate());
       },
     );
@@ -120,8 +109,6 @@ class InventorixApp extends StatelessWidget {
 }
 
 /// Ecran minimal quand Supabase n’est pas configuré.
-/// (On garde pour le dev local, mais la logique de routes ci-dessus gère déjà /public)
-// ignore: unused_element
 class _DegradedHome extends StatelessWidget {
   const _DegradedHome();
 

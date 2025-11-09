@@ -88,6 +88,28 @@ class _OrganizationsPageState extends State<OrganizationsPage> {
   void _snack(String m) =>
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
 
+  // ======== BOUTON Login/Logout (même logique que main_inventory) ========
+  Future<void> _onTapAuthButton() async {
+    final session = _sb.auth.currentSession;
+    if (session != null) {
+      try {
+        await _sb.auth.signOut();
+        if (!mounted) return;
+        _snack('Déconnexion réussie.');
+        Navigator.of(context)
+            .pushNamedAndRemoveUntil('/login', (Route<dynamic> r) => false);
+      } on AuthException catch (e) {
+        _snack('Erreur déconnexion: ${e.message}');
+      } catch (e) {
+        _snack('Erreur déconnexion: $e');
+      }
+    } else {
+      if (!mounted) return;
+      Navigator.of(context)
+          .pushNamedAndRemoveUntil('/login', (Route<dynamic> r) => false);
+    }
+  }
+
   Future<void> _createOrgDialog() async {
     final ctrl = TextEditingController();
     final name = await showDialog<String>(
@@ -172,8 +194,19 @@ class _OrganizationsPageState extends State<OrganizationsPage> {
 
   @override
   Widget build(BuildContext context) {
+    final isLoggedIn = _sb.auth.currentSession != null;
+
     return Scaffold(
-      appBar: AppBar(title: const Text('Mes organisations')),
+      appBar: AppBar(
+        title: const Text('Mes organisations'),
+        actions: [
+          IconButton(
+            tooltip: isLoggedIn ? 'Se déconnecter' : 'Se connecter',
+            icon: Icon(isLoggedIn ? Icons.logout : Icons.login),
+            onPressed: _onTapAuthButton,
+          ),
+        ],
+      ),
       floatingActionButton: _loading
           ? null
           : FloatingActionButton.extended(
