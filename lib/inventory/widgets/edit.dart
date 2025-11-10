@@ -6,6 +6,10 @@ import 'storage_upload_tile.dart';
 // 🔐 RBAC (conservé mais NON utilisé pour masquer quoi que ce soit)
 import 'package:inventorix_app/org/roles.dart';
 
+//icons
+import 'package:iconify_flutter/iconify_flutter.dart';
+import 'package:iconify_flutter/icons/mdi.dart';
+
 class EditItemsDialog extends StatefulWidget {
   const EditItemsDialog({
     super.key,
@@ -963,7 +967,7 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
           ),
           IconButton(
             onPressed: () => Navigator.pop(context, false),
-            icon: const Icon(Icons.close),
+            icon: const Iconify(Mdi.close),
             tooltip: 'Fermer',
           ),
         ],
@@ -1206,7 +1210,7 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
                     IconButton(
                       tooltip: 'Effacer la date',
                       onPressed: () => setState(() => _saleDate = null),
-                      icon: const Icon(Icons.clear),
+                      icon: const Iconify(Mdi.close),
                     ),
                   ],
                 ),
@@ -1381,7 +1385,7 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
                     width: 18,
                     height: 18,
                     child: CircularProgressIndicator(strokeWidth: 2))
-                : const Icon(Icons.save),
+                : const Iconify(Mdi.content_save),
             label: const Text('Appliquer'),
           ),
         ],

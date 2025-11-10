@@ -5,6 +5,10 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'organization_models.dart';
 
+//icons
+import 'package:iconify_flutter/iconify_flutter.dart';
+import 'package:iconify_flutter/icons/mdi.dart';
+
 const kAccentA = Color(0xFF6C5CE7); // violet
 const kAccentB = Color(0xFF00D1B2); // menthe
 const kAccentC = Color(0xFFFFB545); // amber;
@@ -202,7 +206,7 @@ class _OrganizationsPageState extends State<OrganizationsPage> {
         actions: [
           IconButton(
             tooltip: isLoggedIn ? 'Se déconnecter' : 'Se connecter',
-            icon: Icon(isLoggedIn ? Icons.logout : Icons.login),
+            icon: Iconify(isLoggedIn ? Mdi.logout : Mdi.login),
             onPressed: _onTapAuthButton,
           ),
         ],
@@ -213,7 +217,7 @@ class _OrganizationsPageState extends State<OrganizationsPage> {
               onPressed: _createOrgDialog,
               backgroundColor: kAccentA,
               foregroundColor: Colors.white,
-              icon: const Icon(Icons.add_business),
+              icon: const Iconify(Mdi.business),
               label: const Text('Créer'),
             ),
       body: _loading
@@ -495,7 +499,7 @@ class _ManageMembersSheetState extends State<_ManageMembersSheet> {
                 IconButton(
                   tooltip: 'Fermer',
                   onPressed: () => Navigator.pop(context),
-                  icon: const Icon(Icons.close),
+                  icon: const Iconify(Mdi.close),
                 ),
               ],
             ),
@@ -540,7 +544,7 @@ class _ManageMembersSheetState extends State<_ManageMembersSheet> {
                 const Spacer(),
                 FilledButton.icon(
                   onPressed: _addMemberDialog,
-                  icon: const Icon(Icons.person_add),
+                  icon: const Iconify(Mdi.account_plus),
                   label: const Text('Ajouter un membre'),
                 ),
               ],
@@ -675,7 +679,7 @@ class _PageIntro extends StatelessWidget {
             const SizedBox(width: 8),
             FilledButton.icon(
               onPressed: onCreate,
-              icon: const Icon(Icons.add),
+              icon: const Iconify(Mdi.add),
               label: const Text('Créer'),
             ),
           ],
@@ -813,7 +817,7 @@ class _OrgCard extends StatelessWidget {
                       message: 'Gérer les membres',
                       child: IconButton(
                         onPressed: onManageMembers,
-                        icon: const Icon(Icons.group_add),
+                        icon: const Iconify(Mdi.account_group),
                       ),
                     ),
                   const SizedBox(width: 6),

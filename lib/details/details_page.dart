@@ -22,6 +22,10 @@ import 'details_service.dart';
 import '../../inventory/widgets/finance_overview.dart';
 import '../public/public_line_page.dart'; // <-- Aperçu public
 
+//icons
+import 'package:iconify_flutter/iconify_flutter.dart';
+import 'package:iconify_flutter/icons/mdi.dart';
+
 const String kDefaultAssetPhoto = 'assets/images/default_card.png';
 
 const kAccentA = Color(0xFF6C5CE7);
@@ -775,7 +779,7 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
           actions: [
             IconButton(
               tooltip: 'Modifier N items',
-              icon: const Icon(Icons.edit),
+              icon: const Iconify(Mdi.pencil),
               onPressed: visibleItems.isEmpty ? null : _onEditGroup,
             ),
           ],
@@ -996,9 +1000,8 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
                   const SizedBox(width: 8),
                   IconButton(
                     tooltip: _showItemsTable ? 'Masquer' : 'Afficher',
-                    icon: Icon(_showItemsTable
-                        ? Icons.expand_less
-                        : Icons.expand_more),
+                    icon: Iconify(
+                        _showItemsTable ? Mdi.chevron_up : Mdi.chevron_down),
                     onPressed: () =>
                         setState(() => _showItemsTable = !_showItemsTable),
                   ),

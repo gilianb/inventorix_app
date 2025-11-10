@@ -5,6 +5,10 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 /*Ton CatalogPicker : recherche/sélection d’une carte du catalogue 
 (blueprint), renvoie l’item choisi et son affichage complet.*/
 
+//icons
+import 'package:iconify_flutter/iconify_flutter.dart';
+import 'package:iconify_flutter/icons/mdi.dart';
+
 const String EXT_SUPABASE_URL = 'https://pejsdroimtdxrnyhtvlx.supabase.co';
 const String EXT_SUPABASE_ANON_KEY =
     'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBlanNkcm9pbXRkeHJueWh0dmx4Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc0OTU4NjkwMywiZXhwIjoyMDY1MTYyOTAzfQ.Mavg3-H8YXz11tY5sNReuTwtB47Yg7pFmbD7IAjBPtU';
@@ -369,7 +373,7 @@ class _CatalogPickerState extends State<CatalogPicker> {
                 )
               : (_q.text.length >= widget.minChars
                   ? IconButton(
-                      icon: const Icon(Icons.clear),
+                      icon: const Iconify(Mdi.close),
                       onPressed: () {
                         _q.clear();
                         setState(() => _results = []);

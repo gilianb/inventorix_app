@@ -4,6 +4,10 @@ import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
+//icons
+import 'package:iconify_flutter/iconify_flutter.dart';
+import 'package:iconify_flutter/icons/mdi.dart';
+
 typedef QrCopyCallback = Future<void> Function(String link);
 
 class QrLineButton extends StatelessWidget {
@@ -57,13 +61,13 @@ class QrLineButton extends StatelessWidget {
       return TextButton.icon(
         style: TextButton.styleFrom(foregroundColor: Colors.white),
         onPressed: onTap,
-        icon: const Icon(Icons.qr_code),
+        icon: const Iconify(Mdi.qrcode),
         label: const Text('QR code'),
       );
     }
     return OutlinedButton.icon(
       onPressed: onTap,
-      icon: const Icon(Icons.qr_code),
+      icon: const Iconify(Mdi.qrcode),
       label: const Text('QR code'),
     );
   }
@@ -128,7 +132,7 @@ class QrLineButton extends StatelessWidget {
                         alignment: WrapAlignment.center,
                         children: [
                           FilledButton.icon(
-                            icon: const Icon(Icons.open_in_new),
+                            icon: const Iconify(Mdi.open_in_new),
                             label: const Text('Ouvrir'),
                             onPressed: () async {
                               final uri = Uri.tryParse(link);
@@ -139,7 +143,7 @@ class QrLineButton extends StatelessWidget {
                             },
                           ),
                           OutlinedButton.icon(
-                            icon: const Icon(Icons.copy),
+                            icon: const Iconify(Mdi.content_copy),
                             label: const Text('Copier'),
                             onPressed: () async {
                               if (onCopy != null) await onCopy!(link);
@@ -208,7 +212,7 @@ class _QrFullScreen extends StatelessWidget {
                   alignment: WrapAlignment.center,
                   children: [
                     FilledButton.icon(
-                      icon: const Icon(Icons.open_in_new),
+                      icon: const Iconify(Mdi.open_in_new),
                       label: const Text('Ouvrir'),
                       onPressed: () async {
                         final uri = Uri.tryParse(link);
@@ -219,7 +223,7 @@ class _QrFullScreen extends StatelessWidget {
                       },
                     ),
                     OutlinedButton.icon(
-                      icon: const Icon(Icons.copy),
+                      icon: const Iconify(Mdi.content_copy),
                       label: const Text('Copier'),
                       onPressed: () async {
                         if (onCopy != null) await onCopy!(link);

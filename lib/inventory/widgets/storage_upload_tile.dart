@@ -5,6 +5,10 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../utils/storage_helper.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+//icons
+import 'package:iconify_flutter/iconify_flutter.dart';
+import 'package:iconify_flutter/icons/mdi.dart';
+
 class StorageUploadTile extends StatefulWidget {
   const StorageUploadTile({
     super.key,
@@ -151,14 +155,14 @@ class _StorageUploadTileState extends State<StorageUploadTile> {
         children: [
           FilledButton.icon(
             onPressed: _pickAndUpload,
-            icon: const Icon(Icons.upload),
+            icon: const Iconify(Mdi.upload),
             label: const Text('Uploader'),
           ),
           const SizedBox(width: 8),
           if (_url != null && _url!.isNotEmpty)
             OutlinedButton.icon(
               onPressed: _open,
-              icon: Icon(_isImage ? Icons.photo : Icons.description),
+              icon: Iconify(_isImage ? Mdi.photo_camera : Mdi.file_document),
               label: Text(_isImage ? 'Voir photo' : 'Ouvrir document'),
             ),
           const Spacer(),
@@ -169,7 +173,7 @@ class _StorageUploadTileState extends State<StorageUploadTile> {
                 setState(() => _url = null);
                 widget.onUrlChanged(null);
               },
-              icon: Icon(Icons.clear, color: cs.error),
+              icon: Iconify(Mdi.close, color: cs.error),
             ),
         ],
       ),

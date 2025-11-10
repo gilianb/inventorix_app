@@ -2,6 +2,10 @@
 
 import 'package:flutter/material.dart';
 
+//icons
+import 'package:iconify_flutter/iconify_flutter.dart';
+import 'package:iconify_flutter/icons/mdi.dart';
+
 /// Mapping groupes -> libellé lisible
 const Map<String, String> kGroupPrettyLabel = {
   'all': 'Tous',
@@ -51,9 +55,9 @@ class SearchAndGameFilter extends StatelessWidget {
               onSubmitted: (_) => onSearch(),
               decoration: InputDecoration(
                 hintText: 'Rechercher (nom, langue, jeu, fournisseur)',
-                prefixIcon: const Icon(Icons.search),
+                prefixIcon: const Iconify(Mdi.magnify),
                 suffixIcon: IconButton(
-                  icon: const Icon(Icons.clear),
+                  icon: const Iconify(Mdi.close),
                   onPressed: () {
                     searchCtrl.clear();
                     onSearch();

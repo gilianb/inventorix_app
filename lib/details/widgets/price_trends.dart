@@ -12,6 +12,10 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../services/cardtrader_service.dart';
 import '../services/collectr_api.dart'; // <--- service sécurisé Collectr
 
+//icons
+import 'package:iconify_flutter/iconify_flutter.dart';
+import 'package:iconify_flutter/icons/mdi.dart';
+
 // ⚠️ Token CardTrader (si 401: régénérer ou passer par Edge Function)
 const String kCardTraderToken =
     'eyJhbGciOiJSUzI1NiJ9.eyJpc3MiOiJjYXJkdHJhZGVyLXByb2R1Y3Rpb24iLCJzdWIiOiJhcHA6MTYzNjciLCJhdWQiOiJhcHA6MTYzNjciLCJleHAiOjQ5MTE3MDA0MjgsImp0aSI6IjBiYTRhMjNlLTg0NjctNGViNS05YzdlLWRmNWIyZjU1OThjYiIsImlhdCI6MTc1NjAyNjgyOCwibmFtZSI6IkdpZ2liIEFwcCAyMDI1MDcyNzIyMDQwMSJ9.LQzgTNPkhs_UvPGO2jFHBK5q97NzGMY30XpXbR_tEx9XhshPmbPdO8_4otlqiAdPymcQedq8cT-2d3FulljERSOhdCbVPWSW5I2Axvu5Zw8J4bvadtLH1m1REHZBn2GZ0xWY4wOtk1Iya-HeNAQ07QsBE17O2gIXsdMXl3x81TdFt6n4URetX9Qscyn4Gb7MtflqPBh3_FWPLtUKcOdibFSSI5m69iNJH1kLBb2v0r46U66ZkoIE_ppiqvfNGZmglTYh_zynh2RC4pZ0mnZtn6-enJ79Q0oDRmRj8OghIFr19zCPvV2ZcB9-VSP4mrDGMu43oE9gFzrwXGH_Rb6K-g';
@@ -290,7 +294,7 @@ class _PriceTrendsCardState extends State<PriceTrendsCard> {
                       width: 18,
                       height: 18,
                       child: CircularProgressIndicator(strokeWidth: 2))
-                  : const Icon(Icons.refresh),
+                  : const Iconify(Mdi.refresh),
             ),
           ),
           const Divider(height: 1),

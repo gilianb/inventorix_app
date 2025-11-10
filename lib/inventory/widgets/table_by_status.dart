@@ -6,6 +6,10 @@ import 'package:url_launcher/url_launcher.dart';
 import '../utils/status_utils.dart';
 import '../utils/format.dart';
 
+//icons
+import 'package:iconify_flutter/iconify_flutter.dart';
+import 'package:iconify_flutter/icons/mdi.dart';
+
 class InventoryTableByStatus extends StatelessWidget {
   const InventoryTableByStatus({
     super.key,
@@ -156,7 +160,7 @@ class InventoryTableByStatus extends StatelessWidget {
             alignment: Alignment.center,
             child: IconButton(
               tooltip: 'Éditer ce listing',
-              icon: const Icon(Icons.edit, size: 18),
+              icon: const Iconify(Mdi.pencil),
               onPressed: onEdit == null ? null : () => onEdit!(r),
             ),
           ),
@@ -186,7 +190,7 @@ class InventoryTableByStatus extends StatelessWidget {
                   alignment: Alignment.center,
                   child: IconButton(
                     tooltip: 'Supprimer cette ligne',
-                    icon: const Icon(Icons.close,
+                    icon: const Iconify(Mdi.close,
                         size: 18, color: Colors.redAccent),
                     onPressed: onDelete == null ? null : () => onDelete!(r),
                   ),
@@ -352,7 +356,7 @@ class _FileCell extends StatelessWidget {
     }
 
     return IconButton(
-      icon: const Icon(Icons.description),
+      icon: const Iconify(Mdi.file_document),
       tooltip: 'Ouvrir le document',
       onPressed: _open,
     );

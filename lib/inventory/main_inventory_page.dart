@@ -23,6 +23,8 @@ import 'package:inventorix_app/org/organizations_page.dart';
 
 // 🔐 RBAC
 import 'package:inventorix_app/org/roles.dart';
+import 'package:iconify_flutter/iconify_flutter.dart';
+import 'package:iconify_flutter/icons/mdi.dart';
 
 /// Accents (UI only)
 const kAccentA = Color(0xFF6C5CE7); // violet
@@ -120,11 +122,11 @@ class _MainInventoryPageState extends State<MainInventoryPage>
 
   /// Liste des Tabs selon rôle
   List<Tab> _tabs() => <Tab>[
-        const Tab(icon: Icon(Icons.inventory_2), text: 'Inventaire'),
+        const Tab(icon: Iconify(Mdi.package_variant), text: 'Inventaire'),
         if (_isOwner)
-          const Tab(icon: Icon(Icons.trending_up), text: 'Top Sold'),
-        const Tab(icon: Icon(Icons.collections_bookmark), text: 'Collection'),
-        const Tab(icon: Icon(Icons.check_circle), text: 'Finalized'),
+          const Tab(icon: Iconify(Mdi.trending_up), text: 'Top Sold'),
+        const Tab(icon: Iconify(Mdi.collections_bookmark), text: 'Collection'),
+        const Tab(icon: Iconify(Mdi.check_circle), text: 'Finalized'),
       ];
 
   /// Pages correspondantes
@@ -912,34 +914,43 @@ class _MainInventoryPageState extends State<MainInventoryPage>
         // ⬇️  AJOUT
 
         actions: [
-          // 🔐 Bouton Login/Logout
-          IconButton(
-            tooltip: isLoggedIn ? 'Se déconnecter' : 'Se connecter',
-            icon: Icon(isLoggedIn ? Icons.logout : Icons.login),
-            onPressed: _onTapAuthButton,
-          ),
-          // 👥 Changer d’organisation
-          IconButton(
-            tooltip: 'Changer d’organisation',
-            icon: const Icon(Icons.switch_account),
-            onPressed: () async {
-              await OrgPrefs.clear();
-              if (!mounted) return;
-              final picked = await Navigator.of(context).push<String>(
-                MaterialPageRoute(builder: (_) => const OrganizationsPage()),
-              );
-              if (picked != null && mounted) {
-                Navigator.of(context).pushReplacement(
-                  MaterialPageRoute(
-                      builder: (_) => MainInventoryPage(orgId: picked)),
-                );
-              }
-            },
+          IconTheme(
+            data: const IconThemeData(opacity: 1.0),
+            child: Row(children: [
+              IconButton(
+                tooltip: isLoggedIn ? 'Se déconnecter' : 'Se connecter',
+                icon: Iconify(isLoggedIn ? Mdi.logout : Mdi.login),
+                onPressed: _onTapAuthButton,
+              ),
+              IconButton(
+                tooltip: 'Changer d’organisation',
+                icon: const Iconify(Mdi.switch_account),
+                onPressed: () async {
+                  await OrgPrefs.clear();
+                  if (!mounted) return;
+                  final picked = await Navigator.of(context).push<String>(
+                    MaterialPageRoute(
+                        builder: (_) => const OrganizationsPage()),
+                  );
+                  if (picked != null && mounted) {
+                    Navigator.of(context).pushReplacement(
+                      MaterialPageRoute(
+                          builder: (_) => MainInventoryPage(orgId: picked)),
+                    );
+                  }
+                },
+              ),
+            ]),
           ),
         ],
+
         bottom: TabBar(
           controller: _tabCtrl,
           tabs: _tabs(),
+          labelColor: Theme.of(context).colorScheme.onPrimary,
+          unselectedLabelColor:
+              Theme.of(context).colorScheme.onPrimary.withOpacity(.75),
+          indicatorColor: Theme.of(context).colorScheme.onPrimary,
         ),
         flexibleSpace: Container(
           decoration: const BoxDecoration(
@@ -979,7 +990,7 @@ class _MainInventoryPageState extends State<MainInventoryPage>
               );
               if (changed == true) _refresh();
             },
-            icon: const Icon(Icons.add),
+            icon: const Iconify(Mdi.plus),
             label: const Text('Nouveau stock'),
           );
         },

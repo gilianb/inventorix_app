@@ -13,6 +13,10 @@ import 'package:inventorix_app/details/details_page.dart'
 // 🔐 RBAC
 import 'package:inventorix_app/org/roles.dart';
 
+//icons
+import 'package:iconify_flutter/iconify_flutter.dart';
+import 'package:iconify_flutter/icons/mdi.dart';
+
 class TopSoldPage extends StatefulWidget {
   const TopSoldPage({super.key, this.orgId, this.onOpenDetails});
 
@@ -743,7 +747,7 @@ class _TopSoldPageState extends State<TopSoldPage> {
                       child: TextField(
                         controller: _searchCtrl,
                         decoration: InputDecoration(
-                          prefixIcon: const Icon(Icons.search),
+                          prefixIcon: const Iconify(Mdi.magnify),
                           hintText: 'Rechercher (multi-mots : nom/sku/jeu...)',
                           isDense: true,
                           border: OutlineInputBorder(
@@ -751,7 +755,7 @@ class _TopSoldPageState extends State<TopSoldPage> {
                           suffixIcon: _searchCtrl.text.isEmpty
                               ? null
                               : IconButton(
-                                  icon: const Icon(Icons.clear),
+                                  icon: const Iconify(Mdi.close),
                                   onPressed: () {
                                     _searchCtrl.clear();
                                     _fetch();
@@ -764,7 +768,7 @@ class _TopSoldPageState extends State<TopSoldPage> {
 
                     FilledButton.icon(
                       onPressed: _fetch,
-                      icon: const Icon(Icons.refresh),
+                      icon: const Iconify(Mdi.refresh),
                       label: const Text('Actualiser'),
                     ),
                   ],

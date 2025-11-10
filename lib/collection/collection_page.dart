@@ -15,6 +15,10 @@ import 'package:inventorix_app/new_stock/new_stock_page.dart';
 import '../../../inventory/widgets/finance_overview.dart';
 import '../org/roles.dart';
 
+//icons
+import 'package:iconify_flutter/iconify_flutter.dart';
+import 'package:iconify_flutter/icons/mdi.dart';
+
 const kAccentA = Color(0xFF6C5CE7);
 const kAccentB = Color(0xFF00D1B2);
 const kAccentC = Color(0xFFFFB545);
@@ -610,7 +614,7 @@ class _CollectionPageState extends State<CollectionPage> {
           );
           if (changed == true) _refresh();
         },
-        icon: const Icon(Icons.add),
+        icon: const Iconify(Mdi.plus),
         label: const Text('Nouveau stock'),
       ),
     );

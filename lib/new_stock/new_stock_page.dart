@@ -12,6 +12,10 @@ import 'widgets/options_section.dart';
 import 'widgets/date_field.dart';
 import 'widgets/lookup_autocomplete_field.dart';
 
+//icons
+import 'package:iconify_flutter/iconify_flutter.dart';
+import 'package:iconify_flutter/icons/mdi.dart';
+
 class NewStockPage extends StatefulWidget {
   const NewStockPage({super.key, required this.orgId});
   final String orgId; // ← AJOUT : org_id courant
@@ -414,7 +418,7 @@ class _NewStockPageState extends State<NewStockPage> {
                   child: TextButton.icon(
                     onPressed: () => setState(() => _showMore = !_showMore),
                     icon:
-                        Icon(_showMore ? Icons.expand_less : Icons.expand_more),
+                        Iconify(_showMore ? Mdi.expand_less : Mdi.expand_more),
                     label: const Text('Plus d’options'),
                   ),
                 ),
@@ -473,7 +477,7 @@ class _NewStockPageState extends State<NewStockPage> {
                             width: 18,
                             height: 18,
                             child: CircularProgressIndicator(strokeWidth: 2))
-                        : const Icon(Icons.save),
+                        : const Iconify(Mdi.content_save),
                     label: const Text('Créer le stock'),
                   ),
                 ),
