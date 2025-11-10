@@ -55,9 +55,9 @@ class SearchAndGameFilter extends StatelessWidget {
               onSubmitted: (_) => onSearch(),
               decoration: InputDecoration(
                 hintText: 'Rechercher (nom, langue, jeu, fournisseur)',
-                prefixIcon: const Iconify(Mdi.magnify),
+                prefixIcon: const Iconify(Mdi.magnify, color: Colors.grey),
                 suffixIcon: IconButton(
-                  icon: const Iconify(Mdi.close),
+                  icon: const Iconify(Mdi.close, color: Colors.grey),
                   onPressed: () {
                     searchCtrl.clear();
                     onSearch();

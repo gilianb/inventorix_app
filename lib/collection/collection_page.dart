@@ -614,7 +614,7 @@ class _CollectionPageState extends State<CollectionPage> {
           );
           if (changed == true) _refresh();
         },
-        icon: const Iconify(Mdi.plus),
+        icon: const Iconify(Mdi.plus, color: Colors.white),
         label: const Text('Nouveau stock'),
       ),
     );

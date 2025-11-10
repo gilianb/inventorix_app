@@ -122,11 +122,23 @@ class _MainInventoryPageState extends State<MainInventoryPage>
 
   /// Liste des Tabs selon rôle
   List<Tab> _tabs() => <Tab>[
-        const Tab(icon: Iconify(Mdi.package_variant), text: 'Inventaire'),
+        const Tab(
+            icon: Iconify(Mdi.package_variant,
+                color: Color.fromARGB(255, 2, 35, 61)),
+            text: 'Inventaire'),
         if (_isOwner)
-          const Tab(icon: Iconify(Mdi.trending_up), text: 'Top Sold'),
-        const Tab(icon: Iconify(Mdi.collections_bookmark), text: 'Collection'),
-        const Tab(icon: Iconify(Mdi.check_circle), text: 'Finalized'),
+          const Tab(
+              icon: Iconify(Mdi.trending_up,
+                  color: Color.fromARGB(255, 2, 35, 61)),
+              text: 'Top Sold'),
+        const Tab(
+            icon: Iconify(Mdi.collections_bookmark,
+                color: Color.fromARGB(255, 2, 35, 61)),
+            text: 'Collection'),
+        const Tab(
+            icon: Iconify(Mdi.check_circle,
+                color: Color.fromARGB(255, 2, 35, 61)),
+            text: 'Finalized'),
       ];
 
   /// Pages correspondantes
@@ -919,12 +931,14 @@ class _MainInventoryPageState extends State<MainInventoryPage>
             child: Row(children: [
               IconButton(
                 tooltip: isLoggedIn ? 'Se déconnecter' : 'Se connecter',
-                icon: Iconify(isLoggedIn ? Mdi.logout : Mdi.login),
+                icon: Iconify(isLoggedIn ? Mdi.logout : Mdi.login,
+                    color: Color.fromARGB(255, 2, 35, 61)),
                 onPressed: _onTapAuthButton,
               ),
               IconButton(
                 tooltip: 'Changer d’organisation',
-                icon: const Iconify(Mdi.switch_account),
+                icon: const Iconify(Mdi.switch_account,
+                    color: Color.fromARGB(255, 2, 35, 61)),
                 onPressed: () async {
                   await OrgPrefs.clear();
                   if (!mounted) return;
@@ -990,7 +1004,7 @@ class _MainInventoryPageState extends State<MainInventoryPage>
               );
               if (changed == true) _refresh();
             },
-            icon: const Iconify(Mdi.plus),
+            icon: const Iconify(Mdi.plus, color: Colors.white),
             label: const Text('Nouveau stock'),
           );
         },

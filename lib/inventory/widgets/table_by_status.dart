@@ -160,7 +160,8 @@ class InventoryTableByStatus extends StatelessWidget {
             alignment: Alignment.center,
             child: IconButton(
               tooltip: 'Éditer ce listing',
-              icon: const Iconify(Mdi.pencil),
+              icon: const Iconify(Mdi.pencil,
+                  size: 20, color: Color.fromARGB(255, 34, 35, 36)),
               onPressed: onEdit == null ? null : () => onEdit!(r),
             ),
           ),
