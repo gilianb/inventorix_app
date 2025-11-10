@@ -16,10 +16,12 @@ class InfoExtrasCard extends StatelessWidget {
     super.key,
     required this.data,
     required this.currencyFallback,
+    this.showMargins = true,
   });
 
   final Map<String, dynamic> data;
   final String currencyFallback;
+  final bool showMargins;
 
   String _txt(dynamic v) {
     if (v == null) return '—';
@@ -202,8 +204,9 @@ class InfoExtrasCard extends StatelessWidget {
         (_asNum(data['grading_fees']) ?? 0);
     final num invested = cost + fees;
 
-    final num? valueMargin =
-        (sale == null) ? null : (sale - invested); // valeur absolue
+    final num? valueMargin = showMargins
+        ? (sale == null ? null : (sale - invested))
+        : null; // valeur absolue
     // si % absent mais vendue et investi > 0, on le dérive
     final num? pctDerived = (pct != null)
         ? pct
@@ -226,7 +229,9 @@ class InfoExtrasCard extends StatelessWidget {
       _kv(context, 'Grading note', _txt(data['grading_note'])),
       _kv(context, 'Grading fees', _money(data['grading_fees'], currency)),
       // === Marges (gauche pour visibilité) ===
-      _kvW(context, 'Margin (%)', MarginChip(marge: pctDerived, compact: true)),
+      if (showMargins)
+        _kvW(context, 'Margin (%)',
+            MarginChip(marge: pctDerived, compact: true)),
     ];
 
     final right = <Widget>[
@@ -246,8 +251,9 @@ class InfoExtrasCard extends StatelessWidget {
           _money(data['commission_fees'], currency)),
       _kv(context, 'Payment type', _txt(data['payment_type'])),
       _kv(context, 'Buyer infos', _txt(data['buyer_infos'])),
-      _kvW(context, 'Margin (value per unit)',
-          _marginValueChip(valueMargin, currency, pctDerived)),
+      if (showMargins)
+        _kvW(context, 'Margin (value per unit)',
+            _marginValueChip(valueMargin, currency, pctDerived)),
     ];
 
     final notes = (data['notes'] ?? '').toString();

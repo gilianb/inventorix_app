@@ -10,9 +10,14 @@ const kAccentB = Color(0xFF00D1B2);
 const kAccentC = Color(0xFFFFB545);
 
 class ItemsTable extends StatelessWidget {
-  const ItemsTable({super.key, required this.items, required this.currency});
+  const ItemsTable(
+      {super.key,
+      required this.items,
+      required this.currency,
+      required this.showMargins});
   final List<Map<String, dynamic>> items;
   final String currency;
+  final bool showMargins;
 
   String _txt(dynamic v) =>
       (v == null || (v is String && v.trim().isEmpty)) ? '—' : v.toString();
@@ -86,7 +91,10 @@ class ItemsTable extends StatelessWidget {
                   DataCell(Text(_txt(r['grading_fees']))),
                   DataCell(Text(est == null ? '—' : '${_m(est)} $currency')),
                   DataCell(Text(sale == null ? '—' : '${_m(sale)} $currency')),
-                  DataCell(MarginChip(marge: marge)),
+                  if (showMargins)
+                    DataCell(MarginChip(marge: marge))
+                  else
+                    const DataCell(Text('—')), // ⬅️ cache la marge
                   DataCell(Text(_txt(r['tracking']))),
                   DataCell(Text(_txt(r['buyer_company']))),
                   DataCell(Text(_txt(r['supplier_name']))),

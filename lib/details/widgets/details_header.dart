@@ -18,7 +18,9 @@ class DetailsHeader extends StatelessWidget {
     this.margin,
     this.historyEvents = const [],
     this.historyTitle,
-    this.historyCount, // non utilisé désormais (badge calculé sur batch)
+    this.historyCount,
+    this.showMargins = true, // ⬅️ NEW
+// non utilisé désormais (badge calculé sur batch)
   });
 
   final String title;
@@ -30,6 +32,7 @@ class DetailsHeader extends StatelessWidget {
   final List<Map<String, dynamic>> historyEvents;
   final String? historyTitle;
   final int? historyCount;
+  final bool showMargins;
 
   @override
   Widget build(BuildContext context) {
@@ -139,11 +142,12 @@ class DetailsHeader extends StatelessWidget {
                         ),
                         backgroundColor: kAccentC,
                       ),
-                      Tooltip(
-                        message:
-                            margin == null ? 'Not sold yet' : 'Marge moyenne',
-                        child: MarginChip(marge: margin),
-                      ),
+                      if (showMargins)
+                        Tooltip(
+                          message:
+                              margin == null ? 'Not sold yet' : 'Marge moyenne',
+                          child: MarginChip(marge: margin),
+                        ),
                     ],
                   ),
                 ],

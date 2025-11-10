@@ -393,6 +393,7 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
       'unit_fees',
       'grading_fees',
       'price_per_unit',
+      'marge',
     ]) {
       if (c.containsKey(k)) c[k] = null;
     }
@@ -578,6 +579,7 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
                 historyEvents: _movements,
                 historyTitle: 'Journal des sauvegardes',
                 historyCount: _movements.length,
+                showMargins: _isOwner, // ⬅️
               ),
 
               const SizedBox(height: 12),
@@ -681,6 +683,7 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
                               InfoExtrasCard(
                                 data: info,
                                 currencyFallback: currency,
+                                showMargins: _isOwner, // ⬅️
                               ),
                             ],
                           ),
@@ -788,6 +791,7 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
                 ItemsTable(
                   items: visibleItems,
                   currency: currency,
+                  showMargins: _isOwner, // ⬅️
                 ),
 
               const SizedBox(height: 16),
