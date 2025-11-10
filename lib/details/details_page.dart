@@ -96,6 +96,18 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
   Map<String, dynamic>? _productExtras; // { blueprint_id, tcg_player_id }
   int _trendsReloadTick = 0;
 
+  // ==== Realtime ====
+  RealtimeChannel? _rtChannel;
+  Timer? _softReloadDebounce;
+  String? _subOrgId;
+  String? _subGroupSig;
+
+  // ==== OVERRIDES collants (après edit) ====
+  String? _ovOrgId;
+  String? _ovGroupSig;
+  String? _ovStatus;
+  int? _ovAnchorItemId;
+
   Map<String, dynamic> get _initial => widget.group;
 
   String? get _orgIdFromContext {
@@ -122,6 +134,15 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
     super.initState();
     unawaited(_loadRole());
     _loadAll();
+  }
+
+  @override
+  void dispose() {
+    try {
+      _rtChannel?.unsubscribe();
+    } catch (_) {}
+    _softReloadDebounce?.cancel();
+    super.dispose();
   }
 
   Future<void> _loadRole() async {
@@ -175,15 +196,138 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
     }
   }
 
+  // ---------- Realtime helpers ----------
+
+  void _scheduleSoftReload() {
+    _softReloadDebounce?.cancel();
+    _softReloadDebounce = Timer(const Duration(milliseconds: 180), () {
+      if (mounted) _loadAll();
+    });
+  }
+
+  void _subscribeToGroup({required String orgId, required String groupSig}) {
+    if (_subOrgId == orgId && _subGroupSig == groupSig && _rtChannel != null) {
+      return; // déjà abonné au bon couple
+    }
+
+    try {
+      _rtChannel?.unsubscribe();
+    } catch (_) {}
+    _rtChannel = null;
+
+    final ch = _sb.channel('grp:$orgId:$groupSig');
+
+    // Pas de filter param (compat SDK). On filtre dans le callback.
+    ch.onPostgresChanges(
+      event: PostgresChangeEvent.all,
+      schema: 'public',
+      table: 'item',
+      callback: (payload) {
+        final newRec = Map<String, dynamic>.from(payload.newRecord);
+        final oldRec = Map<String, dynamic>.from(payload.oldRecord);
+
+        bool match(Map<String, dynamic> r) =>
+            (r['org_id']?.toString() == orgId) &&
+            (r['group_sig']?.toString() == groupSig);
+
+        if (match(newRec) || match(oldRec)) {
+          _scheduleSoftReload();
+        }
+      },
+    );
+
+    ch.subscribe();
+
+    _rtChannel = ch;
+    _subOrgId = orgId;
+    _subGroupSig = groupSig;
+  }
+
+  // ---------- Helpers de sélection de status ----------
+
+  String _resolveStatusFilter(
+    List<Map<String, dynamic>> items, {
+    String? previous,
+    String? preferred,
+  }) {
+    final statuses = items
+        .map((e) => (e['status'] ?? '').toString())
+        .where((s) => s.isNotEmpty)
+        .toSet();
+
+    if (preferred != null && statuses.contains(preferred)) return preferred;
+    if (previous != null && statuses.contains(previous)) return previous;
+
+    const order = [
+      'finalized',
+      'shipped',
+      'sold',
+      'awaiting_payment',
+      'listed',
+      'graded',
+      'at_grader',
+      'sent_to_grader',
+      'waiting_for_gradation',
+      'received',
+      'in_transit',
+      'paid',
+      'ordered',
+    ];
+    for (final s in order) {
+      if (statuses.contains(s)) return s;
+    }
+    return statuses.isNotEmpty ? statuses.first : '';
+  }
+
+  String? _statusOfItem(List<Map<String, dynamic>> items, int id) {
+    final r = items.cast<Map<String, dynamic>?>().firstWhere(
+          (e) => ((e?['id'] as num?)?.toInt() == id),
+          orElse: () => null,
+        );
+    final s = (r?['status'] ?? '').toString();
+    return s.isNotEmpty ? s : null;
+  }
+
+  // ---------- Helpers marge dérivée (même logique qu'InfoExtras) ----------
+
+  num? _asNum(dynamic v) {
+    if (v == null) return null;
+    if (v is num) return v;
+    return num.tryParse(v.toString());
+  }
+
+  /// calcule la marge % à partir des champs si `marge` est null
+  num? _derivedMarginPct(Map<String, dynamic> r) {
+    final num? m = _asNum(r['marge']);
+    if (m != null) return m;
+
+    final num? sale = _asNum(r['sale_price']);
+    final num cost =
+        (_asNum(r['unit_cost']) ?? 0) + (_asNum(r['unit_fees']) ?? 0);
+    final num fees = (_asNum(r['shipping_fees']) ?? 0) +
+        (_asNum(r['commission_fees']) ?? 0) +
+        (_asNum(r['grading_fees']) ?? 0);
+    final num invested = cost + fees;
+
+    if (sale != null && invested > 0) {
+      return ((sale - invested) / invested) * 100;
+    }
+    return null;
+  }
+
   Future<void> _loadAll() async {
     setState(() => _loading = true);
     try {
-      String? orgId = _orgIdFromContext;
-      String? sig = (widget.group['group_sig']?.toString().isNotEmpty ?? false)
-          ? widget.group['group_sig'].toString()
-          : null;
-      String? clickedStatus = (widget.group['status'] ?? '').toString();
-      final int? clickedId = (widget.group['id'] as num?)?.toInt();
+      // 🔑 utilise d'abord les OVERRIDES collants si présents
+      String? orgId = _ovOrgId ?? _orgIdFromContext;
+      String? sig = _ovGroupSig ??
+          ((widget.group['group_sig']?.toString().isNotEmpty ?? false)
+              ? widget.group['group_sig'].toString()
+              : null);
+      String? clickedStatus =
+          _ovStatus ?? (widget.group['status'] ?? '').toString();
+      final int? clickedId =
+          _ovAnchorItemId ?? (widget.group['id'] as num?)?.toInt();
       final int? pidFromWidget = (widget.group['product_id'] as num?)?.toInt();
 
       int? pidEff = pidFromWidget;
@@ -298,18 +442,34 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
                 ? (items.first['product_id'] as num?)?.toInt()
                 : null);
 
-        final detectedStatus = items.isNotEmpty
-            ? (items.first['status'] ?? '').toString()
-            : (clickedStatus);
-
-        _localStatusFilter = (detectedStatus ?? '').toString();
-
         final hist = await DetailsService.fetchHistoryForItems(
           _sb,
           items.map((e) => e['id'] as int).toList(),
         );
 
         _productExtras = await _fetchProductExtras(pidEff);
+
+        // (Re)subscribe au couple (orgId,sig)
+        _subscribeToGroup(orgId: orgId, groupSig: sig);
+
+        // Statut pertinent
+        final previous = _localStatusFilter;
+        final focusStatus =
+            (clickedId != null) ? _statusOfItem(items, clickedId) : null;
+        final preferred = (focusStatus ?? clickedStatus)?.toString();
+        _localStatusFilter = _resolveStatusFilter(
+          items,
+          previous: previous,
+          preferred: preferred,
+        );
+
+        // 🔒 Met à jour les overrides “collants”
+        _ovOrgId = orgId;
+        _ovGroupSig = sig;
+        _ovStatus = _localStatusFilter;
+        _ovAnchorItemId = (items.isNotEmpty)
+            ? (items.first['id'] as num?)?.toInt()
+            : _ovAnchorItemId;
 
         setState(() {
           _viewRow = viewRow;
@@ -343,7 +503,16 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
         return;
       }
 
-      _localStatusFilter = (items.first['status'] ?? '').toString();
+      // Même logique de filtre ici aussi
+      final previous = _localStatusFilter;
+      final focusStatus =
+          (clickedId != null) ? _statusOfItem(items, clickedId) : null;
+      final preferred = (focusStatus ?? clickedStatus)?.toString();
+      _localStatusFilter = _resolveStatusFilter(
+        items,
+        previous: previous,
+        preferred: preferred,
+      );
 
       final hist = await DetailsService.fetchHistoryForItems(
         _sb,
@@ -352,6 +521,12 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
 
       pidEff = pidEff ?? (items.first['product_id'] as num?)?.toInt();
       _productExtras = await _fetchProductExtras(pidEff);
+
+      // 🔒 Coller aussi ici
+      _ovOrgId = items.first['org_id']?.toString();
+      _ovGroupSig = items.first['group_sig']?.toString();
+      _ovStatus = _localStatusFilter;
+      _ovAnchorItemId = (items.first['id'] as num?)?.toInt();
 
       setState(() {
         _viewRow = {..._initial, ...items.first};
@@ -409,9 +584,15 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
 
   Future<void> _onEditGroup() async {
-    final curStatus = (_items.isNotEmpty
-            ? (_items.first['status'] ?? '').toString()
-            : (_localStatusFilter ?? widget.group['status'] ?? ''))
+    // On conserve un id d’ancre (pour re-prober après edit)
+    final anchorId =
+        (_items.isNotEmpty ? (_items.first['id'] as num?)?.toInt() : null);
+
+    // Utiliser d'abord le filtre courant
+    final curStatus = (_localStatusFilter ??
+            (_items.isNotEmpty
+                ? (_items.first['status'] ?? '').toString()
+                : (widget.group['status'] ?? '').toString()))
         .toString();
 
     final qty = _items.where((e) => (e['status'] ?? '') == curStatus).length;
@@ -438,6 +619,29 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
 
     if (changed == true) {
       _dirty = true;
+
+      // 🔎 Re-probe l’item d’ancre (post-edit) pour récupérer le NOUVEAU couple (org_id, group_sig, status)
+      if (anchorId != null) {
+        try {
+          final p = await _sb
+              .from('item')
+              .select('org_id, group_sig, status, product_id')
+              .eq('id', anchorId)
+              .maybeSingle();
+
+          if (p != null) {
+            _ovOrgId = p['org_id']?.toString();
+            _ovGroupSig = p['group_sig']?.toString();
+            _ovStatus = (p['status'] ?? '').toString();
+            _ovAnchorItemId = anchorId;
+          }
+        } catch (_) {
+          // ignore, on retombe sur _loadAll standard
+        }
+      }
+
+      // petit délai pour laisser les vues / triggers se stabiliser
+      await Future.delayed(const Duration(milliseconds: 160));
       await _loadAll();
     }
   }
@@ -450,17 +654,19 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
 
   // ----- URL de la "ligne" (org + group_sig + status) -----
 
-  String? _currentOrgId() => _orgIdFromContext;
+  String? _currentOrgId() => _ovOrgId ?? _orgIdFromContext;
 
   String? _currentGroupSig() {
-    final s = (_viewRow?['group_sig'] ?? widget.group['group_sig'])?.toString();
+    final s = _ovGroupSig ??
+        (_viewRow?['group_sig'] ?? widget.group['group_sig'])?.toString();
     return (s != null && s.isNotEmpty) ? s : null;
   }
 
   String? _currentStatus() {
-    final s = (_localStatusFilter ??
-        (_items.isNotEmpty ? _items.first['status']?.toString() : null) ??
-        widget.group['status']?.toString());
+    final s = _ovStatus ??
+        (_localStatusFilter ??
+            (_items.isNotEmpty ? _items.first['status']?.toString() : null) ??
+            widget.group['status']?.toString());
     return (s != null && s.isNotEmpty) ? s : null;
   }
 
@@ -482,7 +688,7 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
     final org = _currentOrgId();
     final sig = _currentGroupSig();
     final st = _currentStatus();
-    if (org == null || sig == null || st == null) return null;
+    if (org == null || sig == null) return null;
 
     return Uri(
       scheme: 'inventorix',
@@ -499,21 +705,32 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
       );
     }
 
-    final status = (_localStatusFilter ??
+    final status = (_ovStatus ??
+            _localStatusFilter ??
             (_items.isNotEmpty
                 ? (_items.first['status']?.toString())
                 : widget.group['status']?.toString()) ??
             '')
         .toString();
 
-    final sourceItems = _filteredItems();
+    // ---- items visibles (avec fallback local si vide) ----
+    List<Map<String, dynamic>> sourceItems = _filteredItems();
+    if (sourceItems.isEmpty && _items.isNotEmpty) {
+      final fallback =
+          _resolveStatusFilter(_items, previous: _localStatusFilter);
+      sourceItems =
+          _items.where((e) => (e['status'] ?? '') == fallback).toList();
+    }
+
     final visibleItems = _maskUnitInList(sourceItems);
 
+    // ---- marge header dérivée si besoin ----
     final soldMargins = visibleItems
-        .map((e) => e['marge'] as num?)
+        .map(_derivedMarginPct)
         .where((m) => m != null)
         .cast<num>()
         .toList();
+
     final num? headerMargin = soldMargins.isEmpty
         ? null
         : (soldMargins.reduce((a, b) => a + b) / soldMargins.length);
@@ -561,7 +778,6 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
               icon: const Icon(Icons.edit),
               onPressed: visibleItems.isEmpty ? null : _onEditGroup,
             ),
-            // Bouton QR (AppBar)
           ],
           flexibleSpace: const _AppbarGradient(),
         ),
@@ -579,7 +795,7 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
                 historyEvents: _movements,
                 historyTitle: 'Journal des sauvegardes',
                 historyCount: _movements.length,
-                showMargins: _isOwner, // ⬅️
+                showMargins: _isOwner,
               ),
 
               const SizedBox(height: 12),
@@ -683,7 +899,7 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
                               InfoExtrasCard(
                                 data: info,
                                 currencyFallback: currency,
-                                showMargins: _isOwner, // ⬅️
+                                showMargins: _isOwner,
                               ),
                             ],
                           ),
@@ -760,6 +976,7 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
                         InfoExtrasCard(
                           data: info,
                           currencyFallback: currency,
+                          showMargins: _isOwner,
                         ),
                       ],
                     );
@@ -791,7 +1008,7 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
                 ItemsTable(
                   items: visibleItems,
                   currency: currency,
-                  showMargins: _isOwner, // ⬅️
+                  showMargins: _isOwner,
                 ),
 
               const SizedBox(height: 16),

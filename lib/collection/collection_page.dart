@@ -37,7 +37,7 @@ class _CollectionPageState extends State<CollectionPage> {
   final _searchCtrl = TextEditingController();
   String? _gameFilter; // valeur = game_label
   String _typeFilter = 'single'; // 'single' | 'sealed'
-  OrgRole _role = OrgRole.viewer; // par défaut prudent
+  final OrgRole _role = OrgRole.viewer; // par défaut prudent
 // tant que false, on affiche un loader
   RolePermissions get _perm => kRoleMatrix[_role]!;
 

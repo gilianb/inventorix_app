@@ -10,11 +10,13 @@ const kAccentB = Color(0xFF00D1B2);
 const kAccentC = Color(0xFFFFB545);
 
 class ItemsTable extends StatelessWidget {
-  const ItemsTable(
-      {super.key,
-      required this.items,
-      required this.currency,
-      required this.showMargins});
+  const ItemsTable({
+    super.key,
+    required this.items,
+    required this.currency,
+    required this.showMargins,
+  });
+
   final List<Map<String, dynamic>> items;
   final String currency;
   final bool showMargins;
@@ -22,6 +24,32 @@ class ItemsTable extends StatelessWidget {
   String _txt(dynamic v) =>
       (v == null || (v is String && v.trim().isEmpty)) ? '—' : v.toString();
   String _m(num? n) => n == null ? '—' : n.toDouble().toStringAsFixed(2);
+
+  // ---- helpers marge dérivée (même logique que header/InfoExtras) ----
+  num? _asNum(dynamic v) {
+    if (v == null) return null;
+    if (v is num) return v;
+    return num.tryParse(v.toString());
+  }
+
+  /// Calcule une marge % à l’affichage si `marge` est null.
+  num? _derivedMarginPct(Map<String, dynamic> r) {
+    final num? m = _asNum(r['marge']);
+    if (m != null) return m;
+
+    final num? sale = _asNum(r['sale_price']);
+    final num cost =
+        (_asNum(r['unit_cost']) ?? 0) + (_asNum(r['unit_fees']) ?? 0);
+    final num fees = (_asNum(r['shipping_fees']) ?? 0) +
+        (_asNum(r['commission_fees']) ?? 0) +
+        (_asNum(r['grading_fees']) ?? 0);
+    final num invested = cost + fees;
+
+    if (sale != null && invested > 0) {
+      return ((sale - invested) / invested) * 100;
+    }
+    return null;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -71,7 +99,9 @@ class ItemsTable extends StatelessWidget {
               final r = items[i];
               final est = (r['estimated_price'] as num?);
               final sale = (r['sale_price'] as num?);
-              final marge = (r['marge'] as num?);
+
+              // ✅ marge affichée = marge DB ou marge dérivée
+              final num? margeDisplay = _derivedMarginPct(r);
 
               final s = (r['status'] ?? '').toString();
               final photo = (r['photo_url'] ?? '').toString();
@@ -92,9 +122,9 @@ class ItemsTable extends StatelessWidget {
                   DataCell(Text(est == null ? '—' : '${_m(est)} $currency')),
                   DataCell(Text(sale == null ? '—' : '${_m(sale)} $currency')),
                   if (showMargins)
-                    DataCell(MarginChip(marge: marge))
+                    DataCell(MarginChip(marge: margeDisplay))
                   else
-                    const DataCell(Text('—')), // ⬅️ cache la marge
+                    const DataCell(Text('—')),
                   DataCell(Text(_txt(r['tracking']))),
                   DataCell(Text(_txt(r['buyer_company']))),
                   DataCell(Text(_txt(r['supplier_name']))),
@@ -131,8 +161,7 @@ class ItemsTable extends StatelessWidget {
       case 'listed':
         return Colors.blue;
       case 'awaiting_payment':
-        return const Color.fromARGB(
-            255, 11, 206, 245); // amber-ish / ou ta palette
+        return const Color.fromARGB(255, 11, 206, 245);
       case 'sold':
         return Colors.purple;
       case 'shipped':

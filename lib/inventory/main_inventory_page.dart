@@ -909,6 +909,15 @@ class _MainInventoryPageState extends State<MainInventoryPage>
     return Scaffold(
       appBar: AppBar(
         title: const Text('Inventorix'),
+        // ⬇️  AJOUT
+        foregroundColor: Colors.white,
+        iconTheme: const IconThemeData(color: Colors.white),
+        actionsIconTheme: const IconThemeData(color: Colors.white),
+        titleTextStyle: const TextStyle(
+          color: Colors.white,
+          fontSize: 20,
+          fontWeight: FontWeight.w600,
+        ),
         actions: [
           // 🔐 Bouton Login/Logout
           IconButton(
