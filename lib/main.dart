@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+// Optionnel : enlève le # des URL si tu veux du "path" pur
+// import 'package:flutter_web_plugins/url_strategy.dart';
 
 import 'auth/auth_gate.dart';
 import 'public/public_line_page.dart';
@@ -20,14 +22,11 @@ Future<bool> _initEnvAndSupabase() async {
   final supabaseUrl = dotenv.env['SUPABASE_URL'];
   final supabaseAnonKey = dotenv.env['SUPABASE_ANON_KEY'];
 
-  if (supabaseUrl != null &&
-      supabaseUrl.isNotEmpty &&
-      supabaseAnonKey != null &&
-      supabaseAnonKey.isNotEmpty) {
+  if ((supabaseUrl ?? '').isNotEmpty && (supabaseAnonKey ?? '').isNotEmpty) {
     try {
       await Supabase.initialize(
-        url: supabaseUrl,
-        anonKey: supabaseAnonKey,
+        url: supabaseUrl!,
+        anonKey: supabaseAnonKey!,
         authOptions: const FlutterAuthClientOptions(
           autoRefreshToken: true,
         ),
@@ -35,16 +34,18 @@ Future<bool> _initEnvAndSupabase() async {
       return true;
     } catch (e) {
       debugPrint('Supabase init failed: $e');
-      return false;
     }
   } else {
     debugPrint('No Supabase credentials found. Running in degraded mode.');
-    return false;
   }
+  return false;
 }
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // Optionnel : supprime le hash des URL (sur Web)
+  // usePathUrlStrategy();
+
   final hasSupabase = await _initEnvAndSupabase();
   runApp(InventorixApp(hasSupabase: hasSupabase));
 }
@@ -53,13 +54,30 @@ class InventorixApp extends StatelessWidget {
   const InventorixApp({super.key, required this.hasSupabase});
   final bool hasSupabase;
 
+  /// Détecte le path effectif sur Web :
+  /// - soit dans Uri.base.path (/public)
+  /// - soit dans Uri.base.fragment (#/public) si hash strategy
+  String _effectivePath() {
+    if (!kIsWeb) return '/';
+    final path = Uri.base.path; // ex: /public
+    final frag = Uri.base.fragment; // ex: /public si hash strategy
+    if (path != '/' && path.isNotEmpty) return path;
+    if (frag.isNotEmpty) return frag.startsWith('/') ? frag : '/$frag';
+    return '/';
+  }
+
+  bool _isPublicUrl() {
+    final p = _effectivePath(); // ex: /public ou /public/
+    return p == '/public' || p.startsWith('/public/');
+  }
+
   @override
   Widget build(BuildContext context) {
-    // Chemin demandé (utile sur Web pour l'accès direct à /public)
-    final String path = kIsWeb ? Uri.base.path : '/';
+    // IMPORTANT : si on arrive directement sur /public?org=...,
+    // on évite d'afficher AuthGate au 1er frame.
+    final initial = kIsWeb && _isPublicUrl() ? '/public' : '/';
 
-    Route<dynamic> buildRoute(Widget page) =>
-        MaterialPageRoute(builder: (_) => page);
+    Route<dynamic> page(Widget w) => MaterialPageRoute(builder: (_) => w);
 
     return MaterialApp(
       title: 'Inventorix',
@@ -72,38 +90,45 @@ class InventorixApp extends StatelessWidget {
       ),
       debugShowCheckedModeBanner: false,
 
-      // Router : ne force plus les non-authentifiés sur /public
+      // Empêche un flash de la page d'auth quand l'URL cible est /public
+      initialRoute: initial,
+
+      routes: {
+        // Route publique TOUJOURS accessible (les query params sont lus via Uri.base)
+        '/public': (context) => const PublicLinePage(),
+        // Route login si tu l’utilises ailleurs
+        '/login': (context) => const AuthGate(),
+        // Route racine (zone protégée)
+        '/': (context) =>
+            hasSupabase ? const AuthGate() : const _DegradedHome(),
+      },
+
       onGenerateRoute: (settings) {
-        final String routeName = settings.name ?? path;
+        // Si ce n'est pas une route déclarée ci-dessus :
+        if (kIsWeb) {
+          // settings.name peut ressembler à "/public?org=...&g=...&s=..."
+          final raw = settings.name ?? Uri.base.toString();
+          final uri = Uri.tryParse(raw) ?? Uri();
+          final pathOnly = uri.path;
 
-        // 1) Si Supabase n'est pas configuré → écran dégradé
-        if (!hasSupabase) {
-          return buildRoute(const _DegradedHome());
+          // Force la page publique si on détecte /public (quelque soit la query)
+          if (pathOnly == '/public' || pathOnly == '/public/') {
+            return page(const PublicLinePage());
+          }
+
+          // Cas hash strategy : fragment == "/public?...":
+          final frag = Uri.base.fragment;
+          if (frag.startsWith('/public')) {
+            return page(const PublicLinePage());
+          }
         }
 
-        // 2) Routes publiques explicites
-        if (routeName == '/public') {
-          return buildRoute(const PublicLinePage());
-        }
-
-        // 3) Route de login utilisée ailleurs (pushNamed '/login')
-        if (routeName == '/login') {
-          return buildRoute(const AuthGate());
-        }
-
-        // 4) Routes par défaut : AuthGate (gère connecté / non connecté)
-        //    - Si connecté → dashboard
-        //    - Si non connecté → écran d'auth
-        return buildRoute(const AuthGate());
+        // Par défaut : zone protégée (ou mode dégradé)
+        return page(hasSupabase ? const AuthGate() : const _DegradedHome());
       },
 
-      onUnknownRoute: (settings) {
-        if (!hasSupabase) {
-          return MaterialPageRoute(builder: (_) => const _DegradedHome());
-        }
-        // Fallback pareil : on laisse AuthGate décider
-        return MaterialPageRoute(builder: (_) => const AuthGate());
-      },
+      onUnknownRoute: (_) =>
+          page(hasSupabase ? const AuthGate() : const _DegradedHome()),
     );
   }
 }

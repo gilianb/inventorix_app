@@ -11,7 +11,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-// ⬇️ Ajout : graphique d’historique
+// ⬇️ Graphique d’historique (onglets Raw / Graded)
 import '../details/widgets/price_history_chart.dart';
 
 class PublicLinePage extends StatefulWidget {
@@ -41,7 +41,7 @@ class _PublicLinePageState extends State<PublicLinePage> {
   String? _photoUrl;
   double? _estimated;
 
-  // ⬇️ Ajout : infos nécessaires au graphique
+  // Infos nécessaires au graphique
   int? _productId;
   bool _isSingle = true; // défaut “single”
   String _currency = 'USD';
@@ -68,18 +68,18 @@ class _PublicLinePageState extends State<PublicLinePage> {
       if ((org == null || org.isEmpty) ||
           (sig == null || sig.isEmpty) ||
           (st == null || st.isEmpty)) {
-        throw 'Invalid link (missing org/g/s).';
+        throw 'Lien invalide (org/g/s manquants).';
       }
 
       // Tente la vue agrégée, sinon fallback item+product
       Map<String, dynamic>? row;
 
       try {
-        // ⬇️ On récupère aussi product_id, type et currency pour alimenter le graphique
         row = await _sb
             .from('v_item_groups')
             .select(
-                'product_name, photo_url, estimated_price, product_id, type, currency')
+              'product_name, photo_url, estimated_price, product_id, type, currency',
+            )
             .eq('org_id', org)
             .eq('group_sig', sig)
             .eq('status', st)
@@ -99,7 +99,7 @@ class _PublicLinePageState extends State<PublicLinePage> {
             .limit(1)
             .maybeSingle();
 
-        if (item == null) throw 'Resource not found (404).';
+        if (item == null) throw 'Ressource introuvable (404).';
 
         final pid = (item['product_id'] as num?)?.toInt();
         Map<String, dynamic>? product;
@@ -112,7 +112,7 @@ class _PublicLinePageState extends State<PublicLinePage> {
         }
 
         row = {
-          'product_name': product?['name']?.toString() ?? 'Product',
+          'product_name': product?['name']?.toString() ?? 'Produit',
           'photo_url': (item['photo_url'] ?? product?['photo_url'])?.toString(),
           'estimated_price':
               (item['estimated_price'] as num?)?.toDouble() ?? 0.0,
@@ -128,7 +128,6 @@ class _PublicLinePageState extends State<PublicLinePage> {
           : (row['photo_url'] as String);
       _estimated = (row['estimated_price'] as num?)?.toDouble();
 
-      // ⬇️ hydratation des champs pour le graphique
       _productId = (row['product_id'] as num?)?.toInt();
       _isSingle =
           ((row['type'] ?? 'single').toString().toLowerCase() == 'single');
@@ -152,7 +151,7 @@ class _PublicLinePageState extends State<PublicLinePage> {
     return Scaffold(
       backgroundColor: theme.colorScheme.surface,
       appBar: AppBar(
-        title: const Text('Inventorix — Public Page'),
+        title: const Text('Inventorix — Fiche publique'),
         centerTitle: true,
       ),
       body: _loading
@@ -181,7 +180,6 @@ class _PublicLinePageState extends State<PublicLinePage> {
                           title: _title,
                           photoUrl: _photoUrl,
                           estimated: _estimated,
-                          // ⬇️ on passe les infos pour le graphe
                           productId: _productId,
                           isSingle: _isSingle,
                           currency: _currency,
@@ -208,7 +206,7 @@ class _PublicContent extends StatelessWidget {
   final String? photoUrl;
   final double? estimated;
 
-  // ⬇️ infos graphe
+  // infos graphe
   final int? productId;
   final bool isSingle;
   final String currency;
@@ -299,24 +297,27 @@ class _PublicContent extends StatelessWidget {
           if (productId == null) {
             return const SizedBox.shrink();
           }
+          // Donne une hauteur bornée au widget d’onglets/graph (évite les erreurs d’unbounded height).
+          final double graphHeight = wide ? 380 : 320;
+
           return Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               const SizedBox(height: 22),
               Text(
-                'Price History',
+                'Historique des prix',
                 style: theme.textTheme.titleMedium?.copyWith(
                   fontWeight: FontWeight.w800,
                 ),
               ),
               const SizedBox(height: 10),
-              // Si jamais PriceHistoryTabs n’impose pas lui-même sa hauteur,
-              // on lui en donne une par sécurité :
-              // SizedBox(height: 320, child: PriceHistoryTabs(...)),
-              PriceHistoryTabs(
-                productId: productId,
-                isSingle: isSingle,
-                currency: currency,
+              SizedBox(
+                height: graphHeight,
+                child: PriceHistoryTabs(
+                  productId: productId,
+                  isSingle: isSingle,
+                  currency: currency,
+                ),
               ),
             ],
           );
@@ -325,6 +326,7 @@ class _PublicContent extends StatelessWidget {
         if (wide) {
           // Disposition 2 colonnes + graphe dessous (pleine largeur)
           return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               header,
               Row(
@@ -422,7 +424,7 @@ class _PricePanel extends StatelessWidget {
                       size: 16, color: theme.colorScheme.primary),
                   const SizedBox(width: 6),
                   Text(
-                    'Estimated Sale Price',
+                    'Prix de vente estimé',
                     style: theme.textTheme.labelLarge?.copyWith(
                       color: theme.colorScheme.primary,
                       fontWeight: FontWeight.w700,
@@ -453,14 +455,14 @@ class _PricePanel extends StatelessWidget {
 
             // Sous-texte
             Text(
-              'Indicative value — internal data',
+              'Valeur indicative — données internes',
               style: theme.textTheme.bodySmall?.copyWith(
                 color: theme.colorScheme.onSurface.withOpacity(0.6),
                 letterSpacing: 0.2,
               ),
             ),
 
-            // ⬇️ remplace Spacer() par un espace fixe
+            // ⬇️ remplace Spacer() (interdit en hauteur non bornée) par un espace fixe
             const SizedBox(height: 12),
 
             // Petit bloc décoratif (tags)

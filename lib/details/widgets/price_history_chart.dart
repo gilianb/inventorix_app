@@ -1,6 +1,8 @@
 // lib/details/widgets/price_history_chart.dart
 // DefaultTabController-based, no SingleTickerProviderStateMixin anywhere.
 
+// ignore_for_file: deprecated_member_use
+
 import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:fl_chart/fl_chart.dart';
