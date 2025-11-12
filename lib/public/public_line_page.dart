@@ -1,5 +1,6 @@
 // lib/public/public_line_page.dart
 // Page publique : Titre pleine largeur • Image "carte" à gauche • Prix estimé à droite.
+// + Historique des prix (Collectr) sous le contenu, avec onglets Raw / Graded.
 // - Pas d’auth requise
 // - Responsive (deux colonnes en large, vertical en étroit)
 // - Lien appelée via /public?org=...&g=...&s=...
@@ -9,6 +10,9 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+
+// ⬇️ Ajout : graphique d’historique
+import '../details/widgets/price_history_chart.dart';
 
 class PublicLinePage extends StatefulWidget {
   const PublicLinePage({
@@ -37,6 +41,11 @@ class _PublicLinePageState extends State<PublicLinePage> {
   String? _photoUrl;
   double? _estimated;
 
+  // ⬇️ Ajout : infos nécessaires au graphique
+  int? _productId;
+  bool _isSingle = true; // défaut “single”
+  String _currency = 'USD';
+
   @override
   void initState() {
     super.initState();
@@ -59,16 +68,18 @@ class _PublicLinePageState extends State<PublicLinePage> {
       if ((org == null || org.isEmpty) ||
           (sig == null || sig.isEmpty) ||
           (st == null || st.isEmpty)) {
-        throw 'Lien invalide (org/g/s manquants).';
+        throw 'Invalid link (missing org/g/s).';
       }
 
       // Tente la vue agrégée, sinon fallback item+product
       Map<String, dynamic>? row;
 
       try {
+        // ⬇️ On récupère aussi product_id, type et currency pour alimenter le graphique
         row = await _sb
             .from('v_item_groups')
-            .select('product_name, photo_url, estimated_price')
+            .select(
+                'product_name, photo_url, estimated_price, product_id, type, currency')
             .eq('org_id', org)
             .eq('group_sig', sig)
             .eq('status', st)
@@ -81,30 +92,33 @@ class _PublicLinePageState extends State<PublicLinePage> {
       if (row == null) {
         final item = await _sb
             .from('item')
-            .select('product_id, estimated_price, photo_url')
+            .select('product_id, estimated_price, photo_url, currency')
             .eq('org_id', org)
             .eq('group_sig', sig)
             .eq('status', st)
             .limit(1)
             .maybeSingle();
 
-        if (item == null) throw 'Ressource introuvable (404).';
+        if (item == null) throw 'Resource not found (404).';
 
         final pid = (item['product_id'] as num?)?.toInt();
         Map<String, dynamic>? product;
         if (pid != null) {
           product = await _sb
               .from('product')
-              .select('name, photo_url')
+              .select('name, photo_url, type')
               .eq('id', pid)
               .maybeSingle();
         }
 
         row = {
-          'product_name': product?['name']?.toString() ?? 'Produit',
+          'product_name': product?['name']?.toString() ?? 'Product',
           'photo_url': (item['photo_url'] ?? product?['photo_url'])?.toString(),
           'estimated_price':
               (item['estimated_price'] as num?)?.toDouble() ?? 0.0,
+          'product_id': pid,
+          'type': product?['type']?.toString() ?? 'single',
+          'currency': (item['currency'] ?? 'USD').toString(),
         };
       }
 
@@ -113,6 +127,12 @@ class _PublicLinePageState extends State<PublicLinePage> {
           ? null
           : (row['photo_url'] as String);
       _estimated = (row['estimated_price'] as num?)?.toDouble();
+
+      // ⬇️ hydratation des champs pour le graphique
+      _productId = (row['product_id'] as num?)?.toInt();
+      _isSingle =
+          ((row['type'] ?? 'single').toString().toLowerCase() == 'single');
+      _currency = (row['currency'] ?? 'USD').toString();
 
       setState(() {
         _loading = false;
@@ -132,7 +152,7 @@ class _PublicLinePageState extends State<PublicLinePage> {
     return Scaffold(
       backgroundColor: theme.colorScheme.surface,
       appBar: AppBar(
-        title: const Text('Inventorix — Fiche publique'),
+        title: const Text('Inventorix — Public Page'),
         centerTitle: true,
       ),
       body: _loading
@@ -161,6 +181,10 @@ class _PublicLinePageState extends State<PublicLinePage> {
                           title: _title,
                           photoUrl: _photoUrl,
                           estimated: _estimated,
+                          // ⬇️ on passe les infos pour le graphe
+                          productId: _productId,
+                          isSingle: _isSingle,
+                          currency: _currency,
                         ),
                       ),
                     ),
@@ -175,11 +199,19 @@ class _PublicContent extends StatelessWidget {
     required this.title,
     required this.photoUrl,
     required this.estimated,
+    required this.productId,
+    required this.isSingle,
+    required this.currency,
   });
 
   final String title;
   final String? photoUrl;
   final double? estimated;
+
+  // ⬇️ infos graphe
+  final int? productId;
+  final bool isSingle;
+  final String currency;
 
   static const String kFallbackAsset = 'assets/images/default_card.png';
   static const double kCardAspect = 0.72; // portrait
@@ -262,8 +294,36 @@ class _PublicContent extends StatelessWidget {
           );
         }
 
+        // ---------- Bloc graphe (pleine largeur, sous le reste) ----------
+        Widget buildHistoryCard() {
+          if (productId == null) {
+            return const SizedBox.shrink();
+          }
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const SizedBox(height: 22),
+              Text(
+                'Price History',
+                style: theme.textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+              const SizedBox(height: 10),
+              // Si jamais PriceHistoryTabs n’impose pas lui-même sa hauteur,
+              // on lui en donne une par sécurité :
+              // SizedBox(height: 320, child: PriceHistoryTabs(...)),
+              PriceHistoryTabs(
+                productId: productId,
+                isSingle: isSingle,
+                currency: currency,
+              ),
+            ],
+          );
+        }
+
         if (wide) {
-          // Disposition 2 colonnes
+          // Disposition 2 colonnes + graphe dessous (pleine largeur)
           return Column(
             children: [
               header,
@@ -277,10 +337,11 @@ class _PublicContent extends StatelessWidget {
                   Expanded(flex: 9, child: buildPricePanel()),
                 ],
               ),
+              buildHistoryCard(),
             ],
           );
         } else {
-          // Disposition verticale (mobile)
+          // Disposition verticale (mobile) + graphe dessous
           return Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
@@ -288,6 +349,7 @@ class _PublicContent extends StatelessWidget {
               buildCardImage(),
               const SizedBox(height: 16),
               buildPricePanel(),
+              buildHistoryCard(),
             ],
           );
         }
@@ -340,6 +402,7 @@ class _PricePanel extends StatelessWidget {
       child: ConstrainedBox(
         constraints: const BoxConstraints(minHeight: 220),
         child: Column(
+          mainAxisSize: MainAxisSize.min, // ⬅️ important en scroll
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             // Badge “Prix estimé”
@@ -359,7 +422,7 @@ class _PricePanel extends StatelessWidget {
                       size: 16, color: theme.colorScheme.primary),
                   const SizedBox(width: 6),
                   Text(
-                    'Prix de vente estimé',
+                    'Estimated Sale Price',
                     style: theme.textTheme.labelLarge?.copyWith(
                       color: theme.colorScheme.primary,
                       fontWeight: FontWeight.w700,
@@ -390,20 +453,21 @@ class _PricePanel extends StatelessWidget {
 
             // Sous-texte
             Text(
-              'Valeur indicative — données internes',
+              'Indicative value — internal data',
               style: theme.textTheme.bodySmall?.copyWith(
                 color: theme.colorScheme.onSurface.withOpacity(0.6),
                 letterSpacing: 0.2,
               ),
             ),
 
-            const Spacer(),
+            // ⬇️ remplace Spacer() par un espace fixe
+            const SizedBox(height: 12),
 
             // Petit bloc décoratif (tags)
             Wrap(
               spacing: 8,
               runSpacing: 8,
-              children: [
+              children: const [
                 _ChipOutline(icon: Icons.shield_moon, label: 'Read-only'),
                 _ChipOutline(icon: Icons.public, label: 'Public'),
                 _ChipOutline(icon: Icons.currency_exchange, label: 'USD'),
