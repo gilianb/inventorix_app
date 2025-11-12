@@ -17,6 +17,7 @@ import 'widgets/media_thumb.dart';
 import 'widgets/items_table.dart';
 import 'widgets/price_trends.dart';
 import 'widgets/qr_line_button.dart'; // <-- QR widget
+import 'widgets/price_history_chart.dart'; // <-- NEW: graph historique
 
 import 'details_service.dart';
 import '../../inventory/widgets/finance_overview.dart';
@@ -523,8 +524,8 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
         items.map((e) => e['id'] as int).toList(),
       );
 
-      pidEff = pidEff ?? (items.first['product_id'] as num?)?.toInt();
-      _productExtras = await _fetchProductExtras(pidEff);
+      final pid = pidEff ?? (items.first['product_id'] as num?)?.toInt();
+      _productExtras = await _fetchProductExtras(pid);
 
       // 🔒 Coller aussi ici
       _ovOrgId = items.first['org_id']?.toString();
@@ -767,6 +768,12 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
 
     final publicUrl = _buildLinePublicUrl();
     final appLink = _buildLineAppDeepLink();
+
+    final bool isSingle =
+        ((_viewRow?['type'] ?? widget.group['type'] ?? 'single')
+                .toString()
+                .toLowerCase() ==
+            'single');
 
     return WillPopScope(
       onWillPop: () async {
@@ -1024,7 +1031,7 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
                   SizedBox(width: 8),
                   Tooltip(
                     message:
-                        'Collectr (Edge) + CardTrader — Pas de graph pour l’instant.',
+                        'Collectr (Edge) + CardTrader — Graph basé sur price_history (1 point/jour).',
                     child: Icon(Icons.info_outline, size: 18),
                   ),
                 ],
@@ -1048,6 +1055,15 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
                     (_productExtras?['tcg_player_id'] as String?) ??
                     (widget.group['tcg_player_id']?.toString()),
                 reloadTick: _trendsReloadTick,
+              ),
+
+              // --- NEW: Graph d'historique Collectr (2 onglets) ---
+              const SizedBox(height: 12),
+              PriceHistoryTabs(
+                productId: (_viewRow?['product_id'] ??
+                    widget.group['product_id']) as int?,
+                isSingle: isSingle,
+                currency: currency,
               ),
             ],
           ),
