@@ -102,8 +102,6 @@ class _MainInventoryPageState extends State<MainInventoryPage>
   @override
   void initState() {
     super.initState();
-    // On crée un controller minimal (2 onglets visibles pour tout le monde) en attendant le rôle,
-    // OU on attend complètement le rôle : on choisit d’attendre → _tabCtrl = null ici.
     _init();
   }
 
@@ -641,7 +639,9 @@ class _MainInventoryPageState extends State<MainInventoryPage>
             showDelete: _perm.canDeleteLines,
             showUnitCosts: _perm.canSeeUnitCosts,
             showRevenue: _perm.canSeeRevenue,
+            onInlineUpdate: _applyInlineUpdate, // 👈 important
           ),
+
           const SizedBox(height: 48),
         ],
       ),
@@ -909,6 +909,142 @@ class _MainInventoryPageState extends State<MainInventoryPage>
     }
   }
 
+  // ====== LOG: inline == edit (old/new) ======
+  Future<void> _logBatchEdit({
+    required String orgId,
+    required List<int> itemIds,
+    required Map<String, Map<String, dynamic>> changes, // {field: {old,new}}
+    String? reason,
+  }) async {
+    if (changes.isEmpty) return;
+    try {
+      await _sb.rpc('app_log_batch_edit', params: {
+        'p_org_id': orgId,
+        'p_item_ids': itemIds,
+        'p_changes': changes,
+        'p_reason': reason,
+      });
+    } catch (_) {
+      // best-effort
+    }
+  }
+
+  // 👇 helper: trouve l'index du groupe correspondant à la "ligne"
+  int? _findGroupIndexForLine(Map<String, dynamic> line) {
+    bool same(dynamic a, dynamic b) => (a ?? '') == (b ?? '');
+    for (int i = 0; i < _groups.length; i++) {
+      final g = _groups[i];
+      if (same(g['org_id'], widget.orgId) &&
+          same(g['product_id'], line['product_id']) &&
+          same(g['game_id'], line['game_id']) &&
+          same(g['type'], line['type']) &&
+          same(g['language'], line['language']) &&
+          same(g['purchase_date'], line['purchase_date']) &&
+          same(g['currency'], line['currency'])) {
+        return i;
+      }
+    }
+    return null;
+  }
+
+  // ====== Sauvegarde inline + patch local immédiat + log ======
+  Future<void> _applyInlineUpdate(
+    Map<String, dynamic> line,
+    String field,
+    dynamic newValue,
+  ) async {
+    // 1) parse côté client
+    dynamic parsed;
+    switch (field) {
+      case 'status':
+        parsed = (newValue ?? '').toString();
+        if (parsed.isEmpty) return;
+        break;
+      case 'estimated_price':
+      case 'sale_price':
+      case 'unit_cost':
+        final t = (newValue ?? '').toString().trim();
+        parsed = t.isEmpty ? null : num.tryParse(t);
+        break;
+      case 'channel_id':
+        final t = (newValue ?? '').toString().trim();
+        parsed = t.isEmpty ? null : int.tryParse(t);
+        break;
+      case 'sale_date':
+        final t = (newValue ?? '').toString().trim();
+        parsed = t.isEmpty ? null : t; // YYYY-MM-DD
+        break;
+      default:
+        final t = (newValue ?? '').toString().trim();
+        parsed = t.isEmpty ? null : t;
+    }
+
+    // OLD pour le log
+    final oldValue =
+        field == 'status' ? (line['status'] ?? '').toString() : line[field];
+
+    // 2) écriture serveur
+    try {
+      final ids = await _collectItemIdsForLine(line);
+      if (ids.isEmpty) {
+        _snack('Aucun item trouvé pour cette ligne.');
+        return;
+      }
+      final idsCsv = '(${ids.join(",")})';
+      await _sb.from('item').update({field: parsed}).filter('id', 'in', idsCsv);
+
+      // 2bis) LOG comme l’edit
+      await _logBatchEdit(
+        orgId: widget.orgId,
+        itemIds: ids,
+        changes: {
+          field: {
+            'old': oldValue,
+            'new': parsed,
+          }
+        },
+        reason: 'inline_edit',
+      );
+
+      // 3) ✅ optimistic update local
+      setState(() {
+        final oldStatus = (line['status'] ?? '').toString();
+        final qty = (line['qty_status'] as int?) ?? 0;
+
+        line[field] = parsed;
+
+        final gi = _findGroupIndexForLine(line);
+        if (gi != null) {
+          final g = Map<String, dynamic>.from(_groups[gi]);
+
+          if (field == 'status') {
+            final newStatus = parsed.toString();
+            final oldKey = 'qty_$oldStatus';
+            final newKey = 'qty_$newStatus';
+
+            final oldQty = (g[oldKey] as int? ?? 0);
+            final newQty = (g[newKey] as int? ?? 0);
+
+            g[oldKey] = (oldQty - qty).clamp(0, 1 << 31);
+            g[newKey] = newQty + qty;
+
+            line['status'] = newStatus;
+          } else {
+            g[field] = parsed;
+          }
+
+          _groups[gi] = g;
+        }
+      });
+
+      _snack('Modifié (${ids.length} item(s)).');
+    } on PostgrestException catch (e) {
+      _snack('Erreur Supabase: ${e.message}');
+    } catch (e) {
+      _snack('Erreur: $e');
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     // Tant que le rôle n'est pas chargé OU pas de TabController, on affiche un loader
@@ -924,7 +1060,6 @@ class _MainInventoryPageState extends State<MainInventoryPage>
       appBar: AppBar(
         title: const Text('Inventorix'),
         // ⬇️  AJOUT
-
         actions: [
           IconTheme(
             data: const IconThemeData(opacity: 1.0),

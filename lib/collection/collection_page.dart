@@ -7,11 +7,11 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../inventory/widgets/table_by_status.dart';
 import '../../../inventory/widgets/edit.dart';
-import '../../../inventory/widgets/search_and_filters.dart'; // ⬅️ barre de recherche + filtre jeu
+import '../../../inventory/widgets/search_and_filters.dart';
 import 'package:inventorix_app/details/details_page.dart';
 import 'package:inventorix_app/new_stock/new_stock_page.dart';
 
-// ✅ KPI factorisé (Investi / Estimé / Vendu) basé sur sale_price null / non-null
+// ✅ KPI factorisé (Investi / Estimé / Vendu)
 import '../../../inventory/widgets/finance_overview.dart';
 import '../org/roles.dart';
 
@@ -42,7 +42,6 @@ class _CollectionPageState extends State<CollectionPage> {
   String? _gameFilter; // valeur = game_label
   String _typeFilter = 'single'; // 'single' | 'sealed'
   final OrgRole _role = OrgRole.viewer; // par défaut prudent
-// tant que false, on affiche un loader
   RolePermissions get _perm => kRoleMatrix[_role]!;
 
   // Données pour le tableau (groupes)
@@ -54,8 +53,6 @@ class _CollectionPageState extends State<CollectionPage> {
   @override
   void initState() {
     super.initState();
-    // contrôle d’accès basique
-
     _refresh();
   }
 
@@ -71,9 +68,7 @@ class _CollectionPageState extends State<CollectionPage> {
   Future<void> _refresh() async {
     setState(() => _loading = true);
     try {
-      // 1) Groupes pour le tableau (une ligne = un group_sig exact)
       _groups = await _fetchGroupsFromView();
-      // 2) Items bruts pour le KPI FinanceOverview
       _kpiItems = await _fetchCollectionItemsForKpis();
     } catch (e) {
       _snack('Erreur chargement collection : $e');
@@ -85,18 +80,17 @@ class _CollectionPageState extends State<CollectionPage> {
   /// Lit la vue stricte v_item_groups (1 ligne = 1 group_sig) en ne gardant que status='collection'
   /// + hydratation game_label/game_code depuis la table games
   Future<List<Map<String, dynamic>>> _fetchGroupsFromView() async {
-    // Colonnes exposées par v_item_groups
     const cols = '''
-    group_sig, org_id, type, status,
-    product_id, product_name, game_id, language,
-    purchase_date, currency,
-    supplier_name, buyer_company, notes,
-    grade_id, grading_note, sale_date, sale_price, tracking, photo_url, document_url,
-    estimated_price, item_location, channel_id, payment_type, buyer_infos,
-    unit_cost, unit_fees,
-    qty_status, total_cost_with_fees,
-    sum_shipping_fees, sum_commission_fees, sum_grading_fees
-  ''';
+      group_sig, org_id, type, status,
+      product_id, product_name, game_id, language,
+      purchase_date, currency,
+      supplier_name, buyer_company, notes,
+      grade_id, grading_note, sale_date, sale_price, tracking, photo_url, document_url,
+      estimated_price, item_location, channel_id, payment_type, buyer_infos,
+      unit_cost, unit_fees,
+      qty_status, total_cost_with_fees,
+      sum_shipping_fees, sum_commission_fees, sum_grading_fees
+    ''';
 
     var q = _sb
         .from('v_item_groups')
@@ -104,7 +98,6 @@ class _CollectionPageState extends State<CollectionPage> {
         .eq('type', _typeFilter)
         .eq('status', 'collection');
 
-    // 🔐 filtre org si fourni
     if ((widget.orgId ?? '').isNotEmpty) {
       q = q.eq('org_id', widget.orgId as Object);
     }
@@ -145,6 +138,7 @@ class _CollectionPageState extends State<CollectionPage> {
         ...r,
         'game_label': g?['label'] ?? '',
         'game_code': g?['code'] ?? '',
+        'status': 'collection', // sécurité
       };
     }).toList();
 
@@ -165,7 +159,6 @@ class _CollectionPageState extends State<CollectionPage> {
           (r['tracking'] ?? '').toString(),
         ].map((s) => s.toLowerCase()).toList();
 
-        // Chaque token doit être présent dans AU MOINS un champ
         return tokens.every((t) => fields.any((f) => f.contains(t)));
       }
 
@@ -177,16 +170,10 @@ class _CollectionPageState extends State<CollectionPage> {
       rows = rows.where((r) => (r['game_label'] ?? '') == _gameFilter).toList();
     }
 
-    // ✅ forcer status pour le tableau (sécurité)
-    rows = rows.map((r) => {...r, 'status': 'collection'}).toList();
-
     return rows;
   }
 
   /// Items bruts de la collection (pour KPI FinanceOverview)
-  /// Logique KPI:
-  /// - Investi / Estimé → items avec sale_price == null
-  /// - Vendu → items avec sale_price != null
   Future<List<Map<String, dynamic>>> _fetchCollectionItemsForKpis() async {
     var sel = _sb.from('item').select('''
           id, org_id, game_id, type, status, sale_price,
@@ -194,12 +181,10 @@ class _CollectionPageState extends State<CollectionPage> {
           estimated_price, currency
         ''').eq('status', 'collection').eq('type', _typeFilter);
 
-    // 🔐 filtre org
     if ((widget.orgId ?? '').isNotEmpty) {
       sel = sel.eq('org_id', widget.orgId as Object);
     }
 
-    // filtre jeu si label choisi
     if ((_gameFilter ?? '').isNotEmpty) {
       final gid = await _resolveGameIdByLabel(_gameFilter!);
       if (gid != null) {
@@ -215,7 +200,6 @@ class _CollectionPageState extends State<CollectionPage> {
         .toList();
   }
 
-  /// Résout un id de jeu à partir de son label (pour le filtre jeu)
   Future<int?> _resolveGameIdByLabel(String label) async {
     try {
       final row = await _sb
@@ -238,7 +222,7 @@ class _CollectionPageState extends State<CollectionPage> {
     );
 
     if (changed == true) {
-      _refresh(); // ⇦ recharge au retour
+      _refresh();
     }
   }
 
@@ -299,13 +283,11 @@ class _CollectionPageState extends State<CollectionPage> {
   }
 
   /// Récupère les IDs d'items appartenant STRICTEMENT à la "ligne"
-  /// Chemin rapide par group_sig si dispo, sinon fallback par clés.
   Future<List<int>> _collectItemIdsForLine(Map<String, dynamic> line) async {
     final String? groupSig = (line['group_sig']?.toString().isNotEmpty ?? false)
         ? line['group_sig'].toString()
         : null;
 
-    // 🔐 filtre org si fourni
     final Object? orgId =
         ((widget.orgId ?? '').isNotEmpty) ? widget.orgId as Object : null;
 
@@ -324,23 +306,20 @@ class _CollectionPageState extends State<CollectionPage> {
           .toList(growable: false);
     }
 
-    // --- Fallback de normalisation ---
+    // --- Fallback par clés ---
     dynamic norm(dynamic v) {
       if (v == null) return null;
-      if (v is String && v.trim().isEmpty) return null; // '' -> NULL
+      if (v is String && v.trim().isEmpty) return null;
       return v;
     }
 
     String? dateStr(dynamic v) {
       if (v == null) return null;
-      if (v is DateTime) {
-        return v.toIso8601String().split('T').first; // YYYY-MM-DD
-      }
-      if (v is String) return v; // supposé déjà au bon format
+      if (v is DateTime) return v.toIso8601String().split('T').first;
+      if (v is String) return v;
       return v.toString();
     }
 
-    // 1) Clés raisonnables (on RETIRE photo_url / document_url)
     const primaryKeys = <String>{
       'product_id',
       'game_id',
@@ -393,7 +372,6 @@ class _CollectionPageState extends State<CollectionPage> {
         }
       }
 
-      // statut EXACT de la ligne
       q = q.eq('status', (line['status'] ?? '').toString());
 
       final List<dynamic> raw =
@@ -404,11 +382,9 @@ class _CollectionPageState extends State<CollectionPage> {
           .toList(growable: false);
     }
 
-    // 2) Essai avec l’ensemble “primary”
     var ids = await runQuery(primaryKeys);
     if (ids.isNotEmpty) return ids;
 
-    // 3) Fallback : clés “fortes”
     const strongKeys = <String>{
       'product_id',
       'type',
@@ -442,7 +418,6 @@ class _CollectionPageState extends State<CollectionPage> {
           _sb.from('movement').delete().filter('item_id', 'in', idsCsv);
       final itemDel = _sb.from('item').delete().filter('id', 'in', idsCsv);
 
-      // 🔐 sécuriser les deletes par org si fournie
       if ((widget.orgId ?? '').isNotEmpty) {
         moveDel.eq('org_id', widget.orgId as Object);
         itemDel.eq('org_id', widget.orgId as Object);
@@ -460,11 +435,151 @@ class _CollectionPageState extends State<CollectionPage> {
     }
   }
 
+  // ====== LOG inline (old/new) comme Edit ======
+  Future<void> _logBatchEdit({
+    required String orgId,
+    required List<int> itemIds,
+    required Map<String, Map<String, dynamic>> changes, // {field:{old,new}}
+    String? reason,
+  }) async {
+    if (changes.isEmpty) return;
+    try {
+      await _sb.rpc('app_log_batch_edit', params: {
+        'p_org_id': orgId,
+        'p_item_ids': itemIds,
+        'p_changes': changes,
+        'p_reason': reason,
+      });
+    } catch (_) {
+      // best effort
+    }
+  }
+
+  // 👉 helper: trouve l'index de groupe pour patch local
+  int? _findGroupIndex(Map<String, dynamic> line) {
+    // priorité group_sig si présent
+    final sig = (line['group_sig'] ?? '').toString();
+    if (sig.isNotEmpty) {
+      final i =
+          _groups.indexWhere((g) => (g['group_sig']?.toString() ?? '') == sig);
+      if (i >= 0) return i;
+    }
+    bool same(dynamic a, dynamic b) => (a ?? '') == (b ?? '');
+    for (int i = 0; i < _groups.length; i++) {
+      final g = _groups[i];
+      if (same(g['org_id'], line['org_id']) &&
+          same(g['product_id'], line['product_id']) &&
+          same(g['game_id'], line['game_id']) &&
+          same(g['type'], line['type']) &&
+          same(g['language'], line['language']) &&
+          same(g['purchase_date'], line['purchase_date']) &&
+          same(g['currency'], line['currency'])) {
+        return i;
+      }
+    }
+    return null;
+  }
+
+  // ====== Édition inline + log + patch local ======
+  Future<void> _applyInlineUpdate(
+    Map<String, dynamic> line,
+    String field,
+    dynamic newValue,
+  ) async {
+    // parse côté client
+    dynamic parsed;
+    switch (field) {
+      case 'status':
+        parsed = (newValue ?? '').toString();
+        if (parsed.isEmpty) return;
+        break;
+      case 'estimated_price':
+      case 'sale_price':
+      case 'unit_cost':
+        final t = (newValue ?? '').toString().trim();
+        parsed = t.isEmpty ? null : num.tryParse(t);
+        break;
+      case 'channel_id':
+        final t = (newValue ?? '').toString().trim();
+        parsed = t.isEmpty ? null : int.tryParse(t);
+        break;
+      case 'sale_date':
+        final t = (newValue ?? '').toString().trim();
+        parsed = t.isEmpty ? null : t;
+        break;
+      default:
+        final t = (newValue ?? '').toString().trim();
+        parsed = t.isEmpty ? null : t;
+    }
+
+    final oldValue =
+        field == 'status' ? (line['status'] ?? '').toString() : line[field];
+
+    try {
+      final ids = await _collectItemIdsForLine(line);
+      if (ids.isEmpty) {
+        _snack('Aucun item trouvé pour cette ligne.');
+        return;
+      }
+
+      final idsCsv = '(${ids.join(",")})';
+      await _sb.from('item').update({field: parsed}).filter('id', 'in', idsCsv);
+
+      // Log identique à Edit
+      await _logBatchEdit(
+        orgId: (line['org_id'] ?? widget.orgId ?? '').toString(),
+        itemIds: ids,
+        changes: {
+          field: {'old': oldValue, 'new': parsed}
+        },
+        reason: 'inline_edit_collection',
+      );
+
+      // ✅ Patch local optimiste (groupes + KPI)
+      setState(() {
+        // Patch KPI items (si chargés)
+        if (_kpiItems.isNotEmpty) {
+          final byId = {for (final it in _kpiItems) it['id']: it};
+          for (final id in ids) {
+            final it = byId[id];
+            if (it != null) {
+              it[field] = parsed;
+              if (field == 'status') it['status'] = parsed;
+            }
+          }
+          // Si statut ≠ collection, retirer ces items de la base KPI locale
+          if (field == 'status' && parsed != 'collection') {
+            _kpiItems.removeWhere((it) => ids.contains(it['id']));
+          }
+        }
+
+        // Patch ligne de tableau (1 row = 1 group_sig)
+        final gi = _findGroupIndex(line);
+        if (gi != null) {
+          if (field == 'status' && parsed != 'collection') {
+            // La ligne sort de la vue → suppression immédiate
+            _groups = List.of(_groups)..removeAt(gi);
+          } else {
+            final g = Map<String, dynamic>.from(_groups[gi]);
+            g[field] = parsed;
+            _groups[gi] = g;
+            line[field] = parsed;
+          }
+        }
+      });
+
+      _snack('Modifié (${ids.length} item(s)).');
+    } on PostgrestException catch (e) {
+      _snack('Erreur Supabase: ${e.message}');
+    } catch (e) {
+      _snack('Erreur: $e');
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    final lines = _groups; // ✅ plus d’explosion : 1 ligne = 1 group_sig
+    final lines = _groups; // 1 ligne = 1 group_sig
 
-    // jeux distincts pour le dropdown (comme la page principale)
     final gamesForFilter = _groups
         .map((r) => (r['game_label'] ?? '') as String)
         .where((s) => s.isNotEmpty)
@@ -507,7 +622,6 @@ class _CollectionPageState extends State<CollectionPage> {
                         padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
                         child: Column(
                           children: [
-                            // ⬇️ Barre de recherche + filtre jeu
                             SearchAndGameFilter(
                               searchCtrl: _searchCtrl,
                               games: gamesForFilter,
@@ -519,7 +633,6 @@ class _CollectionPageState extends State<CollectionPage> {
                               onSearch: _refresh,
                             ),
                             const SizedBox(height: 8),
-                            // ⬇️ Tabs single / sealed
                             SegmentedButton<String>(
                               segments: const [
                                 ButtonSegment(
@@ -542,7 +655,6 @@ class _CollectionPageState extends State<CollectionPage> {
 
                 const SizedBox(height: 10),
 
-                // ===== KPI factorisé, réutilisable partout =====
                 if (_perm.canSeeFinanceOverview)
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 12),
@@ -572,12 +684,12 @@ class _CollectionPageState extends State<CollectionPage> {
                 ),
                 const SizedBox(height: 4),
 
-                // Tableau
                 InventoryTableByStatus(
                   lines: lines,
                   onOpen: _openDetails,
                   onEdit: _openEdit,
                   onDelete: _deleteLine,
+                  onInlineUpdate: _applyInlineUpdate, // 👈 inline + log + patch
                 ),
 
                 const SizedBox(height: 48),
@@ -588,7 +700,6 @@ class _CollectionPageState extends State<CollectionPage> {
     return Scaffold(
       appBar: AppBar(
         title: const Text(' Collection'),
-        actions: const [],
         flexibleSpace: Container(
           decoration: const BoxDecoration(
             gradient: LinearGradient(
