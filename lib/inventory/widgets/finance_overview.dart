@@ -6,27 +6,50 @@ const kAccentB = Color(0xFF00D1B2);
 const kAccentC = Color(0xFFFFB545);
 const kAccentG = Color(0xFF22C55E);
 
+/// Affiche 3 KPI financiers.
+/// Mode standard (par défaut) :
+///  - Investi + Estimé : uniquement pour les items NON vendus
+///  - Réalisé (Sold)   : uniquement pour les items vendus
+///
+/// Mode finalized (finalizedMode = true) :
+///  - Investi = Σ de tous les coûts (unit_cost + unit_fees + shipping_fees + commission_fees + grading_fees)
+///              ou bien la valeur fournie par [overrideInvested] si non nul,
+///  - KPI du milieu = Marge réelle = (Σ sale_price) - Investi
+///  - Réalisé = Σ sale_price
 class FinanceOverview extends StatelessWidget {
   const FinanceOverview({
     super.key,
     required this.items,
     required this.currency,
+    this.finalizedMode = false,
+    this.overrideInvested, // 👈 total investi calculé côté serveur (RPC) pour Finalized
     this.titleInvested = 'Invested',
-    this.titleEstimated = 'Estimated value',
+    this.titleEstimated =
+        'Estimated value', // devient "Marge réelle" en finalized
     this.titleSold = 'Realized',
     this.subtitleInvested,
     this.subtitleEstimated,
     this.subtitleSold,
   });
 
-  /// Items bruts (doivent contenir au moins):
+  /// Items bruts (doivent contenir au moins en standard) :
   /// unit_cost, unit_fees, shipping_fees, commission_fees, grading_fees,
-  /// estimated_price, sale_price (nullable), currency (optionnel)
+  /// estimated_price, sale_price (nullable)
+  ///
+  /// En finalizedMode avec overrideInvested, seuls sale_price sont réellement nécessaires.
   final List<Map<String, dynamic>> items;
   final String currency;
 
+  /// Active le mode "finalized" (investi = tous coûts, KPI milieu = marge réelle).
+  final bool finalizedMode;
+
+  /// Si présent (et finalizedMode = true), remplace le calcul local d’Investi.
+  /// Utile pour fournir un total exact calculé côté serveur (sécurisé) pour
+  /// les rôles qui n’ont pas accès aux coûts unitaires.
+  final num? overrideInvested;
+
   final String titleInvested;
-  final String titleEstimated;
+  final String titleEstimated; // "Marge réelle" en finalized
   final String titleSold;
 
   final String? subtitleInvested;
@@ -41,32 +64,59 @@ class FinanceOverview extends StatelessWidget {
 
   String _money(num n) => n.toDouble().toStringAsFixed(2);
 
-  /// Calcule les 3 KPI selon la règle:
-  /// - Investi + Estimé: uniquement sale_price == null
-  /// - Réalisé (sold):   uniquement sale_price != null
-  (num invested, num estimated, num sold) _compute() {
-    num invested = 0;
-    num estimated = 0;
-    num sold = 0;
-
-    for (final r in items) {
-      final sale = r['sale_price'];
-      final isSold = sale != null;
-
-      if (isSold) {
-        sold += _asNum(sale);
-      } else {
-        // coûts unitaires (investi)
-        invested += _asNum(r['unit_cost']) +
-            _asNum(r['unit_fees']) +
-            _asNum(r['shipping_fees']) +
-            _asNum(r['commission_fees']) +
-            _asNum(r['grading_fees']);
-        // valeur estimée
-        estimated += _asNum(r['estimated_price']);
+  /// Renvoie un record (invested, middle, sold)
+  /// - standard: middle = estimated (non vendus)
+  /// - finalized: middle = margin = sold - invested
+  (num invested, num middle, num sold) _compute() {
+    if (finalizedMode) {
+      num sold = 0;
+      for (final r in items) {
+        final sale = r['sale_price'];
+        if (sale != null) sold += _asNum(sale);
       }
+
+      // 👇 Utilise l'override s'il est fourni, sinon calcule localement.
+      num invested;
+      if (overrideInvested != null) {
+        invested = _asNum(overrideInvested);
+      } else {
+        invested = 0;
+        for (final r in items) {
+          invested += _asNum(r['unit_cost']) +
+              _asNum(r['unit_fees']) +
+              _asNum(r['shipping_fees']) +
+              _asNum(r['commission_fees']) +
+              _asNum(r['grading_fees']);
+        }
+      }
+
+      final margin = sold - invested;
+      return (invested, margin, sold);
+    } else {
+      // Mode standard (inventaire normal)
+      num invested = 0;
+      num estimated = 0;
+      num sold = 0;
+
+      for (final r in items) {
+        final sale = r['sale_price'];
+        final isSold = sale != null;
+
+        if (isSold) {
+          sold += _asNum(sale);
+        } else {
+          // coûts unitaires (investi) pour NON vendus
+          invested += _asNum(r['unit_cost']) +
+              _asNum(r['unit_fees']) +
+              _asNum(r['shipping_fees']) +
+              _asNum(r['commission_fees']) +
+              _asNum(r['grading_fees']);
+          // valeur estimée
+          estimated += _asNum(r['estimated_price']);
+        }
+      }
+      return (invested, estimated, sold);
     }
-    return (invested, estimated, sold);
   }
 
   Widget _kpiCard(
@@ -104,24 +154,27 @@ class FinanceOverview extends StatelessWidget {
                 child: Icon(icon, size: 20, color: Colors.white),
               ),
               const SizedBox(width: 12),
-              // ⚠️ Pas d’Expanded vertical ici (on est souvent dans un ListView)
               Flexible(
                 fit: FlexFit.loose,
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(title,
-                        style: Theme.of(context)
-                            .textTheme
-                            .labelMedium
-                            ?.copyWith(color: cs.onSurfaceVariant)),
+                    Text(
+                      title,
+                      style: Theme.of(context)
+                          .textTheme
+                          .labelMedium
+                          ?.copyWith(color: cs.onSurfaceVariant),
+                    ),
                     const SizedBox(height: 2),
-                    Text(value,
-                        style: Theme.of(context)
-                            .textTheme
-                            .headlineSmall
-                            ?.copyWith(fontWeight: FontWeight.w800)),
+                    Text(
+                      value,
+                      style: Theme.of(context)
+                          .textTheme
+                          .headlineSmall
+                          ?.copyWith(fontWeight: FontWeight.w800),
+                    ),
                     if (subtitle != null) ...[
                       const SizedBox(height: 2),
                       Text(subtitle,
@@ -139,7 +192,7 @@ class FinanceOverview extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final (inv, est, sold) = _compute();
+    final (inv, mid, sold) = _compute();
 
     final investedCard = _kpiCard(
       context,
@@ -151,13 +204,16 @@ class FinanceOverview extends StatelessWidget {
       subtitle: subtitleInvested,
     );
 
-    final estimatedCard = _kpiCard(
+    final middleCard = _kpiCard(
       context,
-      icon: Icons.lightbulb,
-      iconBg: kAccentB,
-      gradient: [kAccentB.withOpacity(.12), kAccentC.withOpacity(.06)],
-      title: titleEstimated,
-      value: '${_money(est)} $currency',
+      icon: finalizedMode ? Icons.trending_up : Icons.lightbulb,
+      iconBg: finalizedMode ? kAccentC : kAccentB,
+      gradient: finalizedMode
+          ? [kAccentC.withOpacity(.14), kAccentB.withOpacity(.06)]
+          : [kAccentB.withOpacity(.12), kAccentC.withOpacity(.06)],
+      title:
+          titleEstimated, // "Marge réelle" en finalized, sinon "Revenu potentiel"
+      value: '${_money(mid)} $currency',
       subtitle: subtitleEstimated,
     );
 
@@ -174,20 +230,19 @@ class FinanceOverview extends StatelessWidget {
     return LayoutBuilder(
       builder: (ctx, cons) {
         final maxW = cons.maxWidth;
-        // ⚠️ IMPORTANT: pas d’Expanded/Flexible VERTICAL dans des Column non bornées
         if (maxW >= 960) {
-          // Large: 3 cartes côte à côte (Expanded HORIZONTAL ok)
+          // Large
           return Row(
             children: [
               Expanded(child: investedCard),
               const SizedBox(width: 12),
-              Expanded(child: estimatedCard),
+              Expanded(child: middleCard),
               const SizedBox(width: 12),
               Expanded(child: soldCard),
             ],
           );
         } else if (maxW >= 680) {
-          // Medium: 2 + 1
+          // Medium
           return Column(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -195,7 +250,7 @@ class FinanceOverview extends StatelessWidget {
                 children: [
                   Expanded(child: investedCard),
                   const SizedBox(width: 12),
-                  Expanded(child: estimatedCard),
+                  Expanded(child: middleCard),
                 ],
               ),
               const SizedBox(height: 12),
@@ -203,13 +258,13 @@ class FinanceOverview extends StatelessWidget {
             ],
           );
         } else {
-          // Small: empilé
+          // Small
           return Column(
             mainAxisSize: MainAxisSize.min,
             children: [
               investedCard,
               const SizedBox(height: 12),
-              estimatedCard,
+              middleCard,
               const SizedBox(height: 12),
               soldCard,
             ],

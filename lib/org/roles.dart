@@ -44,7 +44,7 @@ const Map<OrgRole, RolePermissions> kRoleMatrix = {
     canDeleteLines: false, // ⬅️ cacher la croix / refuser delete
     canEditItems: true,
     canCreateStock: true,
-    canSeeUnitCosts: false, // ⬅️ cacher tous les coûts unitaires & frais
+    canSeeUnitCosts: true,
     canSeeFinanceOverview: false, // ⬅️ cacher KPI Investi/Revenue
     canSeeRevenue: true, // à adapter si tu veux aussi cacher les prix de vente
     canSeeEstimated: true, // idem

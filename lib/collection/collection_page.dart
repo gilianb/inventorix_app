@@ -41,7 +41,8 @@ class _CollectionPageState extends State<CollectionPage> {
   final _searchCtrl = TextEditingController();
   String? _gameFilter; // valeur = game_label
   String _typeFilter = 'single'; // 'single' | 'sealed'
-  final OrgRole _role = OrgRole.viewer; // par défaut prudent
+  OrgRole _role = OrgRole.viewer; // mutable
+  bool _roleLoaded = false; // on attend le chargement
   RolePermissions get _perm => kRoleMatrix[_role]!;
 
   // Données pour le tableau (groupes)
@@ -53,7 +54,12 @@ class _CollectionPageState extends State<CollectionPage> {
   @override
   void initState() {
     super.initState();
-    _refresh();
+    _init();
+  }
+
+  Future<void> _init() async {
+    await _loadRole();
+    await _refresh();
   }
 
   @override
@@ -74,6 +80,66 @@ class _CollectionPageState extends State<CollectionPage> {
       _snack('Erreur chargement collection : $e');
     } finally {
       if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _loadRole() async {
+    try {
+      final uid = _sb.auth.currentUser?.id;
+      if (uid == null) {
+        if (mounted) setState(() => _roleLoaded = true);
+        return;
+      }
+
+      final oid = (widget.orgId ?? '').toString();
+      if (oid.isEmpty) {
+        // Sans orgId on ne peut pas résoudre le rôle ; on reste viewer.
+        if (mounted) setState(() => _roleLoaded = true);
+        return;
+      }
+
+      Map<String, dynamic>? row;
+      try {
+        row = await _sb
+            .from('organization_member')
+            .select('role')
+            .eq('org_id', oid)
+            .eq('user_id', uid)
+            .maybeSingle();
+      } catch (_) {
+        // best effort
+      }
+
+      String? roleStr = (row?['role'] as String?);
+
+      if (roleStr == null) {
+        // fallback : si l’utilisateur est le créateur de l’org, rôle owner
+        try {
+          final org = await _sb
+              .from('organization')
+              .select('created_by')
+              .eq('id', oid)
+              .maybeSingle();
+          final createdBy = org?['created_by'] as String?;
+          if (createdBy != null && createdBy == uid) {
+            roleStr = 'owner';
+          }
+        } catch (_) {}
+      }
+
+      final parsed = OrgRole.values.firstWhere(
+        (r) => r.name == (roleStr ?? 'viewer').toLowerCase(),
+        orElse: () => OrgRole.viewer,
+      );
+
+      if (mounted) {
+        setState(() {
+          _role = parsed;
+          _roleLoaded = true;
+        });
+      }
+    } catch (_) {
+      if (mounted) setState(() => _roleLoaded = true);
     }
   }
 
@@ -587,7 +653,7 @@ class _CollectionPageState extends State<CollectionPage> {
         .toList()
       ..sort();
 
-    final body = _loading
+    final body = (_loading || !_roleLoaded)
         ? const Center(child: CircularProgressIndicator())
         : RefreshIndicator(
             onRefresh: _refresh,

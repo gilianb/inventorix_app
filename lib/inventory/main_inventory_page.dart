@@ -99,6 +99,9 @@ class _MainInventoryPageState extends State<MainInventoryPage>
 
   bool get _isOwner => _role == OrgRole.owner;
 
+  // ✅ Total investi exact pour l’onglet Finalized (calculé côté serveur via RPC)
+  num? _finalizedInvestOverride;
+
   @override
   void initState() {
     super.initState();
@@ -152,7 +155,7 @@ class _MainInventoryPageState extends State<MainInventoryPage>
               });
             },
           ),
-        const CollectionPage(),
+        CollectionPage(orgId: widget.orgId), // ← on passe l’orgId
         _buildInventoryBody(forceStatus: 'finalized'),
       ];
 
@@ -267,10 +270,45 @@ class _MainInventoryPageState extends State<MainInventoryPage>
     try {
       _groups = await _fetchGroupedFromView();
       _kpiItems = await _fetchItemsForKpis();
+
+      // 🔢 récupère le total investi exact pour l’onglet Finalized
+      _finalizedInvestOverride = await _fetchFinalizedInvestAggregate();
     } catch (e) {
       _snack('Erreur de chargement : $e');
     } finally {
       if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  /// RPC côté serveur : total investi pour FINALIZED, avec filtres alignés à l’UI
+  Future<num> _fetchFinalizedInvestAggregate() async {
+    try {
+      final after = _purchaseDateStart();
+      final String? dateFrom =
+          after != null ? after.toIso8601String().split('T').first : null;
+
+      int? gameId;
+      if ((_gameFilter ?? '').isNotEmpty) {
+        final row = await _sb
+            .from('games')
+            .select('id,label')
+            .eq('label', _gameFilter!)
+            .maybeSingle();
+        gameId = (row?['id'] as int?);
+      }
+
+      final res = await _sb.rpc('app_sum_invested_finalized', params: {
+        'p_org_id': widget.orgId,
+        'p_type': _typeFilter, // 'single' | 'sealed'
+        'p_game_id': gameId, // null si pas de filtre jeu
+        'p_date_from': dateFrom, // null si "All time"
+      });
+
+      if (res == null) return 0;
+      if (res is num) return res;
+      return num.tryParse(res.toString()) ?? 0;
+    } catch (_) {
+      return 0; // fallback silencieux
     }
   }
 
@@ -465,17 +503,24 @@ class _MainInventoryPageState extends State<MainInventoryPage>
   }
 
   Widget _buildInventoryBody({String? forceStatus}) {
+    // Items bruts pour KPI (filtrés si forceStatus != null)
     final effectiveKpiItems = (forceStatus == null)
         ? _kpiItems
         : _kpiItems
             .where((e) => (e['status']?.toString() ?? '') == forceStatus)
             .toList();
 
+    // Lignes (groupes explosés par statut)
     final lines = _explodeLines(overrideFilter: forceStatus);
 
     if (_loading) {
       return const Center(child: CircularProgressIndicator());
     }
+
+    // -- Contexte d'affichage de l'overview
+    final bool isFinalizedView = (forceStatus == 'finalized');
+    final bool showFinanceOverview =
+        isFinalizedView || _perm.canSeeFinanceOverview;
 
     return RefreshIndicator(
       onRefresh: _refresh,
@@ -564,7 +609,7 @@ class _MainInventoryPageState extends State<MainInventoryPage>
 
           if (_groups.isNotEmpty) ...[
             const SizedBox(height: 8),
-            if (_perm.canSeeFinanceOverview)
+            if (showFinanceOverview)
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 12),
                 child: FinanceOverview(
@@ -572,16 +617,31 @@ class _MainInventoryPageState extends State<MainInventoryPage>
                   currency: lines.isNotEmpty
                       ? (lines.first['currency']?.toString() ?? 'USD')
                       : 'USD',
-                  titleInvested: 'Investi (vue)',
-                  titleEstimated: 'Revenu potentiel',
+
+                  // 👇 Mode Finalized + override investi (total sécurisé côté serveur)
+                  finalizedMode: isFinalizedView,
+                  overrideInvested:
+                      isFinalizedView ? _finalizedInvestOverride : null,
+
+                  // 👇 Libellés adaptés
+                  titleInvested: isFinalizedView ? 'Investi' : 'Investi (vue)',
+                  titleEstimated:
+                      isFinalizedView ? 'Marge réelle' : 'Revenu potentiel',
                   titleSold: 'Revenu réel',
-                  subtitleInvested: 'Σ coûts (non vendus) — hors collection',
-                  subtitleEstimated:
-                      'Σ estimated_price (non vendus) — hors collection',
-                  subtitleSold: 'Σ sale_price (vendus) — hors collection',
+
+                  // 👇 Sous-titres explicites
+                  subtitleInvested: isFinalizedView
+                      ? 'Σ coûts (finalisés)'
+                      : 'Σ coûts (non vendus)',
+                  subtitleEstimated: isFinalizedView
+                      ? 'Revenu réel - Investi'
+                      : 'Σ estimated_price (non vendus)',
+                  subtitleSold: isFinalizedView
+                      ? 'Σ sale_price (finalisés)'
+                      : 'Σ sale_price (vendus)',
                 ),
               ),
-            if (_perm.canSeeFinanceOverview) const SizedBox(height: 12),
+            if (showFinanceOverview) const SizedBox(height: 12),
             StatusBreakdownPanel(
               expanded: _breakdownExpanded,
               onToggle: (v) => setState(() => _breakdownExpanded = v),
