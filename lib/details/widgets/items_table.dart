@@ -55,7 +55,7 @@ class ItemsTable extends StatelessWidget {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     if (items.isEmpty) {
-      return Text('Aucun item dans ce groupe.',
+      return Text('No items in this group.',
           style: Theme.of(context).textTheme.bodyMedium);
     }
 
@@ -82,18 +82,18 @@ class ItemsTable extends StatelessWidget {
             dividerThickness: .6,
             columns: const [
               DataColumn(label: Text('ID')),
-              DataColumn(label: Text('Statut')),
+              DataColumn(label: Text('Status')),
               DataColumn(label: Text('Grade ID')),
-              DataColumn(label: Text('Grade note')),
+              DataColumn(label: Text('Grading note')),
               DataColumn(label: Text('Grading fees')),
-              DataColumn(label: Text('Est.')),
+              DataColumn(label: Text('Est. price')),
               DataColumn(label: Text('Sale')),
-              DataColumn(label: Text('Marge')),
+              DataColumn(label: Text('Margin')),
               DataColumn(label: Text('Tracking')),
               DataColumn(label: Text('Buyer')),
               DataColumn(label: Text('Supplier')),
               DataColumn(label: Text('Photo')),
-              DataColumn(label: Text('Doc')),
+              DataColumn(label: Text('Document')),
             ],
             rows: List<DataRow>.generate(items.length, (i) {
               final r = items[i];
@@ -183,7 +183,7 @@ class _MiniLinkIcon extends StatelessWidget {
   Widget build(BuildContext context) {
     if (url.isEmpty) return const Text('—');
     return IconButton(
-      tooltip: 'Ouvrir',
+      tooltip: 'Open',
       icon: Icon(icon, color: kAccentA),
       onPressed: () async {
         final uri = Uri.tryParse(url);

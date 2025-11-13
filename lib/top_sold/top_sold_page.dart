@@ -536,7 +536,7 @@ class _TopSoldPageState extends State<TopSoldPage> {
         productId == null ||
         gameId == null ||
         status.isEmpty) {
-      _snack('Données insuffisantes pour ouvrir les détails.');
+      _snack('Insufficient data to open details.');
       return;
     }
 
@@ -581,11 +581,11 @@ class _TopSoldPageState extends State<TopSoldPage> {
       ]);
 
       if (rep == null || rep['id'] == null) {
-        _snack("Impossible d'identifier le groupe d'items pour cette ligne.");
+        _snack("Unable to identify the item group for this line.");
         return;
       }
     } catch (e) {
-      _snack('Erreur de résolution du groupe: $e');
+      _snack('Error resolving group: $e');
       return;
     }
 
@@ -722,10 +722,10 @@ class _TopSoldPageState extends State<TopSoldPage> {
                                 : null;
                         return DropdownButton<String?>(
                           value: safeValue,
-                          hint: const Text('Filtrer par jeu'),
+                          hint: const Text('Filter by game'),
                           items: <DropdownMenuItem<String?>>[
                             const DropdownMenuItem<String?>(
-                                value: null, child: Text('Tous les jeux')),
+                                value: null, child: Text('All games')),
                             ...games.map(
                               (g) => DropdownMenuItem<String?>(
                                 value: g,
@@ -748,7 +748,7 @@ class _TopSoldPageState extends State<TopSoldPage> {
                         controller: _searchCtrl,
                         decoration: InputDecoration(
                           prefixIcon: const Iconify(Mdi.magnify),
-                          hintText: 'Rechercher (multi-mots : nom/sku/jeu...)',
+                          hintText: 'Search (multi-words: name/sku/game...)',
                           isDense: true,
                           border: OutlineInputBorder(
                               borderRadius: BorderRadius.circular(10)),
@@ -769,7 +769,7 @@ class _TopSoldPageState extends State<TopSoldPage> {
                     FilledButton.icon(
                       onPressed: _fetch,
                       icon: const Iconify(Mdi.refresh),
-                      label: const Text('Actualiser'),
+                      label: const Text('Refresh'),
                     ),
                   ],
                 ),
@@ -785,7 +785,7 @@ class _TopSoldPageState extends State<TopSoldPage> {
               : (_rows.isEmpty
                   ? const Center(
                       child: Text(
-                          'Aucune vente trouvée.')) // "collection" masqué si non-owner
+                          'No sales found.')) // "collection" hidden if non-owner
                   : ListView.builder(
                       padding: const EdgeInsets.fromLTRB(12, 8, 12, 24),
                       itemCount: _rows.length,

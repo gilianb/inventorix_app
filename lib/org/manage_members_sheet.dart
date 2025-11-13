@@ -95,7 +95,7 @@ class _ManageMembersSheetState extends State<ManageMembersSheet> {
 
       setState(() => _members = members);
     } catch (e) {
-      _snack('Erreur chargement membres: $e');
+      _snack('Error loading members: $e');
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -112,7 +112,7 @@ class _ManageMembersSheetState extends State<ManageMembersSheet> {
       // Résoudre user_id (email -> RPC, sinon UUID direct accepté)
       final uid = await _resolveUserId(res.identifier);
       if (uid == null) {
-        _snack('Utilisateur introuvable (email/UUID).');
+        _snack('User not found (email/UUID).');
         return;
       }
 
@@ -126,12 +126,12 @@ class _ManageMembersSheetState extends State<ManageMembersSheet> {
           .select('org_id')
           .single();
 
-      _snack('Membre ajouté/mis à jour.');
+      _snack('Member added/updated.');
       _load();
     } on PostgrestException catch (e) {
       _snack('Supabase: ${e.message}');
     } catch (e) {
-      _snack('Erreur: $e');
+      _snack('Error: $e');
     }
   }
 
@@ -153,15 +153,16 @@ class _ManageMembersSheetState extends State<ManageMembersSheet> {
     final ok = await showDialog<bool>(
           context: context,
           builder: (ctx) => AlertDialog(
-            title: const Text('Retirer ce membre ?'),
-            content: const Text('Il n’aura plus accès à l’organisation.'),
+            title: const Text('Remove this member?'),
+            content: const Text(
+                'They will no longer have access to the organization.'),
             actions: [
               TextButton(
                   onPressed: () => Navigator.pop(ctx, false),
-                  child: const Text('Annuler')),
+                  child: const Text('Cancel')),
               FilledButton(
                   onPressed: () => Navigator.pop(ctx, true),
-                  child: const Text('Retirer')),
+                  child: const Text('Remove')),
             ],
           ),
         ) ??
@@ -174,12 +175,12 @@ class _ManageMembersSheetState extends State<ManageMembersSheet> {
           .delete()
           .eq('org_id', widget.orgId)
           .eq('user_id', userId);
-      _snack('Membre retiré.');
+      _snack('Member removed.');
       _load();
     } on PostgrestException catch (e) {
       _snack('Supabase: ${e.message}');
     } catch (e) {
-      _snack('Erreur: $e');
+      _snack('Error: $e');
     }
   }
 
@@ -190,12 +191,12 @@ class _ManageMembersSheetState extends State<ManageMembersSheet> {
           .update({'role': newRole})
           .eq('org_id', widget.orgId)
           .eq('user_id', userId);
-      _snack('Rôle mis à jour.');
+      _snack('RRole updated.');
       _load();
     } on PostgrestException catch (e) {
       _snack('Supabase: ${e.message}');
     } catch (e) {
-      _snack('Erreur: $e');
+      _snack('Error: $e');
     }
   }
 
@@ -213,7 +214,7 @@ class _ManageMembersSheetState extends State<ManageMembersSheet> {
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    'Membres — ${widget.orgName}',
+                    'Members — ${widget.orgName}',
                     style: Theme.of(context)
                         .textTheme
                         .titleMedium
@@ -221,7 +222,7 @@ class _ManageMembersSheetState extends State<ManageMembersSheet> {
                   ),
                 ),
                 IconButton(
-                  tooltip: 'Fermer',
+                  tooltip: 'Close',
                   onPressed: () => Navigator.pop(context),
                   icon: const Iconify(Mdi.close),
                 ),
@@ -232,7 +233,7 @@ class _ManageMembersSheetState extends State<ManageMembersSheet> {
             const SizedBox(height: 8),
             Expanded(
               child: _members.isEmpty
-                  ? const Center(child: Text('Aucun membre.'))
+                  ? const Center(child: Text('No members.'))
                   : ListView.separated(
                       itemCount: _members.length,
                       separatorBuilder: (_, __) => const Divider(height: 1),
@@ -285,7 +286,7 @@ class _ManageMembersSheetState extends State<ManageMembersSheet> {
                               ),
                               const SizedBox(width: 8),
                               IconButton(
-                                tooltip: 'Supprimer',
+                                tooltip: 'Delete',
                                 onPressed: () => _removeMember(uid),
                                 icon: const Icon(Icons.delete_outline),
                               ),
@@ -302,7 +303,7 @@ class _ManageMembersSheetState extends State<ManageMembersSheet> {
                 FilledButton.icon(
                   onPressed: _addMemberDialog,
                   icon: const Iconify(Mdi.account_plus),
-                  label: const Text('Ajouter un membre'),
+                  label: const Text('Add member'),
                 ),
               ],
             ),
@@ -376,7 +377,7 @@ class _AddMemberDialogState extends State<_AddMemberDialog> {
     const double kMaxSuggestHeight = 220;
 
     return AlertDialog(
-      title: const Text('Ajouter un membre'),
+      title: const Text('Add member to organization'),
       content: SizedBox(
         width: dialogWidth, // <--- largeur FINIE (pas d'infini)
         child: Column(
@@ -400,7 +401,7 @@ class _AddMemberDialogState extends State<_AddMemberDialog> {
                   controller: controller,
                   focusNode: focusNode,
                   decoration: InputDecoration(
-                    labelText: 'Email ou User ID (UUID)',
+                    labelText: 'Email or User ID (UUID)',
                     hintText: 'ex: user@example.com',
                     suffixIcon: _searching
                         ? const Padding(
@@ -459,7 +460,7 @@ class _AddMemberDialogState extends State<_AddMemberDialog> {
 
             DropdownButtonFormField<String>(
               value: _role,
-              decoration: const InputDecoration(labelText: 'Rôle'),
+              decoration: const InputDecoration(labelText: 'Role'),
               items: const [
                 DropdownMenuItem(value: 'owner', child: Text('owner')),
                 DropdownMenuItem(value: 'admin', child: Text('admin')),
@@ -474,7 +475,7 @@ class _AddMemberDialogState extends State<_AddMemberDialog> {
       actions: [
         TextButton(
           onPressed: () => Navigator.pop<_AddResult>(context),
-          child: const Text('Annuler'),
+          child: const Text('Cancel'),
         ),
         FilledButton(
           onPressed: () {
@@ -485,7 +486,7 @@ class _AddMemberDialogState extends State<_AddMemberDialog> {
               _AddResult(identifier: id, role: _role),
             );
           },
-          child: const Text('Ajouter'),
+          child: const Text('Add'),
         ),
       ],
     );

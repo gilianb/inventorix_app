@@ -540,7 +540,7 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
         _trendsReloadTick++;
       });
     } catch (e) {
-      _snack('Erreur chargement détails : $e');
+      _snack('Error loading details: $e');
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -601,7 +601,7 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
         (_viewRow?['product_id'] ?? widget.group['product_id']) as int?;
 
     if (productId == null || curStatus.isEmpty || qty <= 0) {
-      _snack('Impossible d’éditer ce groupe.');
+      _snack('Unable to edit this group.');
       return;
     }
 
@@ -781,7 +781,7 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
           leading: BackButton(onPressed: () => Navigator.pop(context, _dirty)),
           actions: [
             IconButton(
-              tooltip: 'Modifier N items',
+              tooltip: 'Edit items',
               icon: const Iconify(Mdi.pencil),
               onPressed: visibleItems.isEmpty ? null : _onEditGroup,
             ),
@@ -800,7 +800,7 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
                 qty: qtyStatus,
                 margin: headerMargin,
                 historyEvents: _movements,
-                historyTitle: 'Journal des sauvegardes',
+                historyTitle: 'Save history',
                 historyCount: _movements.length,
                 showMargins: _isOwner,
               ),
@@ -814,12 +814,12 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
                       ? FinanceOverview(
                           items: sourceItems,
                           currency: currency,
-                          titleInvested: 'Investi (vue)',
-                          titleEstimated: 'Valeur estimée',
-                          titleSold: 'Revenu réel',
-                          subtitleInvested: 'Σ coûts (items non vendus)',
-                          subtitleEstimated: 'Σ estimated_price (non vendus)',
-                          subtitleSold: 'Σ sale_price (vendus)',
+                          titleInvested: 'Invested (view)',
+                          titleEstimated: 'Estimated value',
+                          titleSold: 'Actual revenue',
+                          subtitleInvested: 'Σ costs (unsold items)',
+                          subtitleEstimated: 'Σ estimated_price (unsold)',
+                          subtitleSold: 'Σ sale_price (sold)',
                         )
                       : const SizedBox.shrink();
 
@@ -850,8 +850,7 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
                               if (uDoc.isNotEmpty)
                                 InfoBanner(
                                   icon: Icons.description,
-                                  message:
-                                      'Document disponible — appuyez pour ouvrir',
+                                  message: 'Document available — tap to open',
                                   onTap: () async {
                                     final uri = Uri.tryParse(uDoc);
                                     if (uri != null) {
@@ -870,7 +869,7 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
                                   onCopy: (link) async {
                                     await Clipboard.setData(
                                         ClipboardData(text: link));
-                                    _snack('Lien copié');
+                                    _snack('Link copied');
                                   },
                                 ),
                               ),
@@ -891,7 +890,7 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
                                             ),
                                           );
                                         },
-                                  child: const Text('Aperçu public'),
+                                  child: const Text('Public preview'),
                                 ),
                               ),
                             ],
@@ -934,8 +933,7 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
                         if (uDoc.isNotEmpty)
                           InfoBanner(
                             icon: Icons.description,
-                            message:
-                                'Document disponible — appuyez pour ouvrir',
+                            message: 'Document available — tap to open',
                             onTap: () async {
                               final uri = Uri.tryParse(uDoc);
                               if (uri != null) {
@@ -954,7 +952,7 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
                             onCopy: (link) async {
                               await Clipboard.setData(
                                   ClipboardData(text: link));
-                              _snack('Lien copié');
+                              _snack('Link copied');
                             },
                           ),
                         ),
@@ -974,7 +972,7 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
                                       ),
                                     );
                                   },
-                            child: const Text('Aperçu public'),
+                            child: const Text('Public preview'),
                           ),
                         ),
                         const SizedBox(height: 12),
@@ -1002,7 +1000,7 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
                           ?.copyWith(fontWeight: FontWeight.w700)),
                   const SizedBox(width: 8),
                   IconButton(
-                    tooltip: _showItemsTable ? 'Masquer' : 'Afficher',
+                    tooltip: _showItemsTable ? 'Hide' : 'Show',
                     icon: Iconify(
                         _showItemsTable ? Mdi.chevron_up : Mdi.chevron_down),
                     onPressed: () =>
@@ -1022,12 +1020,12 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
               // Prix (simple)
               Row(
                 children: const [
-                  Text('Tendances des prix',
+                  Text('Price trends',
                       style: TextStyle(fontWeight: FontWeight.w700)),
                   SizedBox(width: 8),
                   Tooltip(
                     message:
-                        'Collectr (Edge) + CardTrader — Graph basé sur price_history (1 point/jour).',
+                        'Collectr (Edge) + CardTrader — Graph based on price_history (1 point/day).',
                     child: Icon(Icons.info_outline, size: 18),
                   ),
                 ],

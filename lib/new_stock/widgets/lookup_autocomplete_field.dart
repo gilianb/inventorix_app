@@ -1,11 +1,11 @@
-// Extrait tel quel de ta page (ajout mineur d'import)
+// Taken as-is from your page (minor import added)
 // ignore_for_file: use_build_context_synchronously
 
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-/*Champ d’autocomplétion générique branché sur une table 
-Supabase (name). Permet aussi d’ajouter une valeur si absente.*/
+/* Generic autocomplete field wired to a Supabase table (name).
+  Also allows adding a value if absent. */
 
 class LookupAutocompleteField extends StatefulWidget {
   const LookupAutocompleteField({
@@ -98,7 +98,7 @@ class _LookupAutocompleteFieldState extends State<LookupAutocompleteField> {
       widget.controller.text = n;
       if (context.mounted) {
         ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Déjà présent: "$n"')));
+            .showSnackBar(SnackBar(content: Text('Already present: "$n"')));
       }
       return;
     }
@@ -114,23 +114,23 @@ class _LookupAutocompleteFieldState extends State<LookupAutocompleteField> {
         widget.controller.text = n;
         if (context.mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('Ajouté: "${inserted['name']}"')));
+              SnackBar(content: Text('Added: "${inserted['name']}"')));
         }
       } else {
         if (context.mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('Insertion non confirmée.')));
+              const SnackBar(content: Text('Insertion not confirmed.')));
         }
       }
     } on PostgrestException catch (e) {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Erreur INSERT: ${e.message}')));
+            SnackBar(content: Text('INSERT error: ${e.message}')));
       }
     } catch (e) {
       if (context.mounted) {
         ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Erreur inconnue: $e')));
+            .showSnackBar(SnackBar(content: Text('Unknown error: $e')));
       }
     }
   }
@@ -198,8 +198,7 @@ class _LookupAutocompleteFieldState extends State<LookupAutocompleteField> {
                   return ListTile(
                     dense: true,
                     title: isAdd
-                        ? Text('➕ Ajouter "$text"',
-                            overflow: TextOverflow.ellipsis)
+                        ? Text('➕ Add "$text"', overflow: TextOverflow.ellipsis)
                         : Text(text, overflow: TextOverflow.ellipsis),
                     onTap: () async {
                       if (isAdd) {
@@ -227,7 +226,7 @@ class _LookupAutocompleteFieldState extends State<LookupAutocompleteField> {
           },
           validator: (v) {
             if (!widget.requiredField) return null;
-            if (v == null || v.trim().isEmpty) return 'Champ requis';
+            if (v == null || v.trim().isEmpty) return 'Required field';
             return null;
           },
         );

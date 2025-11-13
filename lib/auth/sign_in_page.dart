@@ -28,7 +28,7 @@ class _SignInPageState extends State<SignInPage> {
     final password = _passwordController.text.trim();
 
     if (email.isEmpty || password.isEmpty) {
-      _showMessage('Veuillez saisir un email et un mot de passe.');
+      _showMessage('Please enter an email and password.');
       return;
     }
 
@@ -40,7 +40,7 @@ class _SignInPageState extends State<SignInPage> {
           email: email,
           password: password,
         );
-        _showMessage('Compte créé avec succès ! Vérifiez vos emails.');
+        _showMessage('Account created successfully! Please check your email.');
       } else {
         await _supabase.auth.signInWithPassword(
           email: email,
@@ -48,9 +48,9 @@ class _SignInPageState extends State<SignInPage> {
         );
       }
     } on AuthException catch (e) {
-      _showMessage('Erreur : ${e.message}');
+      _showMessage('Error: ${e.message}');
     } catch (e) {
-      _showMessage('Une erreur est survenue : $e');
+      _showMessage('An error occurred: $e');
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -59,7 +59,7 @@ class _SignInPageState extends State<SignInPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Connexion Inventorix')),
+      appBar: AppBar(title: const Text('Inventorix Login')),
       body: Center(
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 400),
@@ -69,7 +69,7 @@ class _SignInPageState extends State<SignInPage> {
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 Text(
-                  _isSignUpMode ? 'Créer un compte' : 'Connexion',
+                  _isSignUpMode ? 'Create an account' : 'Sign in',
                   style: Theme.of(context).textTheme.headlineMedium,
                 ),
                 const SizedBox(height: 32),
@@ -86,7 +86,7 @@ class _SignInPageState extends State<SignInPage> {
                   controller: _passwordController,
                   obscureText: true,
                   decoration: const InputDecoration(
-                    labelText: 'Mot de passe',
+                    labelText: 'Password',
                     prefixIcon: Icon(Icons.lock),
                   ),
                 ),
@@ -98,8 +98,7 @@ class _SignInPageState extends State<SignInPage> {
                   ),
                   child: _isLoading
                       ? const CircularProgressIndicator()
-                      : Text(
-                          _isSignUpMode ? 'Créer un compte' : 'Se connecter'),
+                      : Text(_isSignUpMode ? 'Create account' : 'Sign in'),
                 ),
                 const SizedBox(height: 16),
                 TextButton(
@@ -107,8 +106,8 @@ class _SignInPageState extends State<SignInPage> {
                       ? null
                       : () => setState(() => _isSignUpMode = !_isSignUpMode),
                   child: Text(_isSignUpMode
-                      ? 'Déjà un compte ? Se connecter'
-                      : 'Pas encore de compte ? Créer un compte'),
+                      ? 'Already have an account? Sign in'
+                      : "Don't have an account yet? Create an account"),
                 ),
               ],
             ),

@@ -43,7 +43,7 @@ class OptionsSection extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return SectionCard(
-      title: 'Options (facultatif)',
+      title: 'Options (non mandatory)',
       child: Column(
         children: [
           Row(children: [
@@ -67,7 +67,7 @@ class OptionsSection extends StatelessWidget {
                 keyboardType:
                     const TextInputType.numberWithOptions(decimal: true),
                 decoration: const InputDecoration(
-                    labelText: 'Grading Fees (USD) — par unité'),
+                    labelText: 'Grading Fees (USD) — per unit'),
               ),
             ),
             const SizedBox(width: 12),
@@ -102,8 +102,8 @@ class OptionsSection extends StatelessWidget {
                 controller: shippingFeesCtrl,
                 keyboardType:
                     const TextInputType.numberWithOptions(decimal: true),
-                decoration: const InputDecoration(
-                    labelText: 'Frais d\'expédition (USD)'),
+                decoration:
+                    const InputDecoration(labelText: 'Shipping Fees (USD)'),
               ),
             ),
             const SizedBox(width: 12),
@@ -112,8 +112,8 @@ class OptionsSection extends StatelessWidget {
                 controller: commissionFeesCtrl,
                 keyboardType:
                     const TextInputType.numberWithOptions(decimal: true),
-                decoration: const InputDecoration(
-                    labelText: 'Frais de commission (USD)'),
+                decoration:
+                    const InputDecoration(labelText: 'Commission Fees (USD)'),
               ),
             ),
           ]),
@@ -122,22 +122,21 @@ class OptionsSection extends StatelessWidget {
             controller: salePriceCtrl,
             keyboardType: const TextInputType.numberWithOptions(decimal: true),
             decoration:
-                const InputDecoration(labelText: 'Prix de vente (optionnel)'),
+                const InputDecoration(labelText: 'Sale Price (optional)'),
           ),
           const SizedBox(height: 8),
           Row(children: [
             Expanded(
               child: TextFormField(
                 controller: paymentTypeCtrl,
-                decoration:
-                    const InputDecoration(labelText: 'Type de paiement'),
+                decoration: const InputDecoration(labelText: 'Payment Type'),
               ),
             ),
             const SizedBox(width: 12),
             Expanded(
               child: TextFormField(
                 controller: buyerInfosCtrl,
-                decoration: const InputDecoration(labelText: 'Infos acheteur'),
+                decoration: const InputDecoration(labelText: 'Buyer Infos'),
               ),
             ),
           ]),

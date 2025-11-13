@@ -39,9 +39,9 @@ class _OrganizationsPageState extends State<OrganizationsPage> {
     setState(() => _loading = true);
     try {
       final uid = _sb.auth.currentUser?.id;
-      if (uid == null) throw 'Utilisateur non connecté';
+      if (uid == null) throw 'User not logged in';
 
-      // 1) Memberships directs (pas de vue récursive)
+      // 1) Direct memberships (no recursive view)
       final memRows = await _sb
           .from('organization_member')
           .select('org_id, role, created_at')
@@ -86,7 +86,7 @@ class _OrganizationsPageState extends State<OrganizationsPage> {
 
       _orgs = list;
     } catch (e) {
-      _snack('Erreur chargement: $e');
+      _snack('Error loading: $e');
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -102,13 +102,13 @@ class _OrganizationsPageState extends State<OrganizationsPage> {
       try {
         await _sb.auth.signOut();
         if (!mounted) return;
-        _snack('Déconnexion réussie.');
+        _snack('Logout successful.');
         Navigator.of(context)
             .pushNamedAndRemoveUntil('/login', (Route<dynamic> r) => false);
       } on AuthException catch (e) {
-        _snack('Erreur déconnexion: ${e.message}');
+        _snack('Error logging out: ${e.message}');
       } catch (e) {
-        _snack('Erreur déconnexion: $e');
+        _snack('Error logging out: $e');
       }
     } else {
       if (!mounted) return;
@@ -122,20 +122,20 @@ class _OrganizationsPageState extends State<OrganizationsPage> {
     final name = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Créer une organisation'),
+        title: const Text('Create an organization'),
         content: TextField(
           controller: ctrl,
-          decoration: const InputDecoration(labelText: 'Nom'),
+          decoration: const InputDecoration(labelText: 'Name'),
           autofocus: true,
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
-            child: const Text('Annuler'),
+            child: const Text('Cancel'),
           ),
           FilledButton(
             onPressed: () => Navigator.pop(ctx, ctrl.text.trim()),
-            child: const Text('Créer'),
+            child: const Text('Create'),
           ),
         ],
       ),
@@ -144,7 +144,7 @@ class _OrganizationsPageState extends State<OrganizationsPage> {
 
     try {
       final uid = _sb.auth.currentUser?.id;
-      if (uid == null) throw 'Utilisateur non connecté';
+      if (uid == null) throw 'User not logged in';
 
       final inserted = await _sb
           .from('organization')
@@ -155,7 +155,7 @@ class _OrganizationsPageState extends State<OrganizationsPage> {
           .select('id,name')
           .single();
 
-      _snack('Organisation créée.');
+      _snack('Organization created.');
       await _load();
 
       final orgId = inserted['id'] as String;
@@ -165,7 +165,7 @@ class _OrganizationsPageState extends State<OrganizationsPage> {
     } on PostgrestException catch (e) {
       _snack('Supabase: ${e.message}');
     } catch (e) {
-      _snack('Erreur: $e');
+      _snack('Error: $e');
     }
   }
 
@@ -178,7 +178,7 @@ class _OrganizationsPageState extends State<OrganizationsPage> {
   Future<void> _openManageMembers(Organization org) async {
     // Owner only (UI). Doubler avec RLS côté DB.
     if (org.role.toLowerCase() != 'owner') {
-      _snack('Seul le owner peut gérer les membres.');
+      _snack('Only the owner can manage members.');
       return;
     }
     await showModalBottomSheet<void>(
@@ -205,10 +205,10 @@ class _OrganizationsPageState extends State<OrganizationsPage> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Mes organisations'),
+        title: const Text('My organizations'),
         actions: [
           IconButton(
-            tooltip: isLoggedIn ? 'Se déconnecter' : 'Se connecter',
+            tooltip: isLoggedIn ? 'Log out' : 'Log in',
             icon: Iconify(isLoggedIn ? Mdi.logout : Mdi.login),
             onPressed: _onTapAuthButton,
           ),
@@ -221,7 +221,7 @@ class _OrganizationsPageState extends State<OrganizationsPage> {
               backgroundColor: kAccentA,
               foregroundColor: Colors.white,
               icon: const Iconify(Mdi.business),
-              label: const Text('Créer'),
+              label: const Text('Create'),
             ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
@@ -267,7 +267,7 @@ class _OrganizationsPageState extends State<OrganizationsPage> {
                         const SizedBox(height: 24),
                         const Center(
                           child: Text(
-                            'Vous n’êtes membre d’aucune organisation.\nCréez-en une pour commencer.',
+                            'You are not a member of any organization.\nCreate one to get started.',
                             textAlign: TextAlign.center,
                           ),
                         ),
@@ -354,7 +354,7 @@ class _PageIntro extends StatelessWidget {
             const SizedBox(width: 12),
             Expanded(
               child: Text(
-                'Sélectionnez votre organisation ou créez-en une nouvelle.',
+                'Select your organization or create a new one.',
                 style: Theme.of(context)
                     .textTheme
                     .titleMedium
@@ -365,7 +365,7 @@ class _PageIntro extends StatelessWidget {
             FilledButton.icon(
               onPressed: onCreate,
               icon: const Iconify(Mdi.add),
-              label: const Text('Créer'),
+              label: const Text('Create'),
             ),
           ],
         ),
@@ -400,14 +400,14 @@ class _CreateOrgCard extends StatelessWidget {
             _TileHeader(
               leading: _Avatar(seed: 'new', color: kAccentA),
               roleChip: Chip(
-                label: const Text('Créer'),
+                label: const Text('Create'),
                 backgroundColor: kAccentB.withOpacity(.12),
                 side: BorderSide.none,
               ),
             ),
             const Spacer(),
             Text(
-              'Créer une organisation',
+              'Create an organization',
               textAlign: TextAlign.center,
               style: Theme.of(context)
                   .textTheme
@@ -416,7 +416,7 @@ class _CreateOrgCard extends StatelessWidget {
             ),
             const SizedBox(height: 6),
             Text(
-              'Invitez votre équipe, gérez vos stocks et ventes.',
+              'Invite your team, manage your inventory and sales.',
               textAlign: TextAlign.center,
               style: Theme.of(context).textTheme.bodySmall,
             ),
@@ -426,7 +426,7 @@ class _CreateOrgCard extends StatelessWidget {
               children: const [
                 Icon(Icons.add, size: 18),
                 SizedBox(width: 6),
-                Text('Nouvelle organisation'),
+                Text('New organization'),
               ],
             ),
           ],
@@ -499,7 +499,7 @@ class _OrgCard extends StatelessWidget {
                   const Spacer(),
                   if (isOwner && onManageMembers != null)
                     Tooltip(
-                      message: 'Gérer les membres',
+                      message: 'Manage members',
                       child: IconButton(
                         onPressed: onManageMembers,
                         icon: const Iconify(Mdi.account_group),
@@ -541,7 +541,7 @@ class _OrgCard extends StatelessWidget {
                     children: const [
                       Icon(Icons.chevron_right, size: 18),
                       SizedBox(width: 6),
-                      Text('Entrer'),
+                      Text('Enter'),
                     ],
                   ),
                 ),

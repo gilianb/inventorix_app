@@ -99,7 +99,7 @@ class QrLineButton extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
                       const SizedBox(height: 8),
-                      Text('QR code (ligne)',
+                      Text('QR code (line)',
                           style: theme.textTheme.titleMedium),
                       const SizedBox(height: 16),
                       // Taille fixe du QR
@@ -133,7 +133,7 @@ class QrLineButton extends StatelessWidget {
                         children: [
                           FilledButton.icon(
                             icon: const Iconify(Mdi.open_in_new),
-                            label: const Text('Ouvrir'),
+                            label: const Text('Open'),
                             onPressed: () async {
                               final uri = Uri.tryParse(link);
                               if (uri != null) {
@@ -144,7 +144,7 @@ class QrLineButton extends StatelessWidget {
                           ),
                           OutlinedButton.icon(
                             icon: const Iconify(Mdi.content_copy),
-                            label: const Text('Copier'),
+                            label: const Text('Copy'),
                             onPressed: () async {
                               if (onCopy != null) await onCopy!(link);
                               if (context.mounted) Navigator.of(context).pop();
@@ -176,7 +176,7 @@ class _QrFullScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('QR code (ligne)')),
+      appBar: AppBar(title: const Text('QR code (line)')),
       body: Center(
         child: SingleChildScrollView(
           padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
@@ -213,7 +213,7 @@ class _QrFullScreen extends StatelessWidget {
                   children: [
                     FilledButton.icon(
                       icon: const Iconify(Mdi.open_in_new),
-                      label: const Text('Ouvrir'),
+                      label: const Text('Open'),
                       onPressed: () async {
                         final uri = Uri.tryParse(link);
                         if (uri != null) {
@@ -224,12 +224,12 @@ class _QrFullScreen extends StatelessWidget {
                     ),
                     OutlinedButton.icon(
                       icon: const Iconify(Mdi.content_copy),
-                      label: const Text('Copier'),
+                      label: const Text('Copy'),
                       onPressed: () async {
                         if (onCopy != null) await onCopy!(link);
                         if (context.mounted) {
                           ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(content: Text('Lien copié')),
+                            const SnackBar(content: Text('Link copied')),
                           );
                         }
                       },

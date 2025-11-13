@@ -1,12 +1,12 @@
 import 'package:flutter/material.dart';
 import 'history_list.dart';
 
-/// Popover ancré affichant l'historique sous forme claire.
+/// Anchored popover displaying the history in a clear form.
 class HistoryPopoverCard extends StatelessWidget {
   const HistoryPopoverCard({
     super.key,
     required this.events,
-    this.title = 'Journal des changements',
+    this.title = 'Change history',
     this.statusChip,
   });
 
@@ -43,7 +43,7 @@ class HistoryPopoverCard extends StatelessWidget {
             ),
           ),
           const Divider(height: 1),
-          // Pas de Flexible ici, juste un scroll dans un espace fini
+          // No Flexible here, just a scroll in a fixed space
           Expanded(
             child: SingleChildScrollView(
               padding: const EdgeInsets.only(bottom: 8, top: 4),

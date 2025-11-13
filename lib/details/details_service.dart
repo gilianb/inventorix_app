@@ -1,6 +1,6 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
-/*regroupe la logique non-UI :
- requêtes Supabase + calculs partagés*/
+/* groups non-UI logic:
+ Supabase queries + shared calculations */
 
 class DetailsService {
   static num sumNum(Iterable<dynamic> it) {
@@ -26,7 +26,7 @@ class DetailsService {
     return [sd, buyer, trk, ch].join('|').trim();
   }
 
-  /// Somme Investi basée sur les items visibles
+  /// Invested sum based on visible items
   static num investedFromItems(List<Map<String, dynamic>> items) {
     num base = 0;
     final Map<String, List<Map<String, dynamic>>> groups = {};
@@ -74,7 +74,7 @@ class DetailsService {
   ) async {
     var builder = sb.from('v_items_by_status').select(viewCols.join(','));
 
-    // 🔐 si org_id est connu, on le force
+    // 🔐 if org_id is known, enforce it
     final orgId = (group['org_id']?.toString().isNotEmpty ?? false)
         ? group['org_id']
         : null;
@@ -101,7 +101,7 @@ class DetailsService {
   }) async {
     const itemCols = [
       'id',
-      'org_id', // ← 🔐 ajouté
+      'org_id', // ← 🔐 added
       'product_id',
       'game_id',
       'type',
@@ -135,7 +135,7 @@ class DetailsService {
 
     var q = sb.from('item').select(itemCols.join(','));
 
-    // 🔐 org_id prioritaire si fourni
+    // 🔐 org_id priority if provided
     if ((source['org_id']?.toString().isNotEmpty ?? false)) {
       q = q.eq('org_id', source['org_id']);
     }
@@ -144,7 +144,7 @@ class DetailsService {
       if (ignoreKeys.contains(k)) continue;
       if (!source.containsKey(k)) continue;
       final v = source[k];
-      if (k == 'org_id') continue; // déjà appliqué ci-dessus
+      if (k == 'org_id') continue; // already applied above
       if (v == null) {
         q = q.filter(k, 'is', null);
       } else {
@@ -181,7 +181,7 @@ class DetailsService {
       (raw as List).map((e) => Map<String, dynamic>.from(e as Map)),
     );
 
-    // ✅ Déduplication: garder UNE seule ligne pour chaque batch_edit (event_id)
+    // ✅ Deduplication: keep ONE row for each batch_edit (event_id)
     final seenBatchIds = <int>{};
     final out = <Map<String, dynamic>>[];
 
@@ -193,7 +193,7 @@ class DetailsService {
         final eventId = e['event_id'];
         if (eventId is int) {
           if (seenBatchIds.contains(eventId)) {
-            continue; // skip doublons du même batch sur d’autres item_id
+            continue; // skip duplicates of the same batch on other item_id
           }
           seenBatchIds.add(eventId);
         }
@@ -203,7 +203,7 @@ class DetailsService {
       }
     }
 
-    // Tri final (déjà trié par ts desc, mais on protège)
+    // Final sort (already sorted by ts desc, but we safeguard)
     out.sort((a, b) {
       final ta = DateTime.tryParse((a['ts'] ?? '').toString())
               ?.millisecondsSinceEpoch ??
@@ -212,7 +212,7 @@ class DetailsService {
               ?.millisecondsSinceEpoch ??
           0;
       if (tb != ta) return tb.compareTo(ta);
-      // stabiliser si même ts : event_id desc
+      // stabilize if same ts: event_id desc
       final ea = (a['event_id'] is int) ? a['event_id'] as int : -1;
       final eb = (b['event_id'] is int) ? b['event_id'] as int : -1;
       return eb.compareTo(ea);

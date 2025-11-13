@@ -132,10 +132,11 @@ class _MainInventoryPageState extends State<MainInventoryPage>
               icon: Iconify(Mdi.trending_up,
                   color: Color.fromARGB(255, 2, 35, 61)),
               text: 'Top Sold'),
-        const Tab(
-            icon: Iconify(Mdi.collections_bookmark,
-                color: Color.fromARGB(255, 2, 35, 61)),
-            text: 'Collection'),
+        if (_isOwner)
+          const Tab(
+              icon: Iconify(Mdi.collections_bookmark,
+                  color: Color.fromARGB(255, 2, 35, 61)),
+              text: 'Collection'),
         const Tab(
             icon: Iconify(Mdi.check_circle,
                 color: Color.fromARGB(255, 2, 35, 61)),
@@ -238,13 +239,13 @@ class _MainInventoryPageState extends State<MainInventoryPage>
       try {
         await _sb.auth.signOut();
         if (!mounted) return;
-        _snack('Déconnexion réussie.');
+        _snack('Logout successful.');
         Navigator.of(context)
             .pushNamedAndRemoveUntil('/login', (Route<dynamic> r) => false);
       } on AuthException catch (e) {
-        _snack('Erreur déconnexion: ${e.message}');
+        _snack('Logout error: ${e.message}');
       } catch (e) {
-        _snack('Erreur déconnexion: $e');
+        _snack('Logout error: $e');
       }
     } else {
       if (!mounted) return;
@@ -274,7 +275,7 @@ class _MainInventoryPageState extends State<MainInventoryPage>
       // 🔢 récupère le total investi exact pour l’onglet Finalized
       _finalizedInvestOverride = await _fetchFinalizedInvestAggregate();
     } catch (e) {
-      _snack('Erreur de chargement : $e');
+      _snack('Loading error: $e');
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -624,21 +625,22 @@ class _MainInventoryPageState extends State<MainInventoryPage>
                       isFinalizedView ? _finalizedInvestOverride : null,
 
                   // 👇 Libellés adaptés
-                  titleInvested: isFinalizedView ? 'Investi' : 'Investi (vue)',
+                  titleInvested:
+                      isFinalizedView ? 'Invested' : 'Invested (view)',
                   titleEstimated:
-                      isFinalizedView ? 'Marge réelle' : 'Revenu potentiel',
-                  titleSold: 'Revenu réel',
+                      isFinalizedView ? 'Actual margin' : 'Potential revenue',
+                  titleSold: 'Actual revenue',
 
                   // 👇 Sous-titres explicites
                   subtitleInvested: isFinalizedView
-                      ? 'Σ coûts (finalisés)'
-                      : 'Σ coûts (non vendus)',
+                      ? 'Σ costs (finalized)'
+                      : 'Σ costs (unsold)',
                   subtitleEstimated: isFinalizedView
-                      ? 'Revenu réel - Investi'
-                      : 'Σ estimated_price (non vendus)',
+                      ? 'Actual revenue - Invested'
+                      : 'Σ estimated_price (unsold)',
                   subtitleSold: isFinalizedView
-                      ? 'Σ sale_price (finalisés)'
-                      : 'Σ sale_price (vendus)',
+                      ? 'Σ sale_price (finalized)'
+                      : 'Σ sale_price (sold)',
                 ),
               ),
             if (showFinanceOverview) const SizedBox(height: 12),
@@ -681,8 +683,8 @@ class _MainInventoryPageState extends State<MainInventoryPage>
             padding: const EdgeInsets.symmetric(horizontal: 12),
             child: Text(
               forceStatus == null
-                  ? 'Lignes (${lines.length}) — vue par statut'
-                  : 'Finalized — Lignes (${lines.length})',
+                  ? 'Lines (${lines.length}) — view by status'
+                  : 'Finalized — Lines (${lines.length})',
               style: Theme.of(context)
                   .textTheme
                   .titleMedium
@@ -718,7 +720,7 @@ class _MainInventoryPageState extends State<MainInventoryPage>
     final int? gameId = line['game_id'] as int?;
 
     if (productId == null || gameId == null || status.isEmpty) {
-      _snack('Données insuffisantes pour ouvrir les détails.');
+      _snack('Insufficient data to open details.');
       return;
     }
 
@@ -761,14 +763,14 @@ class _MainInventoryPageState extends State<MainInventoryPage>
       ]);
 
       if (rep == null || rep['id'] == null) {
-        _snack("Impossible d'identifier le groupe d'items pour cette ligne.");
+        _snack("Unable to identify the item group for this line.");
         return;
       }
     } on PostgrestException catch (e) {
-      _snack('Erreur de résolution du groupe (Supabase): ${e.message}');
+      _snack('Error resolving group (Supabase): ${e.message}');
       return;
     } catch (e) {
-      _snack('Erreur de résolution du groupe: $e');
+      _snack('Error resolving group: $e');
       return;
     }
 
@@ -797,7 +799,7 @@ class _MainInventoryPageState extends State<MainInventoryPage>
     final qty = (line['qty_status'] as int?) ?? 0;
 
     if (productId == null || status.isEmpty || qty <= 0) {
-      _snack('Impossible d’éditer: données manquantes.');
+      _snack("Unable to edit: missing data.");
       return;
     }
 
@@ -819,22 +821,22 @@ class _MainInventoryPageState extends State<MainInventoryPage>
     return await showDialog<bool>(
           context: context,
           builder: (ctx) => AlertDialog(
-            title: const Text('Supprimer cette ligne ?'),
+            title: const Text('Delete this line?'),
             content: Text(
-              'Produit : $name\nStatut : $status\n\n'
-              'Cette action supprimera définitivement tous les items et mouvements '
-              'associés à CETTE ligne (strictement) et uniquement ceux-là.',
+              'Product: $name\nStatus: $status\n\n'
+              'This action will permanently delete all items and movements '
+              'associated with THIS line (strictly) and only those.',
             ),
             actions: [
               TextButton(
                   onPressed: () => Navigator.pop(ctx, false),
-                  child: const Text('Annuler')),
+                  child: const Text('Cancel')),
               FilledButton(
                 onPressed: () => Navigator.pop(ctx, true),
                 style: FilledButton.styleFrom(
                     backgroundColor: Colors.redAccent,
                     foregroundColor: Colors.white),
-                child: const Text('Supprimer'),
+                child: const Text('Delete'),
               ),
             ],
           ),
@@ -944,7 +946,7 @@ class _MainInventoryPageState extends State<MainInventoryPage>
     try {
       final ids = await _collectItemIdsForLine(line);
       if (ids.isEmpty) {
-        _snack('Aucun item trouvé pour cette ligne.');
+        _snack('No items found for this line.');
         return;
       }
 
@@ -960,12 +962,12 @@ class _MainInventoryPageState extends State<MainInventoryPage>
           .eq('org_id', widget.orgId)
           .filter('id', 'in', idsCsv);
 
-      _snack('Ligne supprimée (${ids.length} item(s) + mouvements).');
+      _snack('Line deleted (${ids.length} item(s) + movements).');
       _refresh();
     } on PostgrestException catch (e) {
-      _snack('Erreur Supabase: ${e.message}');
+      _snack('Supabase error: ${e.message}');
     } catch (e) {
-      _snack('Erreur: $e');
+      _snack('Error: $e');
     }
   }
 
@@ -1047,7 +1049,7 @@ class _MainInventoryPageState extends State<MainInventoryPage>
     try {
       final ids = await _collectItemIdsForLine(line);
       if (ids.isEmpty) {
-        _snack('Aucun item trouvé pour cette ligne.');
+        _snack('No items found for this line.');
         return;
       }
       final idsCsv = '(${ids.join(",")})';
@@ -1097,11 +1099,11 @@ class _MainInventoryPageState extends State<MainInventoryPage>
         }
       });
 
-      _snack('Modifié (${ids.length} item(s)).');
+      _snack('Modified (${ids.length} item(s)).');
     } on PostgrestException catch (e) {
-      _snack('Erreur Supabase: ${e.message}');
+      _snack('Supabase error: ${e.message}');
     } catch (e) {
-      _snack('Erreur: $e');
+      _snack('Error: $e');
     }
   }
 
@@ -1125,13 +1127,13 @@ class _MainInventoryPageState extends State<MainInventoryPage>
             data: const IconThemeData(opacity: 1.0),
             child: Row(children: [
               IconButton(
-                tooltip: isLoggedIn ? 'Se déconnecter' : 'Se connecter',
+                tooltip: isLoggedIn ? 'Sign out' : 'Sign in',
                 icon: Iconify(isLoggedIn ? Mdi.logout : Mdi.login,
                     color: Color.fromARGB(255, 2, 35, 61)),
                 onPressed: _onTapAuthButton,
               ),
               IconButton(
-                tooltip: 'Changer d’organisation',
+                tooltip: 'Change organization',
                 icon: const Iconify(Mdi.switch_account,
                     color: Color.fromARGB(255, 2, 35, 61)),
                 onPressed: () async {
@@ -1188,8 +1190,7 @@ class _MainInventoryPageState extends State<MainInventoryPage>
               final orgId = widget.orgId;
               if (orgId.isEmpty) {
                 ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                      content: Text('Aucune organisation sélectionnée.')),
+                  const SnackBar(content: Text('No organization selected.')),
                 );
                 return;
               }
@@ -1200,7 +1201,7 @@ class _MainInventoryPageState extends State<MainInventoryPage>
               if (changed == true) _refresh();
             },
             icon: const Iconify(Mdi.plus, color: Colors.white),
-            label: const Text('Nouveau stock'),
+            label: const Text('New stock'),
           );
         },
       ),

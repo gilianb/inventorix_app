@@ -33,7 +33,7 @@ class ProductSection extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return SectionCard(
-      title: 'Produit',
+      title: 'Product',
       child: Column(
         children: [
           Row(children: [
@@ -56,7 +56,7 @@ class ProductSection extends StatelessWidget {
                     .map((l) => DropdownMenuItem(value: l, child: Text(l)))
                     .toList(),
                 onChanged: onLangChanged,
-                decoration: const InputDecoration(labelText: 'Langue *'),
+                decoration: const InputDecoration(labelText: 'Language *'),
               ),
             ),
           ]),
@@ -73,8 +73,8 @@ class ProductSection extends StatelessWidget {
                     ))
                 .toList(),
             onChanged: onGameChanged,
-            validator: (v) => v == null ? 'Choisir un jeu' : null,
-            decoration: const InputDecoration(labelText: 'Jeu *'),
+            validator: (v) => v == null ? 'Choose a game' : null,
+            decoration: const InputDecoration(labelText: 'Game *'),
           ),
         ],
       ),

@@ -26,14 +26,14 @@ class _AuthGateState extends State<AuthGate> {
   Future<String?> _resolveOrgId() async {
     final saved = await OrgPrefs.loadSelectedOrgId();
     if (saved == null) return null;
-    // Vérifie appartenance
+    // Check membership
     final rows = await _supabase
         .from('v_my_organizations')
         .select('org_id')
         .eq('org_id', saved)
         .limit(1);
     if (rows.isNotEmpty) return saved;
-    // sinon purge
+    // otherwise clear
     await OrgPrefs.clear();
     return null;
   }
@@ -43,7 +43,7 @@ class _AuthGateState extends State<AuthGate> {
     if (orgId != null) {
       return MainInventoryPage(orgId: orgId);
     }
-    // ouvre la page Mes organisations et attend un choix
+    // open the "My organizations" page and wait for a choice
     // ignore: use_build_context_synchronously
     final picked = await Navigator.of(context).push<String>(
       MaterialPageRoute(builder: (_) => const OrganizationsPage()),
@@ -51,7 +51,7 @@ class _AuthGateState extends State<AuthGate> {
     if (picked != null) {
       return MainInventoryPage(orgId: picked);
     }
-    // Si l’utilisateur revient sans choisir, rester sur la page d’orga
+    // If the user returns without choosing, stay on the organizations page
     return const OrganizationsPage();
   }
 
@@ -69,7 +69,7 @@ class _AuthGateState extends State<AuthGate> {
         if (session == null) {
           return const SignInPage();
         } else {
-          // IMPORTANT : utiliser un FutureBuilder pour router proprement
+          // IMPORTANT: use a FutureBuilder to route properly
           return FutureBuilder<Widget>(
             future: _nextAfterAuth(),
             builder: (context, snap) {

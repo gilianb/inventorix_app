@@ -275,19 +275,19 @@ class _PriceTrendsCardState extends State<PriceTrendsCard> {
                   )
                 : const _CircleIcon(icon: Icons.trending_up),
             title: const Text(
-              'Prix marché',
+              'Market Price',
               style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16),
             ),
             subtitle: Text(
-              'Devise: ${widget.currency}'
-              '${_lastUpdate != null ? " • MAJ: ${_fmt(_lastUpdate!)}" : ""}',
+              'Currency: ${widget.currency}'
+              '${_lastUpdate != null ? " • Updated: ${_fmt(_lastUpdate!)}" : ""}',
               style: TextStyle(
                 fontSize: 12,
                 color: Theme.of(context).colorScheme.onSurface.withOpacity(0.7),
               ),
             ),
             trailing: IconButton.filledTonal(
-              tooltip: 'Rafraîchir (Collectr TTL DB + CardTrader TTL mémoire)',
+              tooltip: 'Refresh (Collectr DB TTL + CardTrader memory TTL)',
               onPressed: refreshing ? null : _onRefreshPressed,
               icon: refreshing
                   ? const SizedBox(
@@ -302,8 +302,8 @@ class _PriceTrendsCardState extends State<PriceTrendsCard> {
           // LIGNE COLLECTR
           _SourceRow(
             icon: Icons.stacked_line_chart,
-            title: 'Collectr (fiable)',
-            caption: 'TTL 24h — DB source (pas d’écrasement si pas de prix)',
+            title: 'Collectr (reliable)',
+            caption: 'TTL 24h — DB source (no overwriting if price missing)',
             loading: _loadingCollectr,
             error: _errCollectr,
             accent: collectrAccent,
@@ -316,9 +316,8 @@ class _PriceTrendsCardState extends State<PriceTrendsCard> {
           // LIGNE CARDTRADER
           _SourceRow(
             icon: Icons.store_rounded,
-            title: 'CardTrader (indicatif)',
-            caption:
-                'Médianes marketplace — TTL 24h (mémoire) • Refresh manuel',
+            title: 'CardTrader (indicative)',
+            caption: 'Marketplace medians — TTL 24h (memory) • Manual refresh',
             loading: _loadingCtRaw || (isSingle && _loadingCtGraded),
             error: _errCtRaw ?? (isSingle ? _errCtGraded : null),
             accent: ctAccent,

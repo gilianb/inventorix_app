@@ -92,8 +92,8 @@ class _StorageUploadTileState extends State<StorageUploadTile> {
     // Valide le nom AVANT upload
     if (!_isSafeFileName(originalName)) {
       widget.onError?.call(
-        "Le nom de fichier « $originalName » contient des espaces ou des caractères spéciaux. "
-        "Utilise uniquement lettres, chiffres, tirets (-), underscores (_) ou points (.).",
+        "The file name \"$originalName\" contains spaces or special characters. "
+        "Use only letters, numbers, dashes (-), underscores (_) or periods (.).",
       );
       return;
     }
@@ -118,7 +118,7 @@ class _StorageUploadTileState extends State<StorageUploadTile> {
       widget.onUrlChanged(publicUrl);
     } on StorageException catch (e) {
       // Erreurs storage précises -> remonte au parent via onError si fourni
-      final msg = 'Upload échoué: ${e.message} (code ${e.statusCode ?? '-'})';
+      final msg = 'Upload failed: ${e.message} (code ${e.statusCode ?? '-'})';
       if (widget.onError != null) {
         widget.onError!(msg);
       } else if (mounted) {
@@ -126,7 +126,7 @@ class _StorageUploadTileState extends State<StorageUploadTile> {
             .showSnackBar(SnackBar(content: Text(msg)));
       }
     } catch (e) {
-      final msg = 'Upload échoué: $e';
+      final msg = 'Upload failed: $e';
       if (widget.onError != null) {
         widget.onError!(msg);
       } else if (mounted) {
@@ -156,19 +156,19 @@ class _StorageUploadTileState extends State<StorageUploadTile> {
           FilledButton.icon(
             onPressed: _pickAndUpload,
             icon: const Iconify(Mdi.upload),
-            label: const Text('Uploader'),
+            label: const Text('Upload'),
           ),
           const SizedBox(width: 8),
           if (_url != null && _url!.isNotEmpty)
             OutlinedButton.icon(
               onPressed: _open,
               icon: Iconify(_isImage ? Mdi.photo_camera : Mdi.file_document),
-              label: Text(_isImage ? 'Voir photo' : 'Ouvrir document'),
+              label: Text(_isImage ? 'View photo' : 'Open document'),
             ),
           const Spacer(),
           if (_url != null && _url!.isNotEmpty)
             IconButton(
-              tooltip: 'Effacer',
+              tooltip: 'Clear',
               onPressed: () {
                 setState(() => _url = null);
                 widget.onUrlChanged(null);

@@ -828,7 +828,7 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
     final productUpdates = _buildProductUpdates();
 
     if (baseUpdates.isEmpty && productUpdates.isEmpty) {
-      _snack('Aucun changement détecté.');
+      _snack('No changes detected.');
       return;
     }
 
@@ -851,7 +851,7 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
       );
 
       if (ids.isEmpty) {
-        _snack("Aucun item trouvé à mettre à jour pour CETTE ligne.");
+        _snack('No items found to update for this row.');
         return;
       }
 
@@ -892,13 +892,13 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
       }
 
       if (mounted) {
-        _snack('Mise à jour effectuée (${ids.length} item(s)).');
+        _snack('Update applied (${ids.length} item(s)).');
         Navigator.pop(context, true);
       }
     } on PostgrestException catch (e) {
-      _snack('Erreur Supabase: ${e.message}');
+      _snack('Supabase error: ${e.message}');
     } catch (e) {
-      _snack('Erreur: $e');
+      _snack('Error: $e');
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -961,14 +961,14 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
           const SizedBox(width: 8),
           Expanded(
             child: Text(
-              'Modifier ${widget.availableQty} item(s) — statut "${widget.status}"',
+              'Edit ${widget.availableQty} item(s) — status "${widget.status}"',
               style: Theme.of(context).textTheme.titleMedium,
             ),
           ),
           IconButton(
             onPressed: () => Navigator.pop(context, false),
             icon: const Iconify(Mdi.close),
-            tooltip: 'Fermer',
+            tooltip: 'Close',
           ),
         ],
       ),
@@ -985,7 +985,7 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
             Expanded(
               child: InputDecorator(
                 decoration: const InputDecoration(
-                  labelText: 'Nombre d’items à modifier',
+                  labelText: 'Number of items to edit',
                 ),
                 child: Row(
                   children: [
@@ -1027,8 +1027,8 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
               child: SwitchListTile(
                 value: _oldestFirst,
                 onChanged: (v) => setState(() => _oldestFirst = v),
-                title: const Text('Sélection : plus anciens d’abord'),
-                subtitle: const Text('Désactive pour choisir les plus récents'),
+                title: const Text('Selection: oldest first'),
+                subtitle: const Text('Disable to choose newest first'),
               ),
             ),
           ]),
@@ -1041,7 +1041,7 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
                 'Product name',
                 TextField(
                   controller: _productNameCtrl,
-                  decoration: const InputDecoration(hintText: 'Nom du produit'),
+                  decoration: const InputDecoration(hintText: 'Product name'),
                 ),
               ),
             ),
@@ -1068,14 +1068,14 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
                   value: _language,
                   items: _stringItems(langs, extra: _language),
                   onChanged: (v) => setState(() => _language = v ?? 'EN'),
-                  decoration: const InputDecoration(hintText: 'Langue'),
+                  decoration: const InputDecoration(hintText: 'Language'),
                 ),
               ),
             ),
             const SizedBox(width: 12),
             Expanded(
               child: labelWithField(
-                'Jeu',
+                'Game',
                 DropdownButtonFormField<int>(
                   value: _gameId,
                   items: _games
@@ -1100,7 +1100,7 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
               items: _stringItems(kAllStatuses,
                   extra: _newStatus.isNotEmpty ? _newStatus : widget.status),
               onChanged: (v) => setState(() => _newStatus = v ?? widget.status),
-              decoration: const InputDecoration(hintText: 'Choisir un statut'),
+              decoration: const InputDecoration(hintText: 'Choose a status'),
             ),
           ),
           const SizedBox(height: 8),
@@ -1123,7 +1123,8 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
                 'Grading Note',
                 TextField(
                   controller: _gradingNoteCtrl,
-                  decoration: const InputDecoration(hintText: 'ex: Excellent'),
+                  decoration:
+                      const InputDecoration(hintText: 'e.g.: Excellent'),
                 ),
               ),
             ),
@@ -1131,7 +1132,7 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
             Expanded(
               child: labelWithField(
                 'Grading Fees (USD)',
-                numberField(_gradingFeesCtrl, 'ex: 25.00', decimal: true),
+                numberField(_gradingFeesCtrl, 'e.g.: 25.00', decimal: true),
               ),
             ),
             const SizedBox(width: 12),
@@ -1141,7 +1142,7 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
                 TextField(
                   controller: _itemLocationCtrl,
                   decoration:
-                      const InputDecoration(hintText: 'ex: Paris / Dubai'),
+                      const InputDecoration(hintText: 'e.g.: Paris / Dubai'),
                 ),
               ),
             ),
@@ -1154,7 +1155,7 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
               child: labelWithField(
                 'Unit cost (USD)',
                 _perm.canSeeUnitCosts
-                    ? numberField(_unitCostCtrl, 'ex: 95.00', decimal: true)
+                    ? numberField(_unitCostCtrl, 'e.g.: 95.00', decimal: true)
                     : const InputDecorator(
                         decoration: InputDecoration(),
                         child: Padding(
@@ -1168,14 +1169,14 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
             Expanded(
               child: labelWithField(
                 'Estimated price per unit (USD)',
-                numberField(_estimatedPriceCtrl, 'ex: 125.00', decimal: true),
+                numberField(_estimatedPriceCtrl, 'e.g.: 125.00', decimal: true),
               ),
             ),
             const SizedBox(width: 12),
             Expanded(
               child: labelWithField(
                 'Sale price',
-                numberField(_salePriceCtrl, 'ex: 145.00', decimal: true),
+                numberField(_salePriceCtrl, 'e.g.: 145.00', decimal: true),
               ),
             ),
           ]),
@@ -1208,7 +1209,7 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
                       ),
                     ),
                     IconButton(
-                      tooltip: 'Effacer la date',
+                      tooltip: 'Clear date',
                       onPressed: () => setState(() => _saleDate = null),
                       icon: const Iconify(Mdi.close),
                     ),
@@ -1223,7 +1224,7 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
                 TextField(
                   controller: _trackingCtrl,
                   decoration: const InputDecoration(
-                      hintText: 'ex: UPS 1Z... / DHL *****...'),
+                      hintText: 'e.g.: UPS 1Z... / DHL *****...'),
                 ),
               ),
             ),
@@ -1234,12 +1235,12 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
           Row(children: [
             Expanded(
               child: labelWithField(
-                'Endroit de vente (Channel ID)',
+                'Sale location (Channel ID)',
                 TextField(
                   controller: _channelIdCtrl,
                   keyboardType:
                       const TextInputType.numberWithOptions(decimal: false),
-                  decoration: const InputDecoration(hintText: 'ex: 12'),
+                  decoration: const InputDecoration(hintText: 'e.g.: 12'),
                 ),
               ),
             ),
@@ -1249,8 +1250,7 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
                 'Buyer company',
                 TextField(
                   controller: _buyerCompanyCtrl,
-                  decoration:
-                      const InputDecoration(hintText: 'Société acheteuse'),
+                  decoration: const InputDecoration(hintText: 'Buyer company'),
                 ),
               ),
             ),
@@ -1264,7 +1264,7 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
                 'Supplier name',
                 TextField(
                   controller: _supplierNameCtrl,
-                  decoration: const InputDecoration(hintText: 'Fournisseur'),
+                  decoration: const InputDecoration(hintText: 'Supplier'),
                 ),
               ),
             ),
@@ -1288,14 +1288,14 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
             Expanded(
               child: labelWithField(
                 'Shipping fees (USD)',
-                numberField(_shippingFeesCtrl, 'ex: 12.50', decimal: true),
+                numberField(_shippingFeesCtrl, 'e.g.: 12.50', decimal: true),
               ),
             ),
             const SizedBox(width: 12),
             Expanded(
               child: labelWithField(
                 'Commission fees (USD)',
-                numberField(_commissionFeesCtrl, 'ex: 5.90', decimal: true),
+                numberField(_commissionFeesCtrl, 'e.g.: 5.90', decimal: true),
               ),
             ),
           ]),
@@ -1321,7 +1321,7 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
                   minLines: 1,
                   maxLines: 3,
                   decoration: const InputDecoration(
-                      hintText: 'Nom / Adresse / Réf. commande...'),
+                      hintText: 'Name / Address / Order ref...'),
                 ),
               ),
             ),
@@ -1334,7 +1334,7 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
               child: labelWithField(
                 'Photo',
                 StorageUploadTile(
-                  label: 'Uploader / Voir photo',
+                  label: 'Upload / View photo',
                   bucket: 'item-photos',
                   objectPrefix: 'items/${widget.productId}',
                   initialUrl:
@@ -1351,7 +1351,7 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
               child: labelWithField(
                 'Document',
                 StorageUploadTile(
-                  label: 'Uploader / Ouvrir document',
+                  label: 'Upload / Open document',
                   bucket: 'item-docs',
                   objectPrefix: 'items/${widget.productId}',
                   initialUrl: _documentUrlCtrl.text.isEmpty
@@ -1375,7 +1375,7 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
         children: [
           TextButton(
             onPressed: _saving ? null : () => Navigator.pop(context, false),
-            child: const Text('Annuler'),
+            child: const Text('Cancel'),
           ),
           const Spacer(),
           FilledButton.icon(
@@ -1386,7 +1386,7 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
                     height: 18,
                     child: CircularProgressIndicator(strokeWidth: 2))
                 : const Iconify(Mdi.content_save),
-            label: const Text('Appliquer'),
+            label: const Text('Apply'),
           ),
         ],
       ),
@@ -1410,10 +1410,10 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
     showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Nom de fichier invalide'),
+        title: const Text('Invalid filename'),
         content: Text(
-          'Le nom du fichier ne doit pas contenir d’espaces ni de caractères spéciaux.\n\n'
-          'Détail : $message',
+          'File name must not contain spaces or special characters.\n\n'
+          'Details: $message',
         ),
         actions: [
           TextButton(

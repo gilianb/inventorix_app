@@ -6,16 +6,16 @@ import 'package:flutter/material.dart';
 import 'package:iconify_flutter/iconify_flutter.dart';
 import 'package:iconify_flutter/icons/mdi.dart';
 
-/// Mapping groupes -> libellé lisible
+/// Mapping group -> readable label
 const Map<String, String> kGroupPrettyLabel = {
-  'all': 'Tous',
-  'purchase': 'Achat',
-  'grading': 'Gradation',
-  'sale': 'Vente',
+  'all': 'All',
+  'purchase': 'Purchase',
+  'grading': 'Grading',
+  'sale': 'Sale',
   'collection': 'Collection',
 };
 
-/// Mise en forme simple d’un statut unitaire: "sent_to_grader" -> "Sent to grader"
+/// Simple formatting of a single status: "sent_to_grader" -> "Sent to grader"
 String prettyStatus(String raw) {
   if (raw.isEmpty) return raw;
   final s = raw.replaceAll('_', ' ');
@@ -54,7 +54,7 @@ class SearchAndGameFilter extends StatelessWidget {
               controller: searchCtrl,
               onSubmitted: (_) => onSearch(),
               decoration: InputDecoration(
-                hintText: 'Rechercher (nom, langue, jeu, fournisseur)',
+                hintText: 'Search (name, language, game, vendor)',
                 prefixIcon: const Iconify(Mdi.magnify, color: Colors.grey),
                 suffixIcon: IconButton(
                   icon: const Iconify(Mdi.close, color: Colors.grey),
@@ -69,10 +69,9 @@ class SearchAndGameFilter extends StatelessWidget {
           if (hasGames)
             DropdownButton<String>(
               value: selectedGame,
-              hint: const Text('Filtrer par jeu'),
+              hint: const Text('Filter by game'),
               items: [
-                const DropdownMenuItem(
-                    value: null, child: Text('Tous les jeux')),
+                const DropdownMenuItem(value: null, child: Text('All games')),
                 ...games.map((g) => DropdownMenuItem(value: g, child: Text(g))),
               ],
               onChanged: onGameChanged,
@@ -114,17 +113,17 @@ class TypeTabs extends StatelessWidget {
             borderWidth: 0,
             borderColor: Colors.transparent,
             selectedBorderColor: Colors.transparent,
-            color: cs.primary, // texte non sélectionné
-            selectedColor: cs.onPrimary, // texte sélectionné
-            fillColor: cs.primary, // fond sélectionné
+            color: cs.primary, // unselected text
+            selectedColor: cs.onPrimary, // selected text
+            fillColor: cs.primary, // selected background
             splashColor: cs.primary.withOpacity(.15),
             hoverColor: cs.primary.withOpacity(.08),
             constraints: const BoxConstraints(
-              minHeight: 48, // plus grand
-              minWidth: 140, // plus large
+              minHeight: 48, // taller
+              minWidth: 140, // wider
             ),
             textStyle: Theme.of(context).textTheme.titleMedium?.copyWith(
-                  fontWeight: FontWeight.w800, // bien visible
+                  fontWeight: FontWeight.w800, // bold
                   letterSpacing: .3,
                 ),
             children: const [
@@ -160,7 +159,7 @@ class ActiveStatusFilterBar extends StatelessWidget {
   Widget build(BuildContext context) {
     if (statusFilter == null) return const SizedBox.shrink();
 
-    // Joli libellé : groupe → label FR ; sinon statut "human readable"
+    // Nice label: group -> EN label ; otherwise human readable status
     final raw = statusFilter!;
     final label = kGroupPrettyLabel[raw] ?? prettyStatus(raw);
 
@@ -171,7 +170,7 @@ class ActiveStatusFilterBar extends StatelessWidget {
         children: [
           Chip(
             avatar: const Icon(Icons.filter_alt, size: 18),
-            label: Text('Filtre actif : $label  ($linesCount lignes)'),
+            label: Text('Active filter: $label  ($linesCount rows)'),
             onDeleted: onClear,
           ),
         ],

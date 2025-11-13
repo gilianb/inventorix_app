@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-/*petit bandeau informatif (ex: “Document disponible — appuyez pour ouvrir”).*/
+/* small informational banner (e.g., “Document available — tap to open”). */
 
 class InfoBanner extends StatelessWidget {
   const InfoBanner({

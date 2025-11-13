@@ -68,7 +68,7 @@ class _PublicLinePageState extends State<PublicLinePage> {
       if ((org == null || org.isEmpty) ||
           (sig == null || sig.isEmpty) ||
           (st == null || st.isEmpty)) {
-        throw 'Lien invalide (org/g/s manquants).';
+        throw 'Invalid link (missing org/g/s).';
       }
 
       // Tente la vue agrégée, sinon fallback item+product
@@ -99,7 +99,7 @@ class _PublicLinePageState extends State<PublicLinePage> {
             .limit(1)
             .maybeSingle();
 
-        if (item == null) throw 'Ressource introuvable (404).';
+        if (item == null) throw 'Resource not found (404).';
 
         final pid = (item['product_id'] as num?)?.toInt();
         Map<String, dynamic>? product;
@@ -151,7 +151,7 @@ class _PublicLinePageState extends State<PublicLinePage> {
     return Scaffold(
       backgroundColor: theme.colorScheme.surface,
       appBar: AppBar(
-        title: const Text('Inventorix — Fiche publique'),
+        title: const Text('Inventorix — Public sheet'),
         centerTitle: true,
       ),
       body: _loading
@@ -305,7 +305,7 @@ class _PublicContent extends StatelessWidget {
             children: [
               const SizedBox(height: 22),
               Text(
-                'Historique des prix',
+                'Price history',
                 style: theme.textTheme.titleMedium?.copyWith(
                   fontWeight: FontWeight.w800,
                 ),
@@ -424,7 +424,7 @@ class _PricePanel extends StatelessWidget {
                       size: 16, color: theme.colorScheme.primary),
                   const SizedBox(width: 6),
                   Text(
-                    'Prix de vente estimé',
+                    'Estimated sale price',
                     style: theme.textTheme.labelLarge?.copyWith(
                       color: theme.colorScheme.primary,
                       fontWeight: FontWeight.w700,
@@ -455,7 +455,7 @@ class _PricePanel extends StatelessWidget {
 
             // Sous-texte
             Text(
-              'Valeur indicative — données internes',
+              'Indicative value — internal data',
               style: theme.textTheme.bodySmall?.copyWith(
                 color: theme.colorScheme.onSurface.withOpacity(0.6),
                 letterSpacing: 0.2,

@@ -36,7 +36,7 @@ class PurchaseSection extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return SectionCard(
-      title: 'Achat (USD)',
+      title: 'Purchase (USD)',
       child: Column(
         children: [
           supplierField,
@@ -50,11 +50,11 @@ class PurchaseSection extends StatelessWidget {
                 keyboardType:
                     const TextInputType.numberWithOptions(decimal: true),
                 decoration:
-                    const InputDecoration(labelText: 'Prix total (USD) *'),
+                    const InputDecoration(labelText: 'Total price (USD) *'),
                 validator: (v) =>
                     (double.tryParse((v ?? '').replaceAll(',', '.')) ?? -1) >= 0
                         ? null
-                        : 'Montant invalide',
+                        : 'Invalid amount',
               ),
             ),
             const SizedBox(width: 12),
@@ -62,9 +62,9 @@ class PurchaseSection extends StatelessWidget {
               child: TextFormField(
                 controller: qtyCtrl,
                 keyboardType: TextInputType.number,
-                decoration: const InputDecoration(labelText: 'Quantité *'),
+                decoration: const InputDecoration(labelText: 'Quantity *'),
                 validator: (v) =>
-                    (int.tryParse(v ?? '') ?? 0) > 0 ? null : 'Qté > 0',
+                    (int.tryParse(v ?? '') ?? 0) > 0 ? null : 'Qty > 0',
               ),
             ),
           ]),
@@ -79,7 +79,7 @@ class PurchaseSection extends StatelessWidget {
                     .map((s) => DropdownMenuItem(value: s, child: Text(s)))
                     .toList(),
                 onChanged: onStatusChanged,
-                decoration: const InputDecoration(labelText: 'Statut initial'),
+                decoration: const InputDecoration(labelText: 'Initial Status'),
               ),
             ),
           ]),
@@ -91,13 +91,13 @@ class PurchaseSection extends StatelessWidget {
                 keyboardType:
                     const TextInputType.numberWithOptions(decimal: true),
                 decoration:
-                    const InputDecoration(labelText: 'Frais (USD) — optionnel'),
+                    const InputDecoration(labelText: 'Fees (USD) — optional'),
               ),
             ),
             const SizedBox(width: 12),
             const Expanded(
               child: InputDecorator(
-                decoration: InputDecoration(labelText: 'Devise'),
+                decoration: InputDecoration(labelText: 'Currency'),
                 child: Padding(
                   padding: EdgeInsets.symmetric(vertical: 12),
                   child: Text('USD'),
@@ -110,7 +110,7 @@ class PurchaseSection extends StatelessWidget {
             controller: estimatedPriceCtrl,
             keyboardType: const TextInputType.numberWithOptions(decimal: true),
             decoration: const InputDecoration(
-                labelText: 'Prix de vente estimé par unité (USD)'),
+                labelText: 'Estimated sale price per unit (USD)'),
           ),
         ],
       ),

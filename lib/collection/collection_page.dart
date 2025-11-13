@@ -77,7 +77,7 @@ class _CollectionPageState extends State<CollectionPage> {
       _groups = await _fetchGroupsFromView();
       _kpiItems = await _fetchCollectionItemsForKpis();
     } catch (e) {
-      _snack('Erreur chargement collection : $e');
+      _snack('Error loading vault: $e');
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -145,7 +145,9 @@ class _CollectionPageState extends State<CollectionPage> {
 
   /// Lit la vue stricte v_item_groups (1 ligne = 1 group_sig) en ne gardant que status='collection'
   /// + hydratation game_label/game_code depuis la table games
+  /// + enrichissement "market" pour le mode Vault.
   Future<List<Map<String, dynamic>>> _fetchGroupsFromView() async {
+    // NOTE: on inclut qty_total car la cellule "Prix / u." l'utilise.
     const cols = '''
       group_sig, org_id, type, status,
       product_id, product_name, game_id, language,
@@ -236,7 +238,100 @@ class _CollectionPageState extends State<CollectionPage> {
       rows = rows.where((r) => (r['game_label'] ?? '') == _gameFilter).toList();
     }
 
+    // ===== Enrichissement "market": price per grade + delta % à partir de price_history =====
+    rows = await _enrichWithMarket(rows);
+
     return rows;
+  }
+
+  /// Récupère les prix de marché de `product` + calcule un Δ% depuis `price_history` (raw / psa10)
+  Future<List<Map<String, dynamic>>> _enrichWithMarket(
+      List<Map<String, dynamic>> rows) async {
+    if (rows.isEmpty) return rows;
+
+    final productIds = rows
+        .map((r) => r['product_id'])
+        .whereType<int>()
+        .toSet()
+        .toList(growable: false);
+
+    // 1) prix actuels depuis product (on n'utilise PAS price_history pour la valeur affichée)
+    final List<dynamic> prodRaw = await _sb
+        .from('product')
+        .select('id, price_raw, price_graded')
+        .inFilter('id', productIds);
+
+    final Map<int, Map<String, dynamic>> productById = {
+      for (final p in prodRaw)
+        (p['id'] as int): Map<String, dynamic>.from(p as Map)
+    };
+
+    // 2) deux derniers points price_history par produit & grade (raw | psa10)
+    final List<dynamic> histRaw = await _sb
+        .from('price_history')
+        .select('product_id, grade, grade_detail, price, fetched_at')
+        .inFilter('product_id', productIds)
+        .or('grade.eq.raw,and(grade.eq.psa,grade_detail.eq.10)')
+        .order('fetched_at', ascending: false)
+        .limit(20000);
+
+    final Map<int, Map<String, List<Map<String, dynamic>>>> histByProd = {};
+    for (final h in histRaw) {
+      final m = Map<String, dynamic>.from(h as Map);
+      final int pid = m['product_id'] as int;
+      final String grade = (m['grade'] ?? '').toString();
+      final String gdetail = (m['grade_detail'] ?? '').toString();
+      final String bucket = (grade == 'psa' && gdetail == '10')
+          ? 'psa10'
+          : (grade == 'raw' ? 'raw' : '');
+      if (bucket.isEmpty) continue;
+
+      histByProd.putIfAbsent(pid, () => {'raw': [], 'psa10': []});
+      final list = histByProd[pid]![bucket]!;
+      if (list.length < 2) list.add(m); // on garde seulement 2 derniers
+    }
+
+    num? pct(num? last, num? prev) {
+      if (last == null || prev == null || prev == 0) return null;
+      return ((last - prev) / prev) * 100.0;
+    }
+
+    num? lastOf(List<Map<String, dynamic>> xs) =>
+        (xs.isNotEmpty ? (xs[0]['price'] as num?) : null);
+    num? prevOf(List<Map<String, dynamic>> xs) =>
+        (xs.length >= 2 ? (xs[1]['price'] as num?) : null);
+
+    // 3) attache champs market_* à chaque row
+    return rows.map((r) {
+      final pid = r['product_id'] as int?;
+      final graded = () {
+        final gn = (r['grading_note'] ?? '').toString().trim();
+        return gn.isNotEmpty;
+      }();
+
+      final p = (pid != null) ? productById[pid] : null;
+      final rawPrice = (p?['price_raw'] as num?);
+      final psa10Price = (p?['price_graded'] as num?);
+
+      final marketPrice = graded ? psa10Price : rawPrice;
+      final kind = graded ? 'PSA10' : 'Raw';
+
+      num? marketDelta;
+      if (pid != null) {
+        final buckets = histByProd[pid];
+        if (buckets != null) {
+          final xs = graded ? buckets['psa10']! : buckets['raw']!;
+          marketDelta = pct(lastOf(xs), prevOf(xs));
+        }
+      }
+
+      return {
+        ...r,
+        'market_price': marketPrice,
+        'market_kind': kind, // Raw | PSA10
+        'market_change_pct': marketDelta, // peut être null
+      };
+    }).toList(growable: false);
   }
 
   /// Items bruts de la collection (pour KPI FinanceOverview)
@@ -298,7 +393,7 @@ class _CollectionPageState extends State<CollectionPage> {
     final qty = (line['qty_status'] as int?) ?? 0;
 
     if (productId == null || status.isEmpty || qty <= 0) {
-      _snack('Impossible d’éditer: données manquantes.');
+      _snack('Cannot edit: missing data.');
       return;
     }
 
@@ -316,23 +411,22 @@ class _CollectionPageState extends State<CollectionPage> {
   }
 
   // ======= SUPPRESSION D'UNE LIGNE (collection) =======
-
   Future<bool> _confirmDeleteDialog(Map<String, dynamic> line) async {
     final name = (line['product_name'] ?? '').toString();
     final status = (line['status'] ?? '').toString();
     return await showDialog<bool>(
           context: context,
           builder: (ctx) => AlertDialog(
-            title: const Text('Supprimer cette ligne de la collection ?'),
+            title: const Text('Delete this vault line?'),
             content: Text(
-              'Produit : $name\nStatut : $status\n\n'
-              'Cette action supprimera définitivement tous les items et mouvements '
-              'associés STRICTEMENT à cette ligne de la collection.',
+              'Product: $name\nStatus: $status\n\n'
+              'This action will permanently delete all items and movements '
+              'that belong STRICTLY to this line.',
             ),
             actions: [
               TextButton(
                 onPressed: () => Navigator.pop(ctx, false),
-                child: const Text('Annuler'),
+                child: const Text('Cancel'),
               ),
               FilledButton(
                 onPressed: () => Navigator.pop(ctx, true),
@@ -340,7 +434,7 @@ class _CollectionPageState extends State<CollectionPage> {
                   backgroundColor: Colors.redAccent,
                   foregroundColor: Colors.white,
                 ),
-                child: const Text('Supprimer'),
+                child: const Text('Delete'),
               ),
             ],
           ),
@@ -474,7 +568,7 @@ class _CollectionPageState extends State<CollectionPage> {
     try {
       final ids = await _collectItemIdsForLine(line);
       if (ids.isEmpty) {
-        _snack('Aucun item trouvé pour cette ligne de collection.');
+        _snack('No items found for this collection line.');
         return;
       }
 
@@ -492,12 +586,12 @@ class _CollectionPageState extends State<CollectionPage> {
       await moveDel;
       await itemDel;
 
-      _snack('Ligne supprimée (${ids.length} item(s) + mouvements).');
+      _snack('Line deleted (${ids.length} item(s) + movements).');
       _refresh();
     } on PostgrestException catch (e) {
-      _snack('Erreur Supabase: ${e.message}');
+      _snack('Supabase error: ${e.message}');
     } catch (e) {
-      _snack('Erreur: $e');
+      _snack('Error: $e');
     }
   }
 
@@ -584,7 +678,7 @@ class _CollectionPageState extends State<CollectionPage> {
     try {
       final ids = await _collectItemIdsForLine(line);
       if (ids.isEmpty) {
-        _snack('Aucun item trouvé pour cette ligne.');
+        _snack('No items found for this line.');
         return;
       }
 
@@ -598,12 +692,12 @@ class _CollectionPageState extends State<CollectionPage> {
         changes: {
           field: {'old': oldValue, 'new': parsed}
         },
-        reason: 'inline_edit_collection',
+        reason: 'inline_edit_vault',
       );
 
       // ✅ Patch local optimiste (groupes + KPI)
       setState(() {
-        // Patch KPI items (si chargés)
+        // Patch KPI items
         if (_kpiItems.isNotEmpty) {
           final byId = {for (final it in _kpiItems) it['id']: it};
           for (final id in ids) {
@@ -613,17 +707,15 @@ class _CollectionPageState extends State<CollectionPage> {
               if (field == 'status') it['status'] = parsed;
             }
           }
-          // Si statut ≠ collection, retirer ces items de la base KPI locale
           if (field == 'status' && parsed != 'collection') {
             _kpiItems.removeWhere((it) => ids.contains(it['id']));
           }
         }
 
-        // Patch ligne de tableau (1 row = 1 group_sig)
+        // Patch ligne de tableau
         final gi = _findGroupIndex(line);
         if (gi != null) {
           if (field == 'status' && parsed != 'collection') {
-            // La ligne sort de la vue → suppression immédiate
             _groups = List.of(_groups)..removeAt(gi);
           } else {
             final g = Map<String, dynamic>.from(_groups[gi]);
@@ -634,11 +726,11 @@ class _CollectionPageState extends State<CollectionPage> {
         }
       });
 
-      _snack('Modifié (${ids.length} item(s)).');
+      _snack('Modified (${ids.length} item(s)).');
     } on PostgrestException catch (e) {
-      _snack('Erreur Supabase: ${e.message}');
+      _snack('Supabase error: ${e.message}');
     } catch (e) {
-      _snack('Erreur: $e');
+      _snack('Error: $e');
     }
   }
 
@@ -729,12 +821,12 @@ class _CollectionPageState extends State<CollectionPage> {
                       currency: lines.isNotEmpty
                           ? (lines.first['currency']?.toString() ?? 'USD')
                           : 'USD',
-                      titleInvested: 'Investi (collection)',
-                      titleEstimated: 'Valeur estimée',
+                      titleInvested: 'Invested (vault)',
+                      titleEstimated: 'Estimated value',
                       titleSold: 'Total sold',
-                      subtitleInvested: 'Σ coûts (items non vendus)',
-                      subtitleEstimated: 'Σ estimated_price (non vendus)',
-                      subtitleSold: 'Σ sale_price (vendus)',
+                      subtitleInvested: 'Σ costs (unsold items)',
+                      subtitleEstimated: 'Σ estimated_price (unsold items)',
+                      subtitleSold: 'Σ sale_price (sold items)',
                     ),
                   ),
 
@@ -742,7 +834,7 @@ class _CollectionPageState extends State<CollectionPage> {
 
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 12),
-                  child: Text('Collection — Lignes (${lines.length})',
+                  child: Text('The vault — Items (${lines.length})',
                       style: Theme.of(context)
                           .textTheme
                           .titleMedium
@@ -751,10 +843,16 @@ class _CollectionPageState extends State<CollectionPage> {
                 const SizedBox(height: 4),
 
                 InventoryTableByStatus(
+                  mode:
+                      InventoryTableMode.vault, // 👈 only the requested columns
                   lines: lines,
                   onOpen: _openDetails,
                   onEdit: _openEdit,
                   onDelete: _deleteLine,
+                  showDelete: true,
+                  showUnitCosts: true, // keep "Prix / u."
+                  showRevenue: false, // hidden in vault
+                  showEstimated: false, // hidden in vault
                   onInlineUpdate: _applyInlineUpdate, // 👈 inline + log + patch
                 ),
 
@@ -765,7 +863,7 @@ class _CollectionPageState extends State<CollectionPage> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text(' Collection'),
+        title: const Text('The vault'),
         flexibleSpace: Container(
           decoration: const BoxDecoration(
             gradient: LinearGradient(
@@ -783,7 +881,7 @@ class _CollectionPageState extends State<CollectionPage> {
         onPressed: () async {
           final orgId = widget.orgId;
           if (orgId == null || orgId.isEmpty) {
-            _snack('Aucune organisation sélectionnée.');
+            _snack('No organization selected.');
             return;
           }
           final changed = await Navigator.of(context).push<bool>(
@@ -792,7 +890,7 @@ class _CollectionPageState extends State<CollectionPage> {
           if (changed == true) _refresh();
         },
         icon: const Iconify(Mdi.plus, color: Colors.white),
-        label: const Text('Nouveau stock'),
+        label: const Text('New stock'),
       ),
     );
   }

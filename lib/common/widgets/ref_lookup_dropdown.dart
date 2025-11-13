@@ -8,12 +8,11 @@ class RefLookupDropdown extends StatefulWidget {
     required this.label,
     this.initialId,
     this.onChanged,
-    this.bindController, // si tu veux refléter le libellé dans un TextEditingController
-    this.nullable = true, // autorise "aucun"
+    this.bindController, // if you want to reflect the label into a TextEditingController
+    this.nullable = true, // allow "none"
     this.addDialogTitle,
     this.enabled = true,
-    this.whereActiveOnly =
-        true, // ne montrer que active = true si la colonne existe
+    this.whereActiveOnly = true, // show only active = true if the column exists
   });
 
   final String tableName;
@@ -53,10 +52,10 @@ class _RefLookupDropdownState extends State<RefLookupDropdown> {
 
       if (widget.whereActiveOnly) {
         try {
-          // ✅ filtre d'abord, puis order
+          // ✅ filter first, then order
           data = await base.eq('active', true).order('name');
         } on PostgrestException {
-          // Si la colonne "active" n'existe pas, on retombe sans filtre
+          // If the "active" column doesn't exist, fall back without filter
           data = await base.order('name');
         }
       } else {
@@ -80,19 +79,19 @@ class _RefLookupDropdownState extends State<RefLookupDropdown> {
       builder: (ctx) {
         final c = TextEditingController();
         return AlertDialog(
-          title: Text(widget.addDialogTitle ?? 'Ajouter un choix'),
+          title: Text(widget.addDialogTitle ?? 'Add choice'),
           content: TextField(
             controller: c,
-            decoration: const InputDecoration(labelText: 'Nom *'),
+            decoration: const InputDecoration(labelText: 'Name *'),
             autofocus: true,
           ),
           actions: [
             TextButton(
                 onPressed: () => Navigator.pop(ctx, null),
-                child: const Text('Annuler')),
+                child: const Text('Cancel')),
             FilledButton(
                 onPressed: () => Navigator.pop(ctx, c.text.trim()),
-                child: const Text('Ajouter')),
+                child: const Text('Add')),
           ],
         );
       },
@@ -106,12 +105,12 @@ class _RefLookupDropdownState extends State<RefLookupDropdown> {
           .from(widget.tableName)
           .insert({
             'name': name,
-            // 'active': true, // si la table a la colonne active, PostgREST l'ignorera sinon
+            // 'active': true, // if the table has the active column, PostgREST will ignore it otherwise
           })
           .select('id, name')
           .single();
 
-      // reload + sélectionner la nouvelle valeur
+      // reload + select the new value
       await _load();
       final newId = inserted['id'] as int;
       setState(() => _selectedId = newId);
@@ -122,7 +121,7 @@ class _RefLookupDropdownState extends State<RefLookupDropdown> {
       if (context.mounted) {
         // ignore: use_build_context_synchronously
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Erreur ajout: $e')),
+          SnackBar(content: Text('Error adding: $e')),
         );
       }
     }
@@ -152,10 +151,10 @@ class _RefLookupDropdownState extends State<RefLookupDropdown> {
       );
     }));
 
-    // Item spécial "ajouter…": on met une valeur sentinelle
+    // Special "add…" item: use a sentinel value
     const addSentinel = -1;
     items.add(const DropdownMenuItem<int?>(
-        value: addSentinel, child: Text('➕ Ajouter…')));
+        value: addSentinel, child: Text('➕ Add…')));
 
     return DropdownButtonFormField<int?>(
       initialValue: _selectedId,
@@ -163,7 +162,7 @@ class _RefLookupDropdownState extends State<RefLookupDropdown> {
       onChanged: widget.enabled
           ? (v) async {
               if (v == addSentinel) {
-                // ouvrir le dialog d'ajout
+                // open the add dialog
                 await _onAddPressed();
                 return;
               }

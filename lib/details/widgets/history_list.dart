@@ -2,13 +2,13 @@
 
 import 'package:flutter/material.dart';
 
-/// Liste chronologique des évènements (v_item_history ou mouvement legacy).
-/// Affiche l’email de l’auteur de l’événement (pas l’utilisateur courant).
+/// Chronological list of events (v_item_history or legacy movement).
+/// Displays the email of the event author (not the current user).
 class HistoryList extends StatelessWidget {
   const HistoryList({super.key, required this.movements});
   final List<Map<String, dynamic>> movements;
 
-  // ===== Helpers communs =====
+  // ===== Common helpers =====
   String _txt(dynamic v) =>
       (v == null || (v is String && v.toString().trim().isEmpty))
           ? '—'
@@ -40,12 +40,12 @@ class HistoryList extends StatelessWidget {
   bool _isUnified(Map<String, dynamic> e) =>
       e.containsKey('kind') && e.containsKey('code');
 
-  // ===== Auteur à afficher (email prioritaire) =====
+  // ===== Actor label (email priority) =====
   String _actorLabel(Map<String, dynamic> e) {
     final payload = Map<String, dynamic>.from(e['payload'] ?? const {});
     String? candidate;
 
-    // Priorité aux emails s’ils existent dans différentes formes
+    // Prefer emails if present in different forms
     for (final key in const ['actor_email', 'email']) {
       final v = e[key];
       if (v is String && v.trim().isNotEmpty) {
@@ -63,7 +63,7 @@ class HistoryList extends StatelessWidget {
       }
     }
     if (candidate == null) {
-      // parfois l’auteur est un objet { email: ... }
+      // sometimes the actor is an object { email: ... }
       final actorObj = e['actor'];
       if (actorObj is Map) {
         final v = actorObj['email'];
@@ -73,57 +73,57 @@ class HistoryList extends StatelessWidget {
       }
     }
 
-    // Fallbacks: nom puis uid réduit
+    // Fallbacks: name then shortened uid
     if (candidate != null) return candidate;
     final actorName = (e['actor_name'] ?? '').toString().trim();
     if (actorName.isNotEmpty) return actorName;
     final uid = _shortUid(e['actor_uid']?.toString());
-    return uid == '—' ? 'inconnu' : uid;
+    return uid == '—' ? 'unknown' : uid;
   }
 
   // ===== Mappings =====
   static const Map<String, String> _fieldLabels = {
     // item fields
-    'status': 'Statut',
-    'sale_price': 'Prix de vente',
-    'sale_date': 'Date de vente',
-    'estimated_price': 'Prix estimé',
+    'status': 'Status',
+    'sale_price': 'Sale price',
+    'sale_date': 'Sale date',
+    'estimated_price': 'Estimated price',
     'tracking': 'Tracking',
-    'buyer_company': 'Acheteur',
-    'channel_id': 'Canal',
-    'item_location': 'Emplacement',
+    'buyer_company': 'Buyer',
+    'channel_id': 'Channel',
+    'item_location': 'Location',
     'notes': 'Notes',
-    'unit_cost': 'Prix unitaire',
-    'unit_fees': 'Frais unitaires',
-    'shipping_fees': 'Frais d’expédition',
-    'commission_fees': 'Frais de commission',
-    'grading_fees': 'Frais de grading',
+    'unit_cost': 'Unit price',
+    'unit_fees': 'Unit fees',
+    'shipping_fees': 'Shipping fees',
+    'commission_fees': 'Commission fees',
+    'grading_fees': 'Grading fees',
     'grade_id': 'Grade ID',
-    'grading_note': 'Note de grading',
+    'grading_note': 'Grading note',
     'photo_url': 'Photo',
     'document_url': 'Document',
-    'payment_type': 'Type de paiement',
-    'buyer_infos': 'Infos acheteur',
-    'language': 'Langue',
-    'game_id': 'Jeu',
+    'payment_type': 'Payment type',
+    'buyer_infos': 'Buyer info',
+    'language': 'Language',
+    'game_id': 'Game',
     // product-mapped
-    'product_name': 'Nom du produit',
+    'product_name': 'Product name',
     'type': 'Type',
   };
 
   static const Map<String, String> _movementLabels = {
-    'purchase': 'Achat',
-    'receive': 'Réception',
-    'ship_to_grader': 'Envoi au grader',
-    'receive_by_grader': 'Reçu par grader',
-    'graded': 'Grading',
-    'list_for_sale': 'Mise en vente',
-    'unlist': 'Retrait de vente',
-    'sell': 'Vente',
-    'ship_sale': 'Expédition',
-    'finalize_sale': 'Finalisation',
-    'adjustment': 'Ajustement',
-    'price_note': 'Note de prix',
+    'purchase': 'Purchase',
+    'receive': 'Receive',
+    'ship_to_grader': 'Send to grader',
+    'receive_by_grader': 'Received by grader',
+    'graded': 'Graded',
+    'list_for_sale': 'List for sale',
+    'unlist': 'Unlist',
+    'sell': 'Sale',
+    'ship_sale': 'Ship sale',
+    'finalize_sale': 'Finalize',
+    'adjustment': 'Adjustment',
+    'price_note': 'Price note',
   };
 
   IconData _iconUnified(Map<String, dynamic> e) {
@@ -224,7 +224,7 @@ class HistoryList extends StatelessWidget {
         child: Icon(Icons.arrow_forward, size: 16),
       );
 
-  // ---- Rendu d'un événement batch_edit ----
+  // ---- Render a batch_edit event ----
   Widget _buildBatchTile(BuildContext context, Map<String, dynamic> e) {
     final cs = Theme.of(context).colorScheme;
     final ts = _fmtTs(e['ts']);
@@ -250,9 +250,9 @@ class HistoryList extends StatelessWidget {
                 Text(label,
                     style: const TextStyle(fontWeight: FontWeight.w600)),
                 const SizedBox(height: 2),
-                _kv('Avant', before),
+                _kv('Before', before),
                 const SizedBox(height: 2),
-                _kv('Après', after),
+                _kv('After', after),
               ],
             );
           }
@@ -306,7 +306,7 @@ class HistoryList extends StatelessWidget {
                 const SizedBox(height: 6),
                 ...rows,
                 const SizedBox(height: 6),
-                Text('par $actor',
+                Text('by $actor',
                     style: TextStyle(color: cs.onSurfaceVariant, fontSize: 12)),
               ],
             ),
@@ -316,7 +316,7 @@ class HistoryList extends StatelessWidget {
     );
   }
 
-  // ---- Rendu d'un événement unifié (movement / change champ) ----
+  // ---- Render a unified event (movement / field change) ----
   Widget _buildUnifiedTile(BuildContext context, Map<String, dynamic> e) {
     final cs = Theme.of(context).colorScheme;
     final icon = _iconUnified(e);
@@ -325,7 +325,7 @@ class HistoryList extends StatelessWidget {
     final payload = Map<String, dynamic>.from(e['payload'] ?? {});
     final actor = _actorLabel(e);
 
-    // Mouvement (métier)
+    // Business movement
     if ((e['kind'] ?? '') == 'movement') {
       final from = _txt(payload['from_status']);
       final to = _txt(payload['to_status']);
@@ -368,21 +368,22 @@ class HistoryList extends StatelessWidget {
                     children: [
                       if (from != '—' || to != '—')
                         Row(mainAxisSize: MainAxisSize.min, children: [
-                          Text('Statut: $from'),
+                          Text('Status: $from'),
                           _arrow(),
                           Text(to),
                         ]),
                       if (qty != '—')
-                        _tag(context, 'Qté: $qty',
+                        _tag(context, 'Qty: $qty',
                             icon: Icons.format_list_numbered),
                       if (up != '—')
-                        _tag(context, 'PU: $up ${cur != "—" ? cur : ""}'.trim(),
+                        _tag(context,
+                            'Unit price: $up ${cur != "—" ? cur : ""}'.trim(),
                             icon: Icons.price_change),
                       if (note != '—') Text('Note: $note'),
                     ],
                   ),
                   const SizedBox(height: 6),
-                  Text('par $actor',
+                  Text('by $actor',
                       style:
                           TextStyle(color: cs.onSurfaceVariant, fontSize: 12)),
                 ],
@@ -393,7 +394,7 @@ class HistoryList extends StatelessWidget {
       );
     }
 
-    // Changement de champ (audit)
+    // Field change (audit)
     final oldV = payload['old'];
     final newV = payload['new'];
     final before = (oldV is Map || oldV is List)
@@ -437,28 +438,28 @@ class HistoryList extends StatelessWidget {
                     return Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        _kv('Avant', before),
+                        _kv('Before', before),
                         const SizedBox(height: 2),
-                        _kv('Après', after),
+                        _kv('After', after),
                       ],
                     );
                   }
                   return Row(
                     children: [
-                      Expanded(child: _kv('Avant', before)),
+                      Expanded(child: _kv('Before', before)),
                       const SizedBox(width: 8),
                       const Icon(Icons.arrow_forward, size: 16),
                       const SizedBox(width: 8),
-                      Expanded(child: _kv('Après', after)),
+                      Expanded(child: _kv('After', after)),
                     ],
                   );
                 }),
                 if (reason.isNotEmpty) ...[
                   const SizedBox(height: 4),
-                  Text('Motif: $reason'),
+                  Text('Reason: $reason'),
                 ],
                 const SizedBox(height: 6),
-                Text('par $actor',
+                Text('by $actor',
                     style: TextStyle(color: cs.onSurfaceVariant, fontSize: 12)),
               ],
             ),
@@ -468,7 +469,7 @@ class HistoryList extends StatelessWidget {
     );
   }
 
-  // ---- Ancien format (compat) ----
+  // ---- Legacy format (compat) ----
   IconData _iconLegacy(String mtype) {
     switch (mtype) {
       case 'purchase':
@@ -545,15 +546,16 @@ class HistoryList extends StatelessWidget {
                   children: [
                     if (from != '—' || to != '—')
                       Row(mainAxisSize: MainAxisSize.min, children: [
-                        Text('Statut: $from'),
+                        Text('Status: $from'),
                         _arrow(),
                         Text(to),
                       ]),
                     if (qty != '—')
-                      _tag(context, 'Qté: $qty',
+                      _tag(context, 'Qty: $qty',
                           icon: Icons.format_list_numbered),
                     if (up != '—')
-                      _tag(context, 'PU: $up ${cur != "—" ? cur : ""}'.trim(),
+                      _tag(context,
+                          'Unit price: $up ${cur != "—" ? cur : ""}'.trim(),
                           icon: Icons.price_change),
                     if (note != '—') Text('Note: $note'),
                   ],
@@ -571,8 +573,8 @@ class HistoryList extends StatelessWidget {
     if (movements.isEmpty) {
       return Padding(
         padding: const EdgeInsets.all(12),
-        child: Text('Aucun historique.',
-            style: Theme.of(context).textTheme.bodyMedium),
+        child:
+            Text('No history.', style: Theme.of(context).textTheme.bodyMedium),
       );
     }
 
@@ -580,7 +582,7 @@ class HistoryList extends StatelessWidget {
         (e['kind'] == 'edit' && e['code'] == 'batch_edit');
     bool isMovement(Map<String, dynamic> e) => (e['kind'] == 'movement');
 
-    // S’il y a au moins une édition groupée, on masque toutes les petites lignes d’edit
+    // If there's at least one batch edit, hide all small edit lines
     final hasAnyBatch = movements.any(isBatch);
 
     final filtered = hasAnyBatch
@@ -596,7 +598,7 @@ class HistoryList extends StatelessWidget {
                   ? _buildUnifiedTile(context, filtered[i])
                   : _buildLegacyTile(context, filtered[i])),
           if (i != filtered.length - 1)
-            const Divider(height: 8, indent: 44), // aligné après l’icône
+            const Divider(height: 8, indent: 44), // aligned after the icon
         ]
       ],
     );

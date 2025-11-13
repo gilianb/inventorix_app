@@ -82,7 +82,7 @@ class DetailsHeader extends StatelessWidget {
                     children: [
                       Expanded(
                         child: Text(
-                          title.isEmpty ? 'Détails' : title,
+                          title.isEmpty ? 'Details' : title,
                           maxLines: 2,
                           overflow: TextOverflow.ellipsis,
                           style: Theme.of(context)
@@ -100,7 +100,7 @@ class DetailsHeader extends StatelessWidget {
                         builder: (ctx) => HistoryPopoverCard(
                           // on passe UNIQUEMENT les batchs
                           events: batchEvents,
-                          title: historyTitle ?? 'Journal des changements',
+                          title: historyTitle ?? 'Change history',
                         ),
                       ),
                     ],
@@ -137,15 +137,16 @@ class DetailsHeader extends StatelessWidget {
                           color: Colors.white,
                         ),
                         label: Text(
-                          'Qté : $qty',
+                          'Qty: $qty',
                           style: const TextStyle(color: Colors.white),
                         ),
                         backgroundColor: kAccentC,
                       ),
                       if (showMargins)
                         Tooltip(
-                          message:
-                              margin == null ? 'Not sold yet' : 'Marge moyenne',
+                          message: margin == null
+                              ? 'Not sold yet'
+                              : 'Average margin',
                           child: MarginChip(marge: margin),
                         ),
                     ],
@@ -177,7 +178,7 @@ class _HistoryMenuButton extends StatelessWidget {
     final showBadge = (count ?? 0) > 0;
 
     return PopupMenuButton<int>(
-      tooltip: 'Journal des changements',
+      tooltip: 'Change history',
       enabled: enabled,
       offset: const Offset(0, 8),
       elevation: 8,

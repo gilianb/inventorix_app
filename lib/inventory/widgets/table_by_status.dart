@@ -11,9 +11,12 @@ import '../utils/format.dart';
 import 'package:iconify_flutter/iconify_flutter.dart';
 import 'package:iconify_flutter/icons/mdi.dart';
 
+enum InventoryTableMode { full, vault }
+
 class InventoryTableByStatus extends StatelessWidget {
   const InventoryTableByStatus({
     super.key,
+    this.mode = InventoryTableMode.full,
     required this.lines,
     required this.onOpen,
     this.onEdit,
@@ -24,6 +27,8 @@ class InventoryTableByStatus extends StatelessWidget {
     this.showEstimated = true,
     required this.onInlineUpdate,
   });
+
+  final InventoryTableMode mode;
 
   final List<Map<String, dynamic>> lines;
   final void Function(Map<String, dynamic>) onOpen;
@@ -66,27 +71,58 @@ class InventoryTableByStatus extends StatelessWidget {
     'collection',
   ];
 
-  // ---- TABLEAU CENTRAL (scrollé) ----
-  DataRow _centerRow(BuildContext context, Map<String, dynamic> r) {
+  // ---- VAULT cells ----
+  DataRow _vaultRow(BuildContext context, Map<String, dynamic> r) {
     final s = (r['status'] ?? '').toString();
     final q = (r['qty_status'] as int?) ?? 0;
 
-    // Coûts
-    final qtyTotal = (r['qty_total'] as num?) ?? 0;
-    final totalWithFees = (r['total_cost_with_fees'] as num?) ?? 0;
-    final unit = (qtyTotal > 0) ? (totalWithFees / qtyTotal) : 0;
-    final sumUnitTotal = unit * q;
+    // Prix / u. : on utilise unit_cost + unit_fees du group
+    final unitCost = (r['unit_cost'] as num?) ?? 0;
+    final unitFees = (r['unit_fees'] as num?) ?? 0;
+    final unit = unitCost + unitFees;
 
-    final est = (r['estimated_price'] as num?);
+    final currency = (r['currency']?.toString() ?? 'USD');
 
-    // Couleur de ligne
+    // Market / u. (depuis product) + delta depuis price_history
+    final num? market = (r['market_price'] as num?);
+    final num? deltaPct = (r['market_change_pct'] as num?);
+    final String mk = (r['market_kind']?.toString() ?? 'Raw');
+
     final lineColor = MaterialStateProperty.resolveWith<Color?>(
       (_) => statusColor(context, s).withOpacity(0.06),
     );
 
-    final currency = (r['currency']?.toString() ?? 'USD');
+    Widget _marketCell() {
+      // Si pas de data → on considère un delta de 0.0%
+      final num effectiveDelta = deltaPct ?? 0;
 
-    // Colonnes
+      final trendColor = effectiveDelta > 0
+          ? Colors.green
+          : (effectiveDelta < 0 ? Colors.redAccent : Colors.black54);
+
+      final trendIcon =
+          effectiveDelta >= 0 ? Icons.trending_up : Icons.trending_down;
+
+      final pctText =
+          '${effectiveDelta >= 0 ? '+' : ''}${effectiveDelta.toStringAsFixed(1)}%';
+
+      return Tooltip(
+        message: 'Market: $mk',
+        child: Row(
+          children: [
+            Text(
+              market == null ? '—' : '${money(market)} $currency',
+              style: const TextStyle(fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(width: 8),
+            Icon(trendIcon, size: 16, color: trendColor),
+            const SizedBox(width: 4),
+            Text(pctText, style: TextStyle(color: trendColor)),
+          ],
+        ),
+      );
+    }
+
     final cells = <DataCell>[
       // Photo
       DataCell(_FileCell(
@@ -120,7 +156,86 @@ class InventoryTableByStatus extends StatelessWidget {
       // Qté
       DataCell(Text('$q')),
 
-      // ====== ÉDITION INLINE ======
+      // Statut (inline)
+      DataCell(
+        _EditableStatusCell(
+          value: s,
+          statuses: _allStatuses.where((x) => x != 'collection').toList(),
+          color: statusColor(context, s),
+          onSaved: (val) async {
+            if (val != null && val.isNotEmpty && val != s) {
+              await onInlineUpdate(r, 'status', val);
+            }
+          },
+        ),
+      ),
+
+      // Prix / u.
+      DataCell(Text('${money(unit)} $currency')),
+
+      // Market / u. (+% delta)
+      DataCell(_marketCell()),
+    ];
+
+    return DataRow(
+      color: lineColor,
+      onSelectChanged: null,
+      cells: cells,
+    );
+  }
+
+  // ---- FULL (legacy) row ----
+  DataRow _fullRow(BuildContext context, Map<String, dynamic> r) {
+    final s = (r['status'] ?? '').toString();
+    final q = (r['qty_status'] as int?) ?? 0;
+
+    // Coûts
+    final qtyTotal = (r['qty_total'] as num?) ?? 0;
+    final totalWithFees = (r['total_cost_with_fees'] as num?) ?? 0;
+    final unit = (qtyTotal > 0) ? (totalWithFees / qtyTotal) : 0;
+    final sumUnitTotal = unit * q;
+
+    final est = (r['estimated_price'] as num?);
+
+    final lineColor = MaterialStateProperty.resolveWith<Color?>(
+      (_) => statusColor(context, s).withOpacity(0.06),
+    );
+
+    final currency = (r['currency']?.toString() ?? 'USD');
+
+    final cells = <DataCell>[
+      // Photo
+      DataCell(_FileCell(
+        url: r['photo_url']?.toString(),
+        isImagePreferred: true,
+      )),
+
+      // Grading note
+      DataCell(Text(_txt(r['grading_note']))),
+
+      // Produit → détails
+      DataCell(
+        InkWell(
+          onTap: () => onOpen(r),
+          child: Text(
+            r['product_name']?.toString() ?? '',
+            style: const TextStyle(decoration: TextDecoration.underline),
+          ),
+        ),
+      ),
+
+      // Langue
+      DataCell(Text(r['language']?.toString() ?? '')),
+
+      // Jeu
+      DataCell(Text(r['game_label']?.toString() ?? '—')),
+
+      // Achat
+      DataCell(Text(r['purchase_date']?.toString() ?? '')),
+
+      // Qté
+      DataCell(Text('$q')),
+
       // Statut
       DataCell(
         _EditableStatusCell(
@@ -259,7 +374,7 @@ class InventoryTableByStatus extends StatelessWidget {
             color: _rowBg(context, r),
             alignment: Alignment.center,
             child: IconButton(
-              tooltip: 'Éditer ce listing',
+              tooltip: 'Edit this listing',
               icon: const Iconify(Mdi.pencil,
                   size: 20, color: Color.fromARGB(255, 34, 35, 36)),
               onPressed: onEdit == null ? null : () => onEdit!(r),
@@ -290,7 +405,7 @@ class InventoryTableByStatus extends StatelessWidget {
                   color: _rowBg(context, r),
                   alignment: Alignment.center,
                   child: IconButton(
-                    tooltip: 'Supprimer cette ligne',
+                    tooltip: 'Delete this row',
                     icon: const Iconify(Mdi.close,
                         size: 18, color: Colors.redAccent),
                     onPressed: onDelete == null ? null : () => onDelete!(r),
@@ -300,27 +415,43 @@ class InventoryTableByStatus extends StatelessWidget {
           );
 
     // ------ DataColumns dynamiques ------
-    final columns = <DataColumn>[
-      const DataColumn(label: Text('Photo')),
-      const DataColumn(label: Text('Grading note')),
-      const DataColumn(label: Text('Produit')),
-      const DataColumn(label: Text('Langue')),
-      const DataColumn(label: Text('Jeu')),
-      const DataColumn(label: Text('Achat')),
-      const DataColumn(label: Text('Qté')),
-      const DataColumn(label: Text('Statut')),
-      if (showUnitCosts) const DataColumn(label: Text('Prix / u.')),
-      if (showUnitCosts) const DataColumn(label: Text('Prix (Qté×u)')),
-      if (showEstimated) const DataColumn(label: Text('Estimated /u.')),
-      const DataColumn(label: Text('Supplier')),
-      const DataColumn(label: Text('Buyer')),
-      const DataColumn(label: Text('Item location')),
-      const DataColumn(label: Text('Grade ID')),
-      const DataColumn(label: Text('Sale date')),
-      if (showRevenue) const DataColumn(label: Text('Sale price')),
-      const DataColumn(label: Text('Tracking')),
-      const DataColumn(label: Text('Doc')),
-    ];
+    List<DataColumn> columns;
+    if (mode == InventoryTableMode.vault) {
+      columns = const [
+        DataColumn(label: Text('Photo')),
+        DataColumn(label: Text('Grading note')),
+        DataColumn(label: Text('Product')),
+        DataColumn(label: Text('Language')),
+        DataColumn(label: Text('Game')),
+        DataColumn(label: Text('Purchase')),
+        DataColumn(label: Text('Qty')),
+        DataColumn(label: Text('Status')),
+        DataColumn(label: Text('Price / unit')),
+        DataColumn(label: Text('Market / unit')),
+      ];
+    } else {
+      columns = <DataColumn>[
+        const DataColumn(label: Text('Photo')),
+        const DataColumn(label: Text('Grading note')),
+        const DataColumn(label: Text('Product')),
+        const DataColumn(label: Text('Language')),
+        const DataColumn(label: Text('Game')),
+        const DataColumn(label: Text('Purchase')),
+        const DataColumn(label: Text('Qty')),
+        const DataColumn(label: Text('Status')),
+        if (showUnitCosts) const DataColumn(label: Text('Price / unit')),
+        if (showUnitCosts) const DataColumn(label: Text('Price (Qty×unit)')),
+        if (showEstimated) const DataColumn(label: Text('Estimated / unit')),
+        const DataColumn(label: Text('Supplier')),
+        const DataColumn(label: Text('Buyer')),
+        const DataColumn(label: Text('Item location')),
+        const DataColumn(label: Text('Grade ID')),
+        const DataColumn(label: Text('Sale date')),
+        if (showRevenue) const DataColumn(label: Text('Sale price')),
+        const DataColumn(label: Text('Tracking')),
+        const DataColumn(label: Text('Doc')),
+      ];
+    }
 
     // ------ Tableau central ------
     final centerTable = DataTableTheme(
@@ -332,7 +463,11 @@ class InventoryTableByStatus extends StatelessWidget {
       child: DataTable(
         showCheckboxColumn: false,
         columns: columns,
-        rows: lines.map((r) => _centerRow(context, r)).toList(),
+        rows: lines
+            .map((r) => mode == InventoryTableMode.vault
+                ? _vaultRow(context, r)
+                : _fullRow(context, r))
+            .toList(),
       ),
     );
 
@@ -476,7 +611,7 @@ class _EditableTextCellState extends State<_EditableTextCell> {
               : Row(
                   children: [
                     IconButton(
-                      tooltip: 'Annuler',
+                      tooltip: 'Cancel',
                       icon: const Icon(Icons.close, color: Colors.redAccent),
                       onPressed: () {
                         _c.text = _original;
@@ -484,7 +619,7 @@ class _EditableTextCellState extends State<_EditableTextCell> {
                       },
                     ),
                     IconButton(
-                      tooltip: 'Enregistrer',
+                      tooltip: 'Save',
                       icon: const Icon(Icons.check, color: Colors.green),
                       onPressed: _save,
                     ),
@@ -612,7 +747,7 @@ class _EditableStatusCellState extends State<_EditableStatusCell> {
               : Row(
                   children: [
                     IconButton(
-                      tooltip: 'Annuler',
+                      tooltip: 'Cancel',
                       icon: const Icon(Icons.close, color: Colors.redAccent),
                       onPressed: () {
                         setState(() {
@@ -622,7 +757,7 @@ class _EditableStatusCellState extends State<_EditableStatusCell> {
                       },
                     ),
                     IconButton(
-                      tooltip: 'Enregistrer',
+                      tooltip: 'Save',
                       icon: const Icon(Icons.check, color: Colors.green),
                       onPressed: _save,
                     ),
@@ -731,7 +866,7 @@ class _FileCell extends StatelessWidget {
 
     return IconButton(
       icon: const Iconify(Mdi.file_document),
-      tooltip: 'Ouvrir le document',
+      tooltip: 'Open document',
       onPressed: _open,
     );
   }

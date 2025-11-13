@@ -1,6 +1,6 @@
 // ignore_for_file: deprecated_member_use
-/*3 KPI (Invested / Potential / Realized) —
- pure UI, reçoit des nombres prêts + currency.*/
+/* 3 KPIs (Invested / Potential / Realized) —
+ pure UI, receives ready numbers + currency. */
 import 'package:flutter/material.dart';
 
 const kAccentA = Color(0xFF6C5CE7);
@@ -100,23 +100,23 @@ class FinanceSummary extends StatelessWidget {
 
         final w1 = card(
           Icons.savings,
-          'Investi (vue)',
+          'Invested (view)',
           '${_money(investedForView)} $currency',
-          'Σ Qté×coût/u estimé',
+          'Σ qty×estimated cost/unit',
           gradient: [kAccentB.withOpacity(.12), kAccentC.withOpacity(.08)],
         );
         final w2 = card(
           Icons.trending_up,
-          'Revenu potentiel',
+          'Potential revenue',
           '${_money(potentialRevenue)} $currency',
-          'Σ estimated_price',
+          'Σ estimated price',
           gradient: [kAccentA.withOpacity(.12), kAccentB.withOpacity(.08)],
         );
         final w3 = card(
           Icons.payments,
-          'Revenu réel',
+          'Realized revenue',
           '${_money(realizedRevenue)} $currency',
-          'Σ sale_price (vendu)',
+          'Σ sale price (sold)',
           gradient: [
             const Color(0xFF22C55E).withOpacity(.14),
             kAccentB.withOpacity(.06)
@@ -133,7 +133,7 @@ class FinanceSummary extends StatelessWidget {
           ]);
         }
 
-        // compact : empilé
+        // compact: stacked
         return Column(
           children: [
             Row(children: [w1]),

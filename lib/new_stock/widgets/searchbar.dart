@@ -102,7 +102,7 @@ class CatalogPicker extends StatefulWidget {
     this.onTextChanged,
     this.minChars = 2,
     this.limit = 80,
-    this.labelText = 'Nom du produit *',
+    this.labelText = 'Product name *',
   });
 
   final void Function(Map<String, dynamic> blueprintResolved) onSelected;
@@ -210,12 +210,12 @@ class _CatalogPickerState extends State<CatalogPicker> {
     } on PostgrestException catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Catalogue (RPC): ${e.message}')),
+        SnackBar(content: Text('Catalog (RPC): ${e.message}')),
       );
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Erreur RPC: $e')),
+        SnackBar(content: Text('Error RPC: $e')),
       );
     } finally {
       if (mounted) setState(() => _loading = false);
@@ -332,7 +332,7 @@ class _CatalogPickerState extends State<CatalogPicker> {
                                 ScaffoldMessenger.of(context).showSnackBar(
                                   SnackBar(
                                       content: Text(
-                                          'Sélectionné: ${resolved['name'] ?? 'Item'}')),
+                                          'Selected: ${resolved['name'] ?? 'Item'}')),
                                 );
                               }
                             },
@@ -383,7 +383,7 @@ class _CatalogPickerState extends State<CatalogPicker> {
                     )
                   : null),
         ),
-        validator: (v) => (v == null || v.trim().isEmpty) ? 'Requis' : null,
+        validator: (v) => (v == null || v.trim().isEmpty) ? 'required' : null,
         onFieldSubmitted: (_) {
           // Entrée = on valide le texte libre, on ferme la liste
           _removeOverlay();

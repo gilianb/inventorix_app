@@ -142,9 +142,9 @@ class _NewStockPageState extends State<NewStockPage> {
         if (_games.isNotEmpty) _selectedGameId = _games.first['id'] as int;
       });
     } on PostgrestException catch (e) {
-      _snack('Erreur Supabase (games) : ${e.message}');
+      _snack('Supabase error (games): ${e.message}');
     } catch (e) {
-      _snack('Erreur chargement jeux: $e');
+      _snack('Error loading games: $e');
     }
   }
 
@@ -173,15 +173,15 @@ class _NewStockPageState extends State<NewStockPage> {
     final estPrice = _num(_estimatedPriceCtrl);
 
     if (qty <= 0) {
-      _snack('Quantité > 0 requise');
+      _snack('Quantity > 0 required');
       return;
     }
     if (totalCost < 0) {
-      _snack('Prix total invalide');
+      _snack('Invalid total price');
       return;
     }
     if (_selectedGameId == null) {
-      _snack('Choisis un jeu');
+      _snack('Choose a game');
       return;
     }
 
@@ -196,7 +196,7 @@ class _NewStockPageState extends State<NewStockPage> {
     final mustHaveEstimated =
         _initStatus == 'listed' || _initStatus == 'awaiting_payment';
     if (mustHaveEstimated && (estPrice == null || estPrice < 0)) {
-      _snack('Prix estimé requis (>= 0) pour un statut de vente');
+      _snack('Estimated price required (>= 0) for a sale status');
       return;
     }
 
@@ -294,18 +294,17 @@ class _NewStockPageState extends State<NewStockPage> {
         );
       } else {
         // Cas C : ni blueprint ni nom → on informe l’utilisateur
-        _snack(
-            'Renseigne un nom de produit ou sélectionne une fiche du catalogue.');
+        _snack('Enter a product name or select a catalog entry.');
         setState(() => _saving = false);
         return;
       }
 
-      _snack('Stock créé (${_qtyCtrl.text} items)');
+      _snack('Stock created (${_qtyCtrl.text} items)');
       if (mounted) Navigator.pop(context, true);
     } on PostgrestException catch (e) {
-      _snack('Erreur Supabase: ${e.message}');
+      _snack('Supabase error: ${e.message}');
     } catch (e) {
-      _snack('Erreur: $e');
+      _snack('Error: $e');
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -318,7 +317,7 @@ class _NewStockPageState extends State<NewStockPage> {
         statuses.contains(_initStatus) ? _initStatus : statuses.first;
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Nouveau stock')),
+      appBar: AppBar(title: const Text('New stock')),
       body: SafeArea(
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(16),
@@ -334,7 +333,7 @@ class _NewStockPageState extends State<NewStockPage> {
                   games: _games,
                   selectedGameId: _selectedGameId,
                   catalogPicker: CatalogPicker(
-                    labelText: 'Nom du produit *',
+                    labelText: 'Product name *',
                     selectedGameId: _selectedGameId,
                     onTextChanged: (text) {
                       _nameCtrl.text = text;
@@ -363,7 +362,7 @@ class _NewStockPageState extends State<NewStockPage> {
                       ScaffoldMessenger.of(context).showSnackBar(
                         SnackBar(
                             content:
-                                Text('Sélectionné: ${card['name'] ?? 'Item'}')),
+                                Text('Selected: ${card['name'] ?? 'Item'}')),
                       );
                     },
                   ),
@@ -385,21 +384,21 @@ class _NewStockPageState extends State<NewStockPage> {
                 // ——— Achat ———
                 PurchaseSection(
                   supplierField: LookupAutocompleteField(
-                    tableName: 'fournisseur',
-                    label: 'Fournisseur (optionnel)',
+                    tableName: 'supplier',
+                    label: 'Supplier (optional)',
                     controller: _supplierNameCtrl,
-                    addDialogTitle: 'Nouveau fournisseur',
+                    addDialogTitle: 'New supplier',
                   ),
                   buyerField: LookupAutocompleteField(
-                    tableName: 'society',
-                    label: 'Société acheteuse (optionnel)',
+                    tableName: 'buyer_company',
+                    label: 'Buyer company (optional)',
                     controller: _buyerCompanyCtrl,
-                    addDialogTitle: 'Nouvelle société',
+                    addDialogTitle: 'New buyer company',
                   ),
                   totalCostCtrl: _totalCostCtrl,
                   qtyCtrl: _qtyCtrl,
                   dateField: DateField(
-                    label: "Date d'achat",
+                    label: "Purchase date",
                     date: _purchaseDate,
                     onTap: _pickDate,
                   ),
@@ -419,7 +418,7 @@ class _NewStockPageState extends State<NewStockPage> {
                     onPressed: () => setState(() => _showMore = !_showMore),
                     icon:
                         Iconify(_showMore ? Mdi.expand_less : Mdi.expand_more),
-                    label: const Text('Plus d’options'),
+                    label: const Text('More options'),
                   ),
                 ),
 
@@ -432,7 +431,7 @@ class _NewStockPageState extends State<NewStockPage> {
                       tableName: 'item_location',
                       label: 'Item Location',
                       controller: _itemLocationCtrl,
-                      addDialogTitle: 'Nouvel emplacement',
+                      addDialogTitle: 'New location',
                     ),
                     trackingCtrl: _trackingCtrl,
                     photoTile: StorageUploadTile(
@@ -478,7 +477,7 @@ class _NewStockPageState extends State<NewStockPage> {
                             height: 18,
                             child: CircularProgressIndicator(strokeWidth: 2))
                         : const Iconify(Mdi.content_save),
-                    label: const Text('Créer le stock'),
+                    label: const Text('Create stock'),
                   ),
                 ),
               ],
@@ -493,7 +492,7 @@ class _NewStockPageState extends State<NewStockPage> {
     showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Erreur de téléchargement'),
+        title: const Text('Upload error'),
         content: Text(message),
         actions: [
           TextButton(

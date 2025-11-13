@@ -111,7 +111,7 @@ class _PriceHistoryTabsState extends State<PriceHistoryTabs> {
 
     // No tabs? (shouldn’t happen due to max(1, ...)), show empty card anyway.
     if (tabCount == 0) {
-      return const _CardShell(child: _EmptyState(label: 'Aucune donnée'));
+      return const _CardShell(child: _EmptyState(label: 'No data'));
     }
 
     return _CardShell(
@@ -137,7 +137,7 @@ class _PriceHistoryTabsState extends State<PriceHistoryTabs> {
                 const SizedBox(width: 10),
                 Expanded(
                   child: Text(
-                    'Historique des prix (Collectr)',
+                    'Price history (Collectr)',
                     style: Theme.of(context)
                         .textTheme
                         .titleMedium
@@ -145,7 +145,7 @@ class _PriceHistoryTabsState extends State<PriceHistoryTabs> {
                   ),
                 ),
                 IconButton(
-                  tooltip: 'Rafraîchir',
+                  tooltip: 'Refresh',
                   onPressed: _loading ? null : _load,
                   icon: _loading
                       ? const SizedBox(
@@ -231,7 +231,7 @@ class _HistorySeries extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (points.isEmpty) {
-      return const _EmptyState(label: 'Aucune donnée à afficher');
+      return const _EmptyState(label: 'No data to display');
     }
 
     final base = DateTime.utc(1970, 1, 1);

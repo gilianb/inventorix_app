@@ -32,7 +32,6 @@ class StatusBreakdownPanel extends StatelessWidget {
     'graded'
   ];
 
-  // ← AJOUT awaiting_payment dans la catégorie vente
   static const List<String> _sale = [
     'listed',
     'awaiting_payment',
@@ -45,9 +44,9 @@ class StatusBreakdownPanel extends StatelessWidget {
 
   static const Map<String, String> _groupLabels = {
     'all': 'All',
-    'purchase': 'Achat',
-    'grading': 'Gradation',
-    'sale': 'Vente',
+    'purchase': 'Purchase',
+    'grading': 'Grading',
+    'sale': 'Sale',
   };
 
   @override
@@ -259,7 +258,7 @@ class StatusBreakdownPanel extends StatelessWidget {
                     id: 'sale',
                     label: _groupLabels['sale']!,
                     total: saleTotal,
-                    statuses: _sale, // ← contient awaiting_payment
+                    statuses: _sale,
                   ),
                   const SizedBox(width: 24),
                 ],

@@ -1,11 +1,11 @@
 // ignore_for_file: deprecated_member_use
-/*section Informations (gauche/droite), liens cliquables, 
-calcule et affiche marge (%) et marge en valeur sous forme de chips 
-(en s’appuyant sur les champs unit_cost/fees/sale_price/marge existants).*/
+/* Section: Informations (left/right), clickable links,
+  calculates and displays margin (%) and margin value as chips
+  (based on fields unit_cost/fees/sale_price/marge). Translated to English. */
 
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
-import 'marge.dart'; // ⬅️ pour MarginChip (%)
+import 'marge.dart'; // ⬅️ for MarginChip (%)
 
 const kAccentA = Color(0xFF6C5CE7);
 const kAccentB = Color(0xFF00D1B2);
@@ -61,7 +61,7 @@ class InfoExtrasCard extends StatelessWidget {
     } else {
       // ignore: use_build_context_synchronously
       ScaffoldMessenger.of(ctx).showSnackBar(
-        const SnackBar(content: Text('Impossible d’ouvrir le lien.')),
+        const SnackBar(content: Text('Unable to open the link.')),
       );
     }
   }
@@ -87,7 +87,7 @@ class InfoExtrasCard extends StatelessWidget {
     );
   }
 
-  // Version "widget" pour pouvoir afficher des chips colorés
+  // Widget version to allow colored chips
   Widget _kvW(BuildContext ctx, String label, Widget value) {
     final styleLabel = Theme.of(ctx).textTheme.labelMedium?.copyWith(
           letterSpacing: .15,
@@ -165,7 +165,7 @@ class InfoExtrasCard extends StatelessWidget {
     return Colors.green;
   }
 
-  /// Chip pour la marge en valeur (couleur = basée sur %)
+  /// Chip for margin value (color = based on %)
   Widget _marginValueChip(num? value, String currency, num? pct) {
     final bg = _marginColorFor(pct);
     final label = value == null
@@ -194,8 +194,8 @@ class InfoExtrasCard extends StatelessWidget {
         ? currencyFallback
         : _txt(data['currency']);
 
-    // === Calcul des marges ===
-    final num? pct = _asNum(data['marge']); // % si présent
+    // === Margin calculations ===
+    final num? pct = _asNum(data['marge']); // % if present
     final num? sale = _asNum(data['sale_price']);
     final num cost =
         (_asNum(data['unit_cost']) ?? 0) + (_asNum(data['unit_fees']) ?? 0);
@@ -206,8 +206,8 @@ class InfoExtrasCard extends StatelessWidget {
 
     final num? valueMargin = showMargins
         ? (sale == null ? null : (sale - invested))
-        : null; // valeur absolue
-    // si % absent mais vendue et investi > 0, on le dérive
+        : null; // absolute value
+    // if % absent but sold and invested > 0, derive it
     final num? pctDerived = (pct != null)
         ? pct
         : ((sale != null && invested > 0)
@@ -228,7 +228,7 @@ class InfoExtrasCard extends StatelessWidget {
       _kv(context, 'Grade ID', _txt(data['grade_id'])),
       _kv(context, 'Grading note', _txt(data['grading_note'])),
       _kv(context, 'Grading fees', _money(data['grading_fees'], currency)),
-      // === Marges (gauche pour visibilité) ===
+      // === Margins (left for visibility) ===
       if (showMargins)
         _kvW(context, 'Margin (%)',
             MarginChip(marge: pctDerived, compact: true)),
@@ -250,7 +250,7 @@ class InfoExtrasCard extends StatelessWidget {
       _kv(context, 'Commission fees per unit',
           _money(data['commission_fees'], currency)),
       _kv(context, 'Payment type', _txt(data['payment_type'])),
-      _kv(context, 'Buyer infos', _txt(data['buyer_infos'])),
+      _kv(context, 'Buyer info', _txt(data['buyer_infos'])),
       if (showMargins)
         _kvW(context, 'Margin (value per unit)',
             _marginValueChip(valueMargin, currency, pctDerived)),
@@ -267,7 +267,7 @@ class InfoExtrasCard extends StatelessWidget {
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(16),
           border: Border.all(
-              color: kAccentA.withOpacity(.18), width: 1), // filet coloré
+              color: kAccentA.withOpacity(.18), width: 1), // colored border
           gradient: LinearGradient(
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
@@ -289,7 +289,7 @@ class InfoExtrasCard extends StatelessWidget {
                     children: const [
                       Icon(Icons.info_outline, size: 18, color: kAccentA),
                       SizedBox(width: 8),
-                      Text('Informations',
+                      Text('Information',
                           style: TextStyle(
                               fontWeight: FontWeight.w800, fontSize: 16)),
                     ],
