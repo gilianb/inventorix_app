@@ -156,7 +156,7 @@ class _MainInventoryPageState extends State<MainInventoryPage>
               });
             },
           ),
-        CollectionPage(orgId: widget.orgId), // ← on passe l’orgId
+        if (_isOwner) CollectionPage(orgId: widget.orgId), // ← on passe l’orgId
         _buildInventoryBody(forceStatus: 'finalized'),
       ];
 
