@@ -92,7 +92,7 @@ class InventoryTableByStatus extends StatelessWidget {
       (_) => statusColor(context, s).withOpacity(0.06),
     );
 
-    Widget _marketCell() {
+    Widget marketCell() {
       // Si pas de data → on considère un delta de 0.0%
       final num effectiveDelta = deltaPct ?? 0;
 
@@ -174,7 +174,7 @@ class InventoryTableByStatus extends StatelessWidget {
       DataCell(Text('${money(unit)} $currency')),
 
       // Market / u. (+% delta)
-      DataCell(_marketCell()),
+      DataCell(marketCell()),
     ];
 
     return DataRow(

@@ -285,8 +285,7 @@ class _MainInventoryPageState extends State<MainInventoryPage>
   Future<num> _fetchFinalizedInvestAggregate() async {
     try {
       final after = _purchaseDateStart();
-      final String? dateFrom =
-          after != null ? after.toIso8601String().split('T').first : null;
+      final String? dateFrom = after?.toIso8601String().split('T').first;
 
       int? gameId;
       if ((_gameFilter ?? '').isNotEmpty) {
