@@ -86,7 +86,7 @@ class _NewStockPageState extends State<NewStockPage> {
     'sold',
     'shipped',
     'finalized',
-    'collection',
+    'vault',
   ];
   static const sealedStatuses = [
     'ordered',
@@ -97,7 +97,7 @@ class _NewStockPageState extends State<NewStockPage> {
     'sold',
     'shipped',
     'finalized',
-    'collection',
+    'vault',
   ];
 
   @override

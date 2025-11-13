@@ -128,7 +128,7 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
     'sold',
     'shipped',
     'finalized',
-    'collection',
+    'vault',
   ];
 
   static const langs = ['EN', 'FR', 'JP'];

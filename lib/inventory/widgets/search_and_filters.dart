@@ -12,7 +12,7 @@ const Map<String, String> kGroupPrettyLabel = {
   'purchase': 'Purchase',
   'grading': 'Grading',
   'sale': 'Sale',
-  'collection': 'Collection',
+  'vault': 'vault',
 };
 
 /// Simple formatting of a single status: "sent_to_grader" -> "Sent to grader"

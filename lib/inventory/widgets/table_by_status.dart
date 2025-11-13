@@ -68,7 +68,7 @@ class InventoryTableByStatus extends StatelessWidget {
     'sold',
     'shipped',
     'finalized',
-    'collection',
+    'vault',
   ];
 
   // ---- VAULT cells ----
@@ -160,7 +160,7 @@ class InventoryTableByStatus extends StatelessWidget {
       DataCell(
         _EditableStatusCell(
           value: s,
-          statuses: _allStatuses.where((x) => x != 'collection').toList(),
+          statuses: _allStatuses.where((x) => x != 'vault').toList(),
           color: statusColor(context, s),
           onSaved: (val) async {
             if (val != null && val.isNotEmpty && val != s) {
@@ -240,7 +240,7 @@ class InventoryTableByStatus extends StatelessWidget {
       DataCell(
         _EditableStatusCell(
           value: s,
-          statuses: _allStatuses.where((x) => x != 'collection').toList(),
+          statuses: _allStatuses.where((x) => x != 'vault').toList(),
           color: statusColor(context, s),
           onSaved: (val) async {
             if (val != null && val.isNotEmpty && val != s) {

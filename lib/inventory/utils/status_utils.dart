@@ -15,7 +15,7 @@ const kStatusOrder = <String>[
   'sold',
   'shipped',
   'finalized',
-  'collection',
+  'vault',
 ];
 
 /// Couleur associée à un statut

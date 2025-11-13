@@ -1,4 +1,4 @@
-// lib/collection_page.dart
+// lib/vault_page.dart
 // ignore_for_file: deprecated_member_use
 
 import 'dart:async';
@@ -24,15 +24,17 @@ const kAccentB = Color(0xFF00D1B2);
 const kAccentC = Color(0xFFFFB545);
 const kAccentG = Color(0xFF22C55E);
 
-class CollectionPage extends StatefulWidget {
-  const CollectionPage({super.key, this.orgId}); // ← orgId optionnel
+// ignore: camel_case_types
+class vaultPage extends StatefulWidget {
+  const vaultPage({super.key, this.orgId}); // ← orgId optionnel
   final String? orgId;
 
   @override
-  State<CollectionPage> createState() => _CollectionPageState();
+  State<vaultPage> createState() => _vaultPageState();
 }
 
-class _CollectionPageState extends State<CollectionPage> {
+// ignore: camel_case_types
+class _vaultPageState extends State<vaultPage> {
   final _sb = Supabase.instance.client;
 
   bool _loading = true;
@@ -75,7 +77,7 @@ class _CollectionPageState extends State<CollectionPage> {
     setState(() => _loading = true);
     try {
       _groups = await _fetchGroupsFromView();
-      _kpiItems = await _fetchCollectionItemsForKpis();
+      _kpiItems = await _fetchvaultItemsForKpis();
     } catch (e) {
       _snack('Error loading vault: $e');
     } finally {
@@ -143,7 +145,7 @@ class _CollectionPageState extends State<CollectionPage> {
     }
   }
 
-  /// Lit la vue stricte v_item_groups (1 ligne = 1 group_sig) en ne gardant que status='collection'
+  /// Lit la vue stricte v_item_groups (1 ligne = 1 group_sig) en ne gardant que status='vault'
   /// + hydratation game_label/game_code depuis la table games
   /// + enrichissement "market" pour le mode Vault.
   Future<List<Map<String, dynamic>>> _fetchGroupsFromView() async {
@@ -164,7 +166,7 @@ class _CollectionPageState extends State<CollectionPage> {
         .from('v_item_groups')
         .select(cols)
         .eq('type', _typeFilter)
-        .eq('status', 'collection');
+        .eq('status', 'vault');
 
     if ((widget.orgId ?? '').isNotEmpty) {
       q = q.eq('org_id', widget.orgId as Object);
@@ -206,7 +208,7 @@ class _CollectionPageState extends State<CollectionPage> {
         ...r,
         'game_label': g?['label'] ?? '',
         'game_code': g?['code'] ?? '',
-        'status': 'collection', // sécurité
+        'status': 'vault', // sécurité
       };
     }).toList();
 
@@ -334,13 +336,13 @@ class _CollectionPageState extends State<CollectionPage> {
     }).toList(growable: false);
   }
 
-  /// Items bruts de la collection (pour KPI FinanceOverview)
-  Future<List<Map<String, dynamic>>> _fetchCollectionItemsForKpis() async {
+  /// Items bruts de la vault (pour KPI FinanceOverview)
+  Future<List<Map<String, dynamic>>> _fetchvaultItemsForKpis() async {
     var sel = _sb.from('item').select('''
           id, org_id, game_id, type, status, sale_price,
           unit_cost, unit_fees, shipping_fees, commission_fees, grading_fees,
           estimated_price, currency
-        ''').eq('status', 'collection').eq('type', _typeFilter);
+        ''').eq('status', 'vault').eq('type', _typeFilter);
 
     if ((widget.orgId ?? '').isNotEmpty) {
       sel = sel.eq('org_id', widget.orgId as Object);
@@ -410,7 +412,7 @@ class _CollectionPageState extends State<CollectionPage> {
     }
   }
 
-  // ======= SUPPRESSION D'UNE LIGNE (collection) =======
+  // ======= SUPPRESSION D'UNE LIGNE (vault) =======
   Future<bool> _confirmDeleteDialog(Map<String, dynamic> line) async {
     final name = (line['product_name'] ?? '').toString();
     final status = (line['status'] ?? '').toString();
@@ -568,7 +570,7 @@ class _CollectionPageState extends State<CollectionPage> {
     try {
       final ids = await _collectItemIdsForLine(line);
       if (ids.isEmpty) {
-        _snack('No items found for this collection line.');
+        _snack('No items found for this vault line.');
         return;
       }
 
@@ -707,7 +709,7 @@ class _CollectionPageState extends State<CollectionPage> {
               if (field == 'status') it['status'] = parsed;
             }
           }
-          if (field == 'status' && parsed != 'collection') {
+          if (field == 'status' && parsed != 'vault') {
             _kpiItems.removeWhere((it) => ids.contains(it['id']));
           }
         }
@@ -715,7 +717,7 @@ class _CollectionPageState extends State<CollectionPage> {
         // Patch ligne de tableau
         final gi = _findGroupIndex(line);
         if (gi != null) {
-          if (field == 'status' && parsed != 'collection') {
+          if (field == 'status' && parsed != 'vault') {
             _groups = List.of(_groups)..removeAt(gi);
           } else {
             final g = Map<String, dynamic>.from(_groups[gi]);

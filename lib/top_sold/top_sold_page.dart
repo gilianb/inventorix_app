@@ -53,9 +53,9 @@ class _TopSoldPageState extends State<TopSoldPage> {
 
   static const String _kDefaultAsset = 'assets/images/default_card.png';
 
-  // Base de statuts éligibles à l'onglet "Top Sold" (sans "collection")
+  // Base de statuts éligibles à l'onglet "Top Sold" (sans "vault")
   static const List<String> _soldLike = ['sold', 'shipped', 'finalized'];
-  static const String _collectionStatus = 'collection';
+  static const String _vaultStatus = 'vault';
 
   /// ⚠️ Clé de regroupement STRICTE — identique à MainInventory
   static const Set<String> _strictLineKeys = {
@@ -250,7 +250,7 @@ class _TopSoldPageState extends State<TopSoldPage> {
 
       // 2) Statuts autorisés selon le rôle
       final wantedStatuses = _isOwner
-          ? [..._soldLike, _collectionStatus]
+          ? [..._soldLike, _vaultStatus]
           : List<String>.from(_soldLike);
 
       // 2.bis) Filtre statuts + contrainte revenu si nécessaire
@@ -785,7 +785,7 @@ class _TopSoldPageState extends State<TopSoldPage> {
               : (_rows.isEmpty
                   ? const Center(
                       child: Text(
-                          'No sales found.')) // "collection" hidden if non-owner
+                          'No sales found.')) // "vault" hidden if non-owner
                   : ListView.builder(
                       padding: const EdgeInsets.fromLTRB(12, 8, 12, 24),
                       itemCount: _rows.length,
@@ -953,7 +953,7 @@ class _TopSoldPageState extends State<TopSoldPage> {
       case 'finalized':
         return kAccentG;
       default:
-        return kAccentA; // 'collection' & autres (mais 'collection' est masqué si non-owner)
+        return kAccentA; // 'vault' & autres (mais 'vault' est masqué si non-owner)
     }
   }
 

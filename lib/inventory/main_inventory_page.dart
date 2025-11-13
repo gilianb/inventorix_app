@@ -13,7 +13,7 @@ import '../../inventory/widgets/finance_overview.dart';
 
 import 'package:inventorix_app/new_stock/new_stock_page.dart';
 import 'package:inventorix_app/details/details_page.dart';
-import 'package:inventorix_app/collection/collection_page.dart';
+import 'package:inventorix_app/vault/vault_page.dart';
 
 import '../top_sold/top_sold_page.dart';
 
@@ -134,9 +134,8 @@ class _MainInventoryPageState extends State<MainInventoryPage>
               text: 'Top Sold'),
         if (_isOwner)
           const Tab(
-              icon: Iconify(Mdi.collections_bookmark,
-                  color: Color.fromARGB(255, 2, 35, 61)),
-              text: 'Collection'),
+              icon: Iconify(Mdi.safe, color: Color.fromARGB(255, 2, 35, 61)),
+              text: 'The Vault'),
         const Tab(
             icon: Iconify(Mdi.check_circle,
                 color: Color.fromARGB(255, 2, 35, 61)),
@@ -156,7 +155,7 @@ class _MainInventoryPageState extends State<MainInventoryPage>
               });
             },
           ),
-        if (_isOwner) CollectionPage(orgId: widget.orgId), // ← on passe l’orgId
+        if (_isOwner) vaultPage(orgId: widget.orgId), // ← on passe l’orgId
         _buildInventoryBody(forceStatus: 'finalized'),
       ];
 
@@ -421,12 +420,12 @@ class _MainInventoryPageState extends State<MainInventoryPage>
       final f = _statusFilter!;
       final grouped = kGroupToStatuses[f];
       if (grouped != null) {
-        statuses = grouped.where((s) => s != 'collection').toList();
+        statuses = grouped.where((s) => s != 'vault').toList();
       } else {
         statuses = [f];
       }
     } else {
-      statuses = kStatusOrder.where((s) => s != 'collection').toList();
+      statuses = kStatusOrder.where((s) => s != 'vault').toList();
     }
 
     final canSeeCosts = _perm.canSeeUnitCosts;
@@ -478,7 +477,7 @@ class _MainInventoryPageState extends State<MainInventoryPage>
     final out = <Map<String, dynamic>>[];
     for (final r in _groups) {
       for (final s in kStatusOrder) {
-        if (s == 'collection') continue;
+        if (s == 'vault') continue;
         final q = (r['qty_$s'] as int?) ?? 0;
         if (q > 0) {
           out.add({...r, 'status': s, 'qty_status': q});
@@ -650,7 +649,7 @@ class _MainInventoryPageState extends State<MainInventoryPage>
                   _groups.map((r) => {...r, 'qty_collection': 0}).toList(),
               currentFilter: forceStatus ?? _statusFilter,
               onTapStatus: (s) {
-                if (s == 'collection') return;
+                if (s == 'vault') return;
 
                 if (forceStatus != null) {
                   if (s != forceStatus) {

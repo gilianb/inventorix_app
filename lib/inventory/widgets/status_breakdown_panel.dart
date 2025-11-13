@@ -40,7 +40,7 @@ class StatusBreakdownPanel extends StatelessWidget {
     'finalized'
   ];
 
-  static const String _collection = 'collection';
+  static const String _vault = 'vault';
 
   static const Map<String, String> _groupLabels = {
     'all': 'All',
@@ -51,7 +51,7 @@ class StatusBreakdownPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Totaux par statut (inclut 'collection')
+    // Totaux par statut (inclut 'vault')
     final totals = <String, int>{for (final s in kStatusOrder) s: 0};
 
     for (final r in groupRows) {
@@ -66,8 +66,8 @@ class StatusBreakdownPanel extends StatelessWidget {
     final purchaseTotal = sumOf(_purchase);
     final gradingTotal = sumOf(_grading);
     final saleTotal = sumOf(_sale);
-    final collectionTotal = totals[_collection] ?? 0;
-    final allTotal = purchaseTotal + gradingTotal + saleTotal + collectionTotal;
+    final vaultTotal = totals[_vault] ?? 0;
+    final allTotal = purchaseTotal + gradingTotal + saleTotal + vaultTotal;
 
     if (allTotal == 0) return const SizedBox.shrink();
 
