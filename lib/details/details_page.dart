@@ -569,10 +569,6 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
     if (_isOwner) return m;
     final c = Map<String, dynamic>.from(m);
     for (final k in const [
-      'unit_cost',
-      'unit_fees',
-      'grading_fees',
-      'price_per_unit',
       'marge',
     ]) {
       if (c.containsKey(k)) c[k] = null;
