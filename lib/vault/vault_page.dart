@@ -736,6 +736,28 @@ class _vaultPageState extends State<vaultPage> {
     }
   }
 
+  // 🔑 clé pour InventoryTableByStatus (même si on n'utilise pas groupMode ici)
+  String _lineKey(Map<String, dynamic> r) {
+    final sig = (r['group_sig'] ?? '').toString();
+    if (sig.isNotEmpty) return sig;
+
+    String pick(String k) =>
+        (r[k] == null || (r[k] is String && r[k].toString().trim().isEmpty))
+            ? '_'
+            : r[k].toString();
+
+    return [
+      pick('org_id'),
+      pick('product_id'),
+      pick('game_id'),
+      pick('type'),
+      pick('language'),
+      pick('purchase_date'),
+      pick('currency'),
+      'vault',
+    ].join('|');
+  }
+
   @override
   Widget build(BuildContext context) {
     final lines = _groups; // 1 ligne = 1 group_sig
@@ -856,6 +878,11 @@ class _vaultPageState extends State<vaultPage> {
                   showRevenue: false, // hidden in vault
                   showEstimated: false, // hidden in vault
                   onInlineUpdate: _applyInlineUpdate, // 👈 inline + log + patch
+
+                  // 🔧 pas d’édition de groupe dans la vault
+                  groupMode: false,
+                  selection: const <String>{},
+                  lineKey: _lineKey,
                 ),
 
                 const SizedBox(height: 48),

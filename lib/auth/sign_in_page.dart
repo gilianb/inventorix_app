@@ -69,7 +69,7 @@ class _SignInPageState extends State<SignInPage> {
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 Text(
-                  _isSignUpMode ? 'Create an account' : 'Sign in',
+                  _isSignUpMode ? 'First time so create an account' : 'Sign in',
                   style: Theme.of(context).textTheme.headlineMedium,
                 ),
                 const SizedBox(height: 32),

@@ -267,7 +267,7 @@ class _OrganizationsPageState extends State<OrganizationsPage> {
                         const SizedBox(height: 24),
                         const Center(
                           child: Text(
-                            'You are not a member of any organization.\nCreate one to get started.',
+                            'You are not a member of any organization.\nCreate or join one to get started.',
                             textAlign: TextAlign.center,
                           ),
                         ),
@@ -314,7 +314,7 @@ class _OrganizationsPageState extends State<OrganizationsPage> {
   }
 }
 
-/* ====== Jolis widgets existants ====== */
+/* ====== nice widgets existants ====== */
 
 class _PageIntro extends StatelessWidget {
   const _PageIntro({required this.onCreate});

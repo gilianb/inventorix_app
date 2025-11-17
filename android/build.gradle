@@ -6,11 +6,17 @@ allprojects {
 }
 
 rootProject.buildDir = "../build"
-subprojects {
-    project.buildDir = "${rootProject.buildDir}/${project.name}"
+subprojects { subproject ->
+    // Ne relocalise le buildDir que si rootProject et le sous-projet sont sur le même lecteur.
+    if (rootProject.projectDir.toPath().root == subproject.projectDir.toPath().root) {
+        subproject.buildDir = "${rootProject.buildDir}/${subproject.name}"
+    }
+    // Sinon, on laisse le buildDir par défaut dans le dossier du sous-projet
+    // (ex: C:\Users\<user>\AppData\Local\Pub\Cache\...\android\build)
 }
+
 subprojects {
-    project.evaluationDependsOn(":app")
+    pr2oject.evaluationDependsOn(":app")
 }
 
 tasks.register("clean", Delete) {

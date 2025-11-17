@@ -102,23 +102,31 @@ class _MainInventoryPageState extends State<MainInventoryPage>
   // ✅ Total investi exact pour l’onglet Finalized (calculé côté serveur via RPC)
   num? _finalizedInvestOverride;
 
+  // ======== Mode édition de groupe ========
+  bool _groupMode = false;
+  final Set<String> _selectedKeys = <String>{};
+  String? _groupNewStatus;
+  final TextEditingController _groupCommentCtrl = TextEditingController();
+  bool _applyingGroup = false;
+
   @override
   void initState() {
     super.initState();
     _init();
   }
 
-  Future<void> _init() async {
-    await _loadRole();
-    _recreateTabController(); // crée le TabController en fonction du rôle
-    await _refresh();
-  }
-
   @override
   void dispose() {
     _tabCtrl?.dispose();
     _searchCtrl.dispose();
+    _groupCommentCtrl.dispose();
     super.dispose();
+  }
+
+  Future<void> _init() async {
+    await _loadRole();
+    _recreateTabController(); // crée le TabController en fonction du rôle
+    await _refresh();
   }
 
   /// Liste des Tabs selon rôle
@@ -501,6 +509,30 @@ class _MainInventoryPageState extends State<MainInventoryPage>
     return out.where((e) => e['status'] != 'finalized').toList();
   }
 
+  // 🔑 clé stable “ligne” pour la sélection groupée (alignée avec nos requêtes)
+  String _lineKey(Map<String, dynamic> r) {
+    String pick(String k) =>
+        (r[k] == null || (r[k] is String && r[k].toString().trim().isEmpty))
+            ? '_'
+            : r[k].toString();
+    final parts = <String>[
+      pick('org_id'),
+      pick('product_id'),
+      pick('game_id'),
+      pick('type'),
+      pick('language'),
+      pick('channel_id'),
+      pick('purchase_date'),
+      pick('supplier_name'),
+      pick('buyer_company'),
+      pick('item_location'),
+      pick('tracking'),
+      pick('currency'),
+      pick('status'), // important
+    ];
+    return parts.join('|');
+  }
+
   Widget _buildInventoryBody({String? forceStatus}) {
     // Items bruts pour KPI (filtrés si forceStatus != null)
     final effectiveKpiItems = (forceStatus == null)
@@ -520,6 +552,116 @@ class _MainInventoryPageState extends State<MainInventoryPage>
     final bool isFinalizedView = (forceStatus == 'finalized');
     final bool showFinanceOverview =
         isFinalizedView || _perm.canSeeFinanceOverview;
+
+    // Statuts disponibles pour l'édition groupée
+    final List<String> allStatuses =
+        kStatusOrder.where((s) => s != 'vault').toList();
+
+    // ======== Application de l'édition de groupe (corrigée: plus de "mixed") ========
+    Future<void> _applyGroupStatusToSelection() async {
+      if (_groupNewStatus == null || _groupNewStatus!.isEmpty) {
+        _snack('Pick a status to apply.');
+        return;
+      }
+      if (_selectedKeys.isEmpty) {
+        _snack('Select at least one line.');
+        return;
+      }
+
+      final String newStatus = _groupNewStatus!;
+
+      setState(() => _applyingGroup = true);
+      try {
+        // Lignes sélectionnées visibles
+        final selectedLines = lines
+            .where((r) => _selectedKeys.contains(_lineKey(r)))
+            .toList(growable: false);
+
+        // Regroupement des item_ids par ancien status
+        final Map<String, List<int>> idsByOldStatus = {};
+        final List<int> allIds = [];
+
+        for (final line in selectedLines) {
+          final oldStatus = (line['status'] ?? '').toString();
+          if (oldStatus.isEmpty) continue;
+
+          final ids = await _collectItemIdsForLine(line);
+          if (ids.isEmpty) continue;
+
+          allIds.addAll(ids);
+          idsByOldStatus.putIfAbsent(oldStatus, () => <int>[]).addAll(ids);
+        }
+
+        if (allIds.isEmpty) {
+          _snack('No items found for selected lines.');
+          return;
+        }
+
+        final idsCsv = '(${allIds.join(",")})';
+
+        // ⚙️ MAJ statut en masse
+        await _sb
+            .from('item')
+            .update({'status': newStatus}).filter('id', 'in', idsCsv);
+
+        // 📝 LOG : une entrée par ancien status (plus de "mixed")
+        final comment = _groupCommentCtrl.text.trim();
+        final String reason =
+            comment.isEmpty ? 'group_status' : 'group_status: $comment';
+
+        for (final entry in idsByOldStatus.entries) {
+          final String oldStatus = entry.key;
+          final List<int> itemIds = entry.value;
+          if (itemIds.isEmpty) continue;
+
+          await _logBatchEdit(
+            orgId: widget.orgId,
+            itemIds: itemIds,
+            changes: {
+              'status': {
+                'old': oldStatus, // ✅ vrai ancien statut
+                'new': newStatus,
+              },
+            },
+            reason: reason,
+          );
+        }
+
+        // ✅ optimistic patch local des groupes
+        setState(() {
+          for (final line in selectedLines) {
+            final gi = _findGroupIndexForLine(line);
+            if (gi != null) {
+              final g = Map<String, dynamic>.from(_groups[gi]);
+              final oldS = (line['status'] ?? '').toString();
+              final newS = newStatus;
+              final qty = (line['qty_status'] as int?) ?? 0;
+
+              final oldKey = 'qty_$oldS';
+              final newKey = 'qty_$newS';
+
+              g[oldKey] = ((g[oldKey] as int? ?? 0) - qty).clamp(0, 1 << 31);
+              g[newKey] = (g[newKey] as int? ?? 0) + qty;
+
+              _groups[gi] = g;
+            }
+          }
+
+          _groupMode = false;
+          _selectedKeys.clear();
+          _groupNewStatus = null;
+          _groupCommentCtrl.clear();
+        });
+
+        _snack('Status updated on ${allIds.length} item(s).');
+      } on PostgrestException catch (e) {
+        _snack('Supabase error: ${e.message}');
+      } catch (e) {
+        _snack('Error: $e');
+      } finally {
+        if (mounted) setState(() => _applyingGroup = false);
+      }
+    }
 
     return RefreshIndicator(
       onRefresh: _refresh,
@@ -677,20 +819,182 @@ class _MainInventoryPageState extends State<MainInventoryPage>
             if (forceStatus == null) const SizedBox(height: 12),
           ],
 
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            child: Text(
-              forceStatus == null
-                  ? 'Lines (${lines.length}) — view by status'
-                  : 'Finalized — Lines (${lines.length})',
-              style: Theme.of(context)
-                  .textTheme
-                  .titleMedium
-                  ?.copyWith(fontWeight: FontWeight.w700),
+          // ======== Barre "Edit group" + panneau d'action ========
+          if (!_loading && _groups.isNotEmpty && _perm.canEditItems)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: [
+                      OutlinedButton.icon(
+                        icon: Icon(
+                          _groupMode ? Icons.group_off : Icons.group,
+                        ),
+                        label:
+                            Text(_groupMode ? 'Exit group edit' : 'Edit group'),
+                        onPressed: () {
+                          setState(() {
+                            _groupMode = !_groupMode;
+                            if (!_groupMode) {
+                              _selectedKeys.clear();
+                              _groupNewStatus = null;
+                              _groupCommentCtrl.clear();
+                            }
+                          });
+                        },
+                      ),
+                      if (_groupMode)
+                        Text(
+                          '${_selectedKeys.length} selected',
+                          style:
+                              Theme.of(context).textTheme.bodyMedium?.copyWith(
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                        ),
+                      if (_groupMode && _selectedKeys.isNotEmpty)
+                        TextButton(
+                          onPressed: () =>
+                              setState(() => _selectedKeys.clear()),
+                          child: const Text('Clear selection'),
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 180),
+                    child: _groupMode
+                        ? Card(
+                            key: const ValueKey('group-panel'),
+                            elevation: 1,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Padding(
+                              padding: const EdgeInsets.all(12),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Wrap(
+                                    spacing: 12,
+                                    runSpacing: 12,
+                                    crossAxisAlignment:
+                                        WrapCrossAlignment.center,
+                                    children: [
+                                      SizedBox(
+                                        width: 260,
+                                        child: DropdownButtonFormField<String>(
+                                          isExpanded: true,
+                                          value: _groupNewStatus,
+                                          items: allStatuses.map((s) {
+                                            final c = statusColor(context, s);
+                                            return DropdownMenuItem<String>(
+                                              value: s,
+                                              child: Container(
+                                                padding:
+                                                    const EdgeInsets.symmetric(
+                                                        vertical: 4,
+                                                        horizontal: 6),
+                                                decoration: BoxDecoration(
+                                                  color: c.withOpacity(0.16),
+                                                  borderRadius:
+                                                      BorderRadius.circular(6),
+                                                  border: Border.all(
+                                                      color:
+                                                          c.withOpacity(0.7)),
+                                                ),
+                                                child: Row(
+                                                  children: [
+                                                    Container(
+                                                      width: 10,
+                                                      height: 10,
+                                                      decoration: BoxDecoration(
+                                                        color: c,
+                                                        shape: BoxShape.circle,
+                                                      ),
+                                                    ),
+                                                    const SizedBox(width: 8),
+                                                    Text(
+                                                      s.toUpperCase(),
+                                                      style: TextStyle(
+                                                        fontWeight:
+                                                            FontWeight.w600,
+                                                        color: c,
+                                                      ),
+                                                    ),
+                                                  ],
+                                                ),
+                                              ),
+                                            );
+                                          }).toList(),
+                                          onChanged: (v) => setState(
+                                              () => _groupNewStatus = v),
+                                          decoration: const InputDecoration(
+                                            labelText: 'New status',
+                                            border: OutlineInputBorder(),
+                                            isDense: true,
+                                          ),
+                                        ),
+                                      ),
+                                      SizedBox(
+                                        width: 360,
+                                        child: TextField(
+                                          controller: _groupCommentCtrl,
+                                          decoration: const InputDecoration(
+                                            labelText:
+                                                'Status comment (optional)',
+                                            hintText:
+                                                'Reason, tracking, batch ref, etc.',
+                                            border: OutlineInputBorder(),
+                                            isDense: true,
+                                          ),
+                                        ),
+                                      ),
+                                      FilledButton.icon(
+                                        onPressed: (_groupNewStatus != null &&
+                                                _selectedKeys.isNotEmpty &&
+                                                !_applyingGroup)
+                                            ? _applyGroupStatusToSelection
+                                            : null,
+                                        icon: _applyingGroup
+                                            ? const SizedBox(
+                                                height: 16,
+                                                width: 16,
+                                                child:
+                                                    CircularProgressIndicator(
+                                                        strokeWidth: 2),
+                                              )
+                                            : const Icon(Icons.done_all),
+                                        label: Text(
+                                            'Apply to ${_selectedKeys.length} line(s)'),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 6),
+                                  Text(
+                                    'Only the status is modified. A log entry is saved for all affected items.',
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .bodySmall
+                                        ?.copyWith(color: Colors.black54),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          )
+                        : const SizedBox.shrink(),
+                  ),
+                ],
+              ),
             ),
-          ),
-          const SizedBox(height: 4),
 
+          const SizedBox(height: 8),
+
+          // ======== Tableau ========
           InventoryTableByStatus(
             lines: lines,
             onOpen: _openDetails,
@@ -700,6 +1004,30 @@ class _MainInventoryPageState extends State<MainInventoryPage>
             showUnitCosts: _perm.canSeeUnitCosts,
             showRevenue: _perm.canSeeRevenue,
             onInlineUpdate: _applyInlineUpdate, // 👈 important
+
+            // ⭐️ Group-edit wiring
+            groupMode: _groupMode && !isFinalizedView,
+            selection: _selectedKeys,
+            lineKey: _lineKey,
+            onToggleSelect: (line, selected) {
+              final k = _lineKey(line);
+              setState(() {
+                if (selected) {
+                  _selectedKeys.add(k);
+                } else {
+                  _selectedKeys.remove(k);
+                }
+              });
+            },
+            onToggleSelectAll: (selectAll) {
+              setState(() {
+                if (selectAll) {
+                  _selectedKeys.addAll(lines.map(_lineKey));
+                } else {
+                  _selectedKeys.clear();
+                }
+              });
+            },
           ),
 
           const SizedBox(height: 48),
@@ -1127,7 +1455,7 @@ class _MainInventoryPageState extends State<MainInventoryPage>
               IconButton(
                 tooltip: isLoggedIn ? 'Sign out' : 'Sign in',
                 icon: Iconify(isLoggedIn ? Mdi.logout : Mdi.login,
-                    color: Color.fromARGB(255, 2, 35, 61)),
+                    color: const Color.fromARGB(255, 2, 35, 61)),
                 onPressed: _onTapAuthButton,
               ),
               IconButton(

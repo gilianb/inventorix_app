@@ -49,6 +49,8 @@ Color statusColor(BuildContext context, String s) {
       return Colors.indigo;
     case 'finalized':
       return const Color.fromARGB(255, 7, 76, 9);
+    case 'vault':
+      return const Color.fromARGB(255, 245, 228, 3);
     default:
       return cs.outline;
   }

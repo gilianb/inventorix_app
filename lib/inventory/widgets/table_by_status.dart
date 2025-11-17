@@ -26,6 +26,13 @@ class InventoryTableByStatus extends StatelessWidget {
     this.showRevenue = true,
     this.showEstimated = true,
     required this.onInlineUpdate,
+
+    // ⭐️ Mode édition de groupe
+    this.groupMode = false,
+    this.selection = const <String>{},
+    required this.lineKey,
+    this.onToggleSelect,
+    this.onToggleSelectAll,
   });
 
   final InventoryTableMode mode;
@@ -45,6 +52,13 @@ class InventoryTableByStatus extends StatelessWidget {
   final bool showUnitCosts;
   final bool showRevenue;
   final bool showEstimated;
+
+  // ======== Group Edit mode ========
+  final bool groupMode; // remplace le stylo par des checkboxes
+  final Set<String> selection; // keys des lignes sélectionnées
+  final String Function(Map<String, dynamic> line) lineKey;
+  final void Function(Map<String, dynamic> line, bool selected)? onToggleSelect;
+  final void Function(bool selectAll)? onToggleSelectAll;
 
   // dimensions “fixes”
   static const double _headH = 56;
@@ -72,7 +86,8 @@ class InventoryTableByStatus extends StatelessWidget {
   ];
 
   // ---- VAULT cells ----
-  DataRow _vaultRow(BuildContext context, Map<String, dynamic> r) {
+  DataRow _vaultRow(BuildContext context, Map<String, dynamic> r,
+      {required bool selected}) {
     final s = (r['status'] ?? '').toString();
     final q = (r['qty_status'] as int?) ?? 0;
 
@@ -89,7 +104,10 @@ class InventoryTableByStatus extends StatelessWidget {
     final String mk = (r['market_kind']?.toString() ?? 'Raw');
 
     final lineColor = MaterialStateProperty.resolveWith<Color?>(
-      (_) => statusColor(context, s).withOpacity(0.06),
+      (_) {
+        final base = statusColor(context, s);
+        return base.withOpacity(selected ? 0.35 : 0.2);
+      },
     );
 
     Widget marketCell() {
@@ -156,9 +174,10 @@ class InventoryTableByStatus extends StatelessWidget {
       // Qté
       DataCell(Text('$q')),
 
-      // Statut (inline)
+      // Statut (inline désactivé en mode groupe)
       DataCell(
         _EditableStatusCell(
+          enabled: !groupMode,
           value: s,
           statuses: _allStatuses.where((x) => x != 'vault').toList(),
           color: statusColor(context, s),
@@ -185,7 +204,8 @@ class InventoryTableByStatus extends StatelessWidget {
   }
 
   // ---- FULL (legacy) row ----
-  DataRow _fullRow(BuildContext context, Map<String, dynamic> r) {
+  DataRow _fullRow(BuildContext context, Map<String, dynamic> r,
+      {required bool selected}) {
     final s = (r['status'] ?? '').toString();
     final q = (r['qty_status'] as int?) ?? 0;
 
@@ -198,7 +218,10 @@ class InventoryTableByStatus extends StatelessWidget {
     final est = (r['estimated_price'] as num?);
 
     final lineColor = MaterialStateProperty.resolveWith<Color?>(
-      (_) => statusColor(context, s).withOpacity(0.06),
+      (_) {
+        final base = statusColor(context, s);
+        return base.withOpacity(selected ? 0.35 : 0.2);
+      },
     );
 
     final currency = (r['currency']?.toString() ?? 'USD');
@@ -239,8 +262,9 @@ class InventoryTableByStatus extends StatelessWidget {
       // Statut
       DataCell(
         _EditableStatusCell(
+          enabled: !groupMode,
           value: s,
-          statuses: _allStatuses.where((x) => x != 'vault').toList(),
+          statuses: _allStatuses.toList(),
           color: statusColor(context, s),
           onSaved: (val) async {
             if (val != null && val.isNotEmpty && val != s) {
@@ -350,14 +374,22 @@ class InventoryTableByStatus extends StatelessWidget {
   }
 
   // Couleur de fond d’une ligne (pour colonnes fixes)
-  Color _rowBg(BuildContext ctx, Map<String, dynamic> r) {
+  Color _rowBg(BuildContext ctx, Map<String, dynamic> r,
+      {required bool selected}) {
     final s = (r['status'] ?? '').toString();
-    return statusColor(ctx, s).withOpacity(0.06);
+    return statusColor(ctx, s).withOpacity(selected ? 0.35 : 0.2);
   }
 
   @override
   Widget build(BuildContext context) {
-    // ------ Colonne fixe gauche (✏️) ------
+    // ------ Colonne fixe gauche (✏️ ou ✅) ------
+    final allSelected =
+        groupMode && selection.length == lines.length && lines.isNotEmpty;
+    final anySelected = groupMode && selection.isNotEmpty;
+    final bool? headerCheckValue = !groupMode
+        ? false
+        : (allSelected ? true : (anySelected ? null : false));
+
     final fixedLeft = Column(
       children: [
         Container(
@@ -365,21 +397,41 @@ class InventoryTableByStatus extends StatelessWidget {
           height: _headH,
           alignment: Alignment.center,
           color: Theme.of(context).colorScheme.surfaceVariant.withOpacity(.35),
-          child: const Icon(Icons.edit, size: 18, color: Colors.black45),
+          child: groupMode
+              ? Checkbox(
+                  tristate: true,
+                  value: headerCheckValue,
+                  onChanged: (_) {
+                    if (onToggleSelectAll != null) {
+                      // si tout est déjà sélectionné → on clear ; sinon → select all
+                      onToggleSelectAll!.call(!allSelected);
+                    }
+                  },
+                )
+              : const Icon(Icons.edit, size: 18, color: Colors.black45),
         ),
         for (final r in lines)
-          Container(
-            width: _sideW,
-            height: _rowH,
-            color: _rowBg(context, r),
-            alignment: Alignment.center,
-            child: IconButton(
-              tooltip: 'Edit this listing',
-              icon: const Iconify(Mdi.pencil,
-                  size: 20, color: Color.fromARGB(255, 34, 35, 36)),
-              onPressed: onEdit == null ? null : () => onEdit!(r),
-            ),
-          ),
+          Builder(builder: (ctx) {
+            final key = lineKey(r);
+            final selected = groupMode ? selection.contains(key) : false;
+            return Container(
+              width: _sideW,
+              height: _rowH,
+              color: _rowBg(context, r, selected: selected),
+              alignment: Alignment.center,
+              child: groupMode
+                  ? Checkbox(
+                      value: selected,
+                      onChanged: (v) => onToggleSelect?.call(r, (v ?? false)),
+                    )
+                  : IconButton(
+                      tooltip: 'Edit this listing',
+                      icon: const Iconify(Mdi.pencil,
+                          size: 20, color: Color.fromARGB(255, 34, 35, 36)),
+                      onPressed: onEdit == null ? null : () => onEdit!(r),
+                    ),
+            );
+          }),
       ],
     );
 
@@ -399,18 +451,22 @@ class InventoryTableByStatus extends StatelessWidget {
                 child: const Icon(Icons.close, size: 18, color: Colors.black45),
               ),
               for (final r in lines)
-                Container(
-                  width: _sideW,
-                  height: _rowH,
-                  color: _rowBg(context, r),
-                  alignment: Alignment.center,
-                  child: IconButton(
-                    tooltip: 'Delete this row',
-                    icon: const Iconify(Mdi.close,
-                        size: 18, color: Colors.redAccent),
-                    onPressed: onDelete == null ? null : () => onDelete!(r),
-                  ),
-                ),
+                Builder(builder: (ctx) {
+                  final key = lineKey(r);
+                  final selected = groupMode ? selection.contains(key) : false;
+                  return Container(
+                    width: _sideW,
+                    height: _rowH,
+                    color: _rowBg(context, r, selected: selected),
+                    alignment: Alignment.center,
+                    child: IconButton(
+                      tooltip: 'Delete this row',
+                      icon: const Iconify(Mdi.close,
+                          size: 18, color: Colors.redAccent),
+                      onPressed: onDelete == null ? null : () => onDelete!(r),
+                    ),
+                  );
+                }),
             ],
           );
 
@@ -463,11 +519,12 @@ class InventoryTableByStatus extends StatelessWidget {
       child: DataTable(
         showCheckboxColumn: false,
         columns: columns,
-        rows: lines
-            .map((r) => mode == InventoryTableMode.vault
-                ? _vaultRow(context, r)
-                : _fullRow(context, r))
-            .toList(),
+        rows: lines.map((r) {
+          final selected = groupMode ? selection.contains(lineKey(r)) : false;
+          return mode == InventoryTableMode.vault
+              ? _vaultRow(context, r, selected: selected)
+              : _fullRow(context, r, selected: selected);
+        }).toList(),
       ),
     );
 
@@ -480,7 +537,7 @@ class InventoryTableByStatus extends StatelessWidget {
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            fixedLeft, // ✏️
+            fixedLeft, // ✅ / ✏️
             Expanded(
               child: SingleChildScrollView(
                 scrollDirection: Axis.horizontal,
@@ -637,12 +694,14 @@ class _EditableStatusCell extends StatefulWidget {
     required this.statuses,
     required this.color,
     required this.onSaved,
+    this.enabled = true,
   });
 
   final String value;
   final List<String> statuses;
   final Color color;
   final Future<void> Function(String? newValue) onSaved;
+  final bool enabled;
 
   @override
   State<_EditableStatusCell> createState() => _EditableStatusCellState();
@@ -667,6 +726,13 @@ class _EditableStatusCellState extends State<_EditableStatusCell> {
     if (!_editing && oldWidget.value != widget.value) {
       _value = widget.value;
     }
+    // Si on désactive pendant l'édition -> on ferme proprement
+    if (!widget.enabled && _editing) {
+      setState(() {
+        _value = _original;
+        _editing = false;
+      });
+    }
   }
 
   Future<void> _save() async {
@@ -682,6 +748,7 @@ class _EditableStatusCellState extends State<_EditableStatusCell> {
   }
 
   void _startEdit() {
+    if (!widget.enabled) return;
     _original = _value;
     setState(() => _editing = true);
     // ⛔️ PAS de listener de perte de focus ici (sinon le menu ferme immédiatement)
@@ -689,15 +756,22 @@ class _EditableStatusCellState extends State<_EditableStatusCell> {
 
   @override
   Widget build(BuildContext context) {
+    final chip = Chip(
+      label: Text((widget.value).toUpperCase()),
+      backgroundColor: widget.color.withOpacity(0.15),
+      side: BorderSide(color: widget.color.withOpacity(0.6)),
+    );
+
+    if (!widget.enabled) {
+      // lecture seule en mode groupe
+      return chip;
+    }
+
     if (!_editing) {
       return GestureDetector(
         onDoubleTap: _startEdit,
         onLongPress: _startEdit,
-        child: Chip(
-          label: Text((widget.value).toUpperCase()),
-          backgroundColor: widget.color.withOpacity(0.15),
-          side: BorderSide(color: widget.color.withOpacity(0.6)),
-        ),
+        child: chip,
       );
     }
 
@@ -721,9 +795,79 @@ class _EditableStatusCellState extends State<_EditableStatusCell> {
                 isExpanded: true,
                 value: _value,
                 icon: const Icon(Icons.arrow_drop_down),
-                items: widget.statuses
-                    .map((s) => DropdownMenuItem(value: s, child: Text(s)))
-                    .toList(),
+
+                // 🔴 Chaque ligne du menu a la couleur de son status
+                items: widget.statuses.map((s) {
+                  final c = statusColor(context, s);
+                  return DropdownMenuItem<String>(
+                    value: s,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        vertical: 4,
+                        horizontal: 6,
+                      ),
+                      decoration: BoxDecoration(
+                        color: c.withOpacity(0.16),
+                        borderRadius: BorderRadius.circular(6),
+                        border: Border.all(color: c.withOpacity(0.7)),
+                      ),
+                      child: Row(
+                        children: [
+                          Container(
+                            width: 10,
+                            height: 10,
+                            decoration: BoxDecoration(
+                              color: c,
+                              shape: BoxShape.circle,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Text(
+                            s.toUpperCase(),
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w500,
+                              color: c,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                }).toList(),
+
+                // Optionnel : affichage stylé de l'item sélectionné
+                selectedItemBuilder: (ctx) {
+                  return widget.statuses.map((s) {
+                    final c = statusColor(ctx, s);
+                    return Row(
+                      children: [
+                        Container(
+                          width: 10,
+                          height: 10,
+                          decoration: BoxDecoration(
+                            color: c,
+                            shape: BoxShape.circle,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          s.toUpperCase(),
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w500,
+                            color: c,
+                          ),
+                        ),
+                      ],
+                    );
+                  }).toList();
+                },
+
+                // Couleur de focus du champ selon le status sélectionné
+                focusColor:
+                    _value == null ? null : statusColor(context, _value!),
+
                 onChanged: (v) {
                   setState(() => _value = v);
                 },
