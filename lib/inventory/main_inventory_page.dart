@@ -366,6 +366,7 @@ class _MainInventoryPageState extends State<MainInventoryPage>
       'sum_commission_fees',
       'sum_grading_fees',
       'org_id',
+      'group_sig', // 👈 important : on récupère group_sig depuis la vue
     ];
 
     final costCols = <String>[
@@ -517,6 +518,7 @@ class _MainInventoryPageState extends State<MainInventoryPage>
             : r[k].toString();
     final parts = <String>[
       pick('org_id'),
+      pick('group_sig'), // 👈 on inclut group_sig pour être bien unique
       pick('product_id'),
       pick('game_id'),
       pick('type'),
@@ -831,6 +833,14 @@ class _MainInventoryPageState extends State<MainInventoryPage>
                     runSpacing: 8,
                     crossAxisAlignment: WrapCrossAlignment.center,
                     children: [
+                      // 👇 compteur de lignes remis ici
+                      Text(
+                        'Lines (${lines.length})',
+                        style: Theme.of(context)
+                            .textTheme
+                            .bodyMedium
+                            ?.copyWith(fontWeight: FontWeight.w600),
+                      ),
                       OutlinedButton.icon(
                         icon: Icon(
                           _groupMode ? Icons.group_off : Icons.group,
@@ -1036,77 +1046,41 @@ class _MainInventoryPageState extends State<MainInventoryPage>
     );
   }
 
-  // 👉 Version robuste : identifie un item réel (par status) sans champs fragiles
+  // 👉 Version simple & robuste : utilise directement group_sig + status
   void _openDetails(Map<String, dynamic> line) async {
     final String orgId = widget.orgId;
     final String status = (line['status'] ?? '').toString();
-    final String type = (line['type'] ?? '').toString();
-    final String language = (line['language'] ?? '').toString();
-    final int? productId = line['product_id'] as int?;
-    final int? gameId = line['game_id'] as int?;
+    final String? groupSig = line['group_sig']?.toString();
 
-    if (productId == null || gameId == null || status.isEmpty) {
-      _snack('Insufficient data to open details.');
-      return;
-    }
-
-    Map<String, dynamic>? rep;
-
-    Future<Map<String, dynamic>?> probe(List<List<dynamic>> conds) async {
-      var q = _sb.from('item').select('id, group_sig').eq('org_id', orgId);
-      for (final c in conds) {
-        final k = c[0] as String;
-        final op = c[1] as String;
-        final v = c.length > 2 ? c[2] : null;
-        if (op == 'is') {
-          q = q.filter(k, 'is', null);
-        } else if (op == 'eq') {
-          q = q.eq(k, v);
-        }
-      }
-      final r = await q.order('id', ascending: false).limit(1).maybeSingle();
-      return r == null ? null : Map<String, dynamic>.from(r);
-    }
-
-    try {
-      rep = await probe([
-        ['status', 'eq', status],
-        ['type', 'eq', type],
-        ['language', 'eq', language],
-        ['product_id', 'eq', productId],
-        ['game_id', 'eq', gameId],
-      ]);
-
-      rep ??= await probe([
-        ['status', 'eq', status],
-        ['product_id', 'eq', productId],
-        ['game_id', 'eq', gameId],
-      ]);
-
-      rep ??= await probe([
-        ['status', 'eq', status],
-        ['product_id', 'eq', productId],
-      ]);
-
-      if (rep == null || rep['id'] == null) {
-        _snack("Unable to identify the item group for this line.");
-        return;
-      }
-    } on PostgrestException catch (e) {
-      _snack('Error resolving group (Supabase): ${e.message}');
-      return;
-    } catch (e) {
-      _snack('Error resolving group: $e');
+    if (groupSig == null || groupSig.isEmpty) {
+      _snack('Missing group signature for this line.');
       return;
     }
 
     final payload = {
       'org_id': orgId,
       ...line,
-      'id': rep['id'],
-      if ((rep['group_sig']?.toString().isNotEmpty ?? false))
-        'group_sig': rep['group_sig'],
+      'group_sig': groupSig,
     };
+
+    // Optionnel : on essaie de choper un item d’ancrage pour cette ligne
+    try {
+      final anchor = await _sb
+          .from('item')
+          .select('id')
+          .eq('org_id', orgId)
+          .eq('group_sig', groupSig)
+          .eq('status', status)
+          .order('id', ascending: true)
+          .limit(1)
+          .maybeSingle();
+
+      if (anchor != null && anchor['id'] != null) {
+        payload['id'] = anchor['id'];
+      }
+    } catch (_) {
+      // soft fail, on laisse GroupDetails se débrouiller avec group_sig
+    }
 
     final changed = await Navigator.of(context).push<bool>(
       MaterialPageRoute(
@@ -1171,6 +1145,27 @@ class _MainInventoryPageState extends State<MainInventoryPage>
   }
 
   Future<List<int>> _collectItemIdsForLine(Map<String, dynamic> line) async {
+    final String? groupSig = line['group_sig']?.toString();
+    final String status = (line['status'] ?? '').toString();
+
+    // 1️⃣ Cas idéal : on a group_sig → on s’en sert directement
+    if (groupSig != null && groupSig.isNotEmpty && status.isNotEmpty) {
+      final raw = await _sb
+          .from('item')
+          .select('id')
+          .eq('org_id', widget.orgId)
+          .eq('group_sig', groupSig)
+          .eq('status', status)
+          .order('id', ascending: true)
+          .limit(20000);
+
+      return raw
+          .map((e) => (e as Map)['id'])
+          .whereType<int>()
+          .toList(growable: false);
+    }
+
+    // 2️⃣ Fallback : ancienne logique (moins précise, mais compatible)
     dynamic norm(dynamic v) {
       if (v == null) return null;
       if (v is String && v.trim().isEmpty) return null;
@@ -1235,7 +1230,7 @@ class _MainInventoryPageState extends State<MainInventoryPage>
         }
       }
 
-      q = q.eq('status', (line['status'] ?? '').toString());
+      q = q.eq('status', status);
 
       final List<dynamic> raw =
           await q.order('id', ascending: true).limit(20000);
