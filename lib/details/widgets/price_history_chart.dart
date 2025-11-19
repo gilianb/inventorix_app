@@ -5,8 +5,9 @@
 
 import 'dart:math';
 import 'package:flutter/material.dart';
-import 'package:fl_chart/fl_chart.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:syncfusion_flutter_charts/charts.dart';
+import 'package:intl/intl.dart';
 
 class PriceHistoryTabs extends StatefulWidget {
   const PriceHistoryTabs({
@@ -131,8 +132,11 @@ class _PriceHistoryTabsState extends State<PriceHistoryTabs> {
                         Theme.of(context).colorScheme.primary.withOpacity(0.15),
                     borderRadius: BorderRadius.circular(8),
                   ),
-                  child: Icon(Icons.show_chart,
-                      size: 18, color: Theme.of(context).colorScheme.primary),
+                  child: Icon(
+                    Icons.show_chart,
+                    size: 18,
+                    color: Theme.of(context).colorScheme.primary,
+                  ),
                 ),
                 const SizedBox(width: 10),
                 Expanded(
@@ -151,7 +155,8 @@ class _PriceHistoryTabsState extends State<PriceHistoryTabs> {
                       ? const SizedBox(
                           width: 18,
                           height: 18,
-                          child: CircularProgressIndicator(strokeWidth: 2))
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
                       : const Icon(Icons.refresh),
                 ),
               ],
@@ -173,7 +178,7 @@ class _PriceHistoryTabsState extends State<PriceHistoryTabs> {
             const SizedBox(height: 8),
 
             SizedBox(
-              height: 260,
+              height: 300, // plus grand pour respirer
               child: _loading
                   ? const Center(child: CircularProgressIndicator())
                   : (_error != null
@@ -234,107 +239,201 @@ class _HistorySeries extends StatelessWidget {
       return const _EmptyState(label: 'No data to display');
     }
 
-    final base = DateTime.utc(1970, 1, 1);
-    double dayX(DateTime d) => d.toUtc().difference(base).inDays.toDouble();
+    // Toujours trier pour être tranquille
+    final data = [...points]..sort((a, b) => a.at.compareTo(b.at));
 
-    final spots = points.map((p) => FlSpot(dayX(p.at), p.value)).toList();
-    final minX = spots.first.x, maxX = spots.last.x;
+    final minDate = data.first.at;
+    final maxDate = data.last.at;
 
-    final vals = points.map((e) => e.value).toList();
-    final minY = vals.reduce(min), maxY = vals.reduce(max);
-    final dy = (maxY - minY).abs();
-    final yPad = dy == 0 ? max(1.0, maxY * 0.1) : dy * 0.15;
+    final values = data.map((e) => e.value).toList();
+    final minValue = values.reduce(min);
+    final maxValue = values.reduce(max);
+    final range = (maxValue - minValue).abs();
 
-    String fmtDate(double x) {
-      final days = x.round();
-      final d = base.add(Duration(days: days)).toLocal();
-      String two(int v) => v.toString().padLeft(2, '0');
-      return '${two(d.day)}/${two(d.month)}';
+    // Padding vertical pour ne pas "couper" le graph
+    final pad = range == 0 ? max(1.0, maxValue * 0.25) : range * 0.15;
+    final double axisMin = max(0, minValue - pad).toDouble();
+    final double axisMax = (maxValue + pad).toDouble();
+
+    final theme = Theme.of(context);
+    final onSurface = theme.colorScheme.onSurface.withOpacity(0.85);
+    final divider = theme.dividerColor.withOpacity(0.35);
+    final locale = Localizations.localeOf(context).toString();
+
+    // Petit résumé en haut à droite : dernier prix + % vs premier
+    final lastPoint = data.last;
+    final firstPoint = data.first;
+    final lastValue = lastPoint.value;
+    final firstValue = firstPoint.value;
+    final diff = lastValue - firstValue;
+    final pct = firstValue == 0 ? null : (diff / firstValue) * 100;
+
+    final isUp = (pct ?? 0) > 0;
+    final isDown = (pct ?? 0) < 0;
+    final changeColor = isUp
+        ? Colors.green.shade600
+        : isDown
+            ? Colors.red.shade600
+            : theme.colorScheme.outline;
+
+    final numberFormatCompact = NumberFormat.compact(locale: locale);
+    final numberFormatFull = NumberFormat.currency(
+      locale: locale,
+      symbol: currency,
+      decimalDigits: 2,
+    );
+
+    String changeText() {
+      if (pct == null) return '';
+      final sign = isUp ? '+' : '';
+      return '$sign${pct.toStringAsFixed(1)} %';
     }
+
+    // Trackball : permet de voir le point le plus proche de la souris,
+    // même si on n'est pas pile sur la courbe.
+    final trackball = TrackballBehavior(
+      enable: true,
+      activationMode: ActivationMode.singleTap,
+      lineType: TrackballLineType.vertical,
+      lineColor: color.withOpacity(0.8),
+      lineWidth: 1.2,
+      tooltipDisplayMode: TrackballDisplayMode.nearestPoint,
+      tooltipSettings: InteractiveTooltip(
+        enable: true,
+        borderWidth: 0,
+        color: theme.colorScheme.surface,
+        textStyle: theme.textTheme.bodySmall?.copyWith(
+          fontWeight: FontWeight.w700,
+          color: theme.colorScheme.onSurface,
+        ),
+        // Exemple : 14/11/2024\n125.00 €
+        format: 'point.x\npoint.y $currency',
+      ),
+      markerSettings: TrackballMarkerSettings(
+        markerVisibility: TrackballVisibilityMode.visible,
+        height: 8,
+        width: 8,
+        borderWidth: 2,
+        borderColor: theme.colorScheme.surface,
+        color: color,
+      ),
+    );
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(4, 4, 4, 8),
-      child: LineChart(
-        LineChartData(
-          minX: minX,
-          maxX: maxX,
-          minY: max(0, minY - yPad),
-          maxY: maxY + yPad,
-          gridData: FlGridData(
-            show: true,
-            horizontalInterval: dy == 0
-                ? (max(1.0, maxY * 0.25))
-                : (dy / 4).clamp(1, double.infinity),
-            drawVerticalLine: false,
-          ),
-          titlesData: FlTitlesData(
-            leftTitles: AxisTitles(
-              sideTitles: SideTitles(
-                reservedSize: 44,
-                showTitles: true,
-                getTitlesWidget: (v, meta) => Padding(
-                  padding: const EdgeInsets.only(right: 6),
-                  child: Text(
-                    v.toStringAsFixed(0),
-                    style: TextStyle(
-                      fontSize: 10,
-                      color: Theme.of(context)
-                          .colorScheme
-                          .onSurface
-                          .withOpacity(0.7),
-                    ),
-                  ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // Chip dernier prix + variation
+          Align(
+            alignment: Alignment.centerRight,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              decoration: BoxDecoration(
+                color: theme.colorScheme.surfaceVariant.withOpacity(0.9),
+                borderRadius: BorderRadius.circular(999),
+                border: Border.all(
+                  color: theme.colorScheme.outlineVariant.withOpacity(0.6),
+                  width: 0.7,
                 ),
               ),
-            ),
-            bottomTitles: AxisTitles(
-              sideTitles: SideTitles(
-                showTitles: true,
-                interval: ((maxX - minX) / 5).clamp(1, double.infinity),
-                getTitlesWidget: (v, meta) => Padding(
-                  padding: const EdgeInsets.only(top: 4),
-                  child: Text(
-                    fmtDate(v),
-                    style: TextStyle(
-                      fontSize: 10,
-                      color: Theme.of(context)
-                          .colorScheme
-                          .onSurface
-                          .withOpacity(0.7),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    numberFormatFull.format(lastValue),
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      fontWeight: FontWeight.w700,
+                      color: onSurface,
                     ),
                   ),
-                ),
+                  if (pct != null) ...[
+                    const SizedBox(width: 6),
+                    Icon(
+                      isUp
+                          ? Icons.trending_up_rounded
+                          : isDown
+                              ? Icons.trending_down_rounded
+                              : Icons.horizontal_rule_rounded,
+                      size: 14,
+                      color: changeColor,
+                    ),
+                    const SizedBox(width: 2),
+                    Text(
+                      changeText(),
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        fontWeight: FontWeight.w600,
+                        color: changeColor,
+                      ),
+                    ),
+                  ],
+                ],
               ),
             ),
-            rightTitles:
-                const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-            topTitles:
-                const AxisTitles(sideTitles: SideTitles(showTitles: false)),
           ),
-          borderData: FlBorderData(show: true),
-          lineTouchData: LineTouchData(
-            enabled: true,
-            touchTooltipData: LineTouchTooltipData(
-              getTooltipItems: (l) => l
-                  .map((s) => LineTooltipItem(
-                        '${s.y.toStringAsFixed(2)} $currency',
-                        const TextStyle(fontWeight: FontWeight.w800),
-                      ))
-                  .toList(),
+          const SizedBox(height: 6),
+          Expanded(
+            child: SfCartesianChart(
+              plotAreaBorderWidth: 0,
+              plotAreaBackgroundColor:
+                  theme.colorScheme.primary.withOpacity(0.015),
+              tooltipBehavior: TooltipBehavior(enable: false),
+              trackballBehavior: trackball,
+              zoomPanBehavior: ZoomPanBehavior(
+                enablePanning: true,
+                enablePinching: true,
+              ),
+              primaryXAxis: DateTimeAxis(
+                minimum: minDate,
+                maximum: maxDate,
+                edgeLabelPlacement: EdgeLabelPlacement.shift,
+                dateFormat: DateFormat('dd/MM', locale),
+                majorGridLines: const MajorGridLines(width: 0),
+                axisLine: const AxisLine(width: 0),
+                labelStyle: theme.textTheme.bodySmall?.copyWith(
+                  fontSize: 13,
+                  fontWeight: FontWeight.bold,
+                  color: onSurface,
+                ),
+              ),
+              primaryYAxis: NumericAxis(
+                minimum: axisMin,
+                maximum: axisMax,
+                axisLine: const AxisLine(width: 0),
+                majorGridLines: MajorGridLines(
+                  width: 0.7,
+                  color: divider,
+                ),
+                labelStyle: theme.textTheme.bodySmall?.copyWith(
+                  fontSize: 13,
+                  color: onSurface,
+                  fontWeight: FontWeight.bold,
+                ),
+                numberFormat: numberFormatCompact,
+              ),
+              series: <SplineAreaSeries<_Point, DateTime>>[
+                SplineAreaSeries<_Point, DateTime>(
+                  dataSource: data,
+                  xValueMapper: (_Point p, _) => p.at,
+                  yValueMapper: (_Point p, _) => p.value,
+                  borderColor: color,
+                  borderWidth: 2.4,
+                  splineType: SplineType.natural,
+                  gradient: LinearGradient(
+                    colors: [
+                      color.withOpacity(0.28),
+                      color.withOpacity(0.03),
+                    ],
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                  ),
+                  animationDuration: 700,
+                  markerSettings: const MarkerSettings(isVisible: false),
+                ),
+              ],
             ),
           ),
-          lineBarsData: [
-            LineChartBarData(
-              spots: spots,
-              isCurved: true,
-              barWidth: 2.4,
-              color: color,
-              dotData: const FlDotData(show: false),
-              belowBarData:
-                  BarAreaData(show: true, color: color.withOpacity(0.18)),
-            ),
-          ],
-        ),
+        ],
       ),
     );
   }
@@ -348,8 +447,14 @@ class _EmptyState extends StatelessWidget {
   Widget build(BuildContext context) {
     final dim = Theme.of(context).colorScheme.onSurface.withOpacity(0.6);
     return Center(
-        child: Text(label,
-            style: TextStyle(color: dim, fontStyle: FontStyle.italic)));
+      child: Text(
+        label,
+        style: TextStyle(
+          color: dim,
+          fontStyle: FontStyle.italic,
+        ),
+      ),
+    );
   }
 }
 
@@ -373,9 +478,14 @@ class _ErrorBox extends StatelessWidget {
           Icon(Icons.error_outline, color: c.error),
           const SizedBox(width: 8),
           Expanded(
-              child: Text(message,
-                  style:
-                      TextStyle(color: c.error, fontWeight: FontWeight.w700))),
+            child: Text(
+              message,
+              style: TextStyle(
+                color: c.error,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
         ],
       ),
     );
