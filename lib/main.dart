@@ -1,23 +1,62 @@
 // lib/main.dart
+// ignore_for_file: unintended_html_in_doc_comment
+
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-// Optionnel : enlève le # des URL si tu veux du "path" pur
-// import 'package:flutter_web_plugins/url_strategy.dart';
+// ignore: depend_on_referenced_packages
+import 'package:flutter_web_plugins/url_strategy.dart';
 
 import 'auth/auth_gate.dart';
-import 'public/public_line_page.dart';
+import 'public/public_item_page.dart';
 
-/// Initialise .env puis Supabase si les credentials existent.
-/// Renvoie true si Supabase est bien initialisé, sinon false (mode dégradé).
+/// Essaie d'extraire un token public depuis l'URL actuelle.
+/// Gère:
+///   - /i/<token>
+///   - #/i/<token>
+///   - ?i=<token> ou ?token=<token>
+String? _extractPublicTokenFromUri(Uri uri) {
+  // 1) mode "path" classique : https://.../i/<token>
+  if (uri.pathSegments.isNotEmpty && uri.pathSegments.first == 'i') {
+    return uri.pathSegments.length >= 2 ? uri.pathSegments[1] : null;
+  }
+
+  // 2) mode "hash" : https://.../#/i/<token>
+  final frag = uri.fragment;
+  if (frag.isNotEmpty) {
+    // On force un "/" devant pour que Uri.parse comprenne bien la route
+    final fUri = Uri.parse(frag.startsWith('/') ? frag : '/$frag');
+    if (fUri.pathSegments.isNotEmpty && fUri.pathSegments.first == 'i') {
+      return fUri.pathSegments.length >= 2 ? fUri.pathSegments[1] : null;
+    }
+  }
+
+  // 3) fallback via query : https://.../?i=<token> ou ?token=<token>
+  final qp = uri.queryParameters;
+  final t = qp['i'] ?? qp['token'];
+  if (t != null && t.isNotEmpty) return t;
+
+  return null;
+}
+
+/// Détecte si l'URL correspond à un ancien lien /public (query / hash)
+bool _isLegacyPublicUri(Uri uri) {
+  if (uri.path == '/public') return true;
+
+  final frag = uri.fragment;
+  if (frag.startsWith('/public') || frag == 'public') {
+    return true;
+  }
+
+  return false;
+}
+
 Future<bool> _initEnvAndSupabase() async {
   try {
     await dotenv.load(fileName: '.env');
-  } catch (_) {
-    // Pas de .env : mode dégradé
-  }
+  } catch (_) {}
 
   final supabaseUrl = dotenv.env['SUPABASE_URL'];
   final supabaseAnonKey = dotenv.env['SUPABASE_ANON_KEY'];
@@ -43,44 +82,84 @@ Future<bool> _initEnvAndSupabase() async {
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  // Optionnel : supprime le hash des URL (sur Web)
-  // usePathUrlStrategy();
+
+  // 🔹 Sur le web: URLs "propres" (sans #)
+  if (kIsWeb) {
+    usePathUrlStrategy();
+  }
 
   final hasSupabase = await _initEnvAndSupabase();
+
+  // 🔹 Mode WEB : on regarde l'URL AVANT même de lancer l'app privée
+  if (kIsWeb) {
+    final uri = Uri.base;
+
+    // 1) Lien public basé sur token: /i/<token>, #/i/<token>, ?i=<token>
+    final publicToken = _extractPublicTokenFromUri(uri);
+    if (publicToken != null && publicToken.isNotEmpty) {
+      runApp(_PublicItemBootstrapApp(token: publicToken));
+      return;
+    }
+
+    // 2) Ancien lien public : /public... (path ou hash) -> app de redirection
+    if (_isLegacyPublicUri(uri)) {
+      runApp(_PublicLegacyBootstrapApp(hasSupabase: hasSupabase));
+      return;
+    }
+  }
+
+  // 🔹 Tous les autres cas : app interne normale (AuthGate)
   runApp(InventorixApp(hasSupabase: hasSupabase));
 }
 
+/// App publique minimale : ne montre QUE la fiche publique.
+class _PublicItemBootstrapApp extends StatelessWidget {
+  const _PublicItemBootstrapApp({required this.token});
+  final String token;
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: 'Inventorix — Public sheet',
+      debugShowCheckedModeBanner: false,
+      theme: ThemeData(
+        useMaterial3: true,
+        colorSchemeSeed: Colors.indigo,
+      ),
+      home: PublicItemPage(token: token),
+    );
+  }
+}
+
+/// App de compat /public -> /i/<token>
+class _PublicLegacyBootstrapApp extends StatelessWidget {
+  const _PublicLegacyBootstrapApp({required this.hasSupabase});
+  final bool hasSupabase;
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: 'Inventorix — Public link',
+      debugShowCheckedModeBanner: false,
+      theme: ThemeData(
+        useMaterial3: true,
+        colorSchemeSeed: Colors.indigo,
+      ),
+      home: _PublicLegacyRedirect(hasSupabase: hasSupabase),
+    );
+  }
+}
+
+/// App interne (privée) avec AuthGate
 class InventorixApp extends StatelessWidget {
   const InventorixApp({super.key, required this.hasSupabase});
   final bool hasSupabase;
 
-  /// Détecte le path effectif sur Web :
-  /// - soit dans Uri.base.path (/public)
-  /// - soit dans Uri.base.fragment (#/public) si hash strategy
-  String _effectivePath() {
-    if (!kIsWeb) return '/';
-    final path = Uri.base.path; // ex: /public
-    final frag = Uri.base.fragment; // ex: /public si hash strategy
-    if (path != '/' && path.isNotEmpty) return path;
-    if (frag.isNotEmpty) return frag.startsWith('/') ? frag : '/$frag';
-    return '/';
-  }
-
-  bool _isPublicUrl() {
-    final p = _effectivePath(); // ex: /public ou /public/
-    return p == '/public' || p.startsWith('/public/');
-  }
-
   @override
   Widget build(BuildContext context) {
-    // IMPORTANT : si on arrive directement sur /public?org=...,
-    // on évite d'afficher AuthGate au 1er frame.
-    final initial = kIsWeb && _isPublicUrl() ? '/public' : '/';
-
-    Route<dynamic> page(Widget w) => MaterialPageRoute(builder: (_) => w);
-
     return MaterialApp(
       title: 'Inventorix',
+      debugShowCheckedModeBanner: false,
       theme: ThemeData(
         useMaterial3: true,
         colorSchemeSeed: Colors.indigo,
@@ -88,47 +167,7 @@ class InventorixApp extends StatelessWidget {
           border: OutlineInputBorder(),
         ),
       ),
-      debugShowCheckedModeBanner: false,
-
-      // Empêche un flash de la page d'auth quand l'URL cible est /public
-      initialRoute: initial,
-
-      routes: {
-        // Route publique TOUJOURS accessible (les query params sont lus via Uri.base)
-        '/public': (context) => const PublicLinePage(),
-        // Route login si tu l’utilises ailleurs
-        '/login': (context) => const AuthGate(),
-        // Route racine (zone protégée)
-        '/': (context) =>
-            hasSupabase ? const AuthGate() : const _DegradedHome(),
-      },
-
-      onGenerateRoute: (settings) {
-        // Si ce n'est pas une route déclarée ci-dessus :
-        if (kIsWeb) {
-          // settings.name peut ressembler à "/public?org=...&g=...&s=..."
-          final raw = settings.name ?? Uri.base.toString();
-          final uri = Uri.tryParse(raw) ?? Uri();
-          final pathOnly = uri.path;
-
-          // Force la page publique si on détecte /public (quelque soit la query)
-          if (pathOnly == '/public' || pathOnly == '/public/') {
-            return page(const PublicLinePage());
-          }
-
-          // Cas hash strategy : fragment == "/public?...":
-          final frag = Uri.base.fragment;
-          if (frag.startsWith('/public')) {
-            return page(const PublicLinePage());
-          }
-        }
-
-        // Par défaut : zone protégée (ou mode dégradé)
-        return page(hasSupabase ? const AuthGate() : const _DegradedHome());
-      },
-
-      onUnknownRoute: (_) =>
-          page(hasSupabase ? const AuthGate() : const _DegradedHome()),
+      home: hasSupabase ? const AuthGate() : const _DegradedHome(),
     );
   }
 }
@@ -156,6 +195,117 @@ class _DegradedHome extends StatelessWidget {
             'Une fois Supabase prêt, l’écran d’auth s’activera automatiquement.',
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// Compat ascendante : /public?org=...&g=...&s=...  →  /i/<public_token>
+class _PublicLegacyRedirect extends StatefulWidget {
+  const _PublicLegacyRedirect({required this.hasSupabase});
+  final bool hasSupabase;
+
+  @override
+  State<_PublicLegacyRedirect> createState() => _PublicLegacyRedirectState();
+}
+
+class _PublicLegacyRedirectState extends State<_PublicLegacyRedirect> {
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _redirect());
+  }
+
+  Future<void> _redirect() async {
+    if (!widget.hasSupabase) {
+      setState(() => _error =
+          'Supabase non configuré — impossible de résoudre le lien public.');
+      return;
+    }
+
+    try {
+      final base = Uri.base;
+
+      final qp = <String, String>{
+        ...base.queryParameters,
+        if (base.fragment.contains('?'))
+          ...Uri.splitQueryString(base.fragment.split('?').last),
+      };
+
+      final org = (qp['org'] ?? '').trim();
+      final g = (qp['g'] ?? '').trim();
+      final s = (qp['s'] ?? '').trim(); // optionnel
+
+      if (org.isEmpty || g.isEmpty) {
+        setState(() => _error = 'Lien invalide (org/g manquants).');
+        return;
+      }
+
+      final sb = Supabase.instance.client;
+
+      var filter = sb
+          .from('item')
+          .select('public_token')
+          .eq('org_id', org)
+          .eq('group_sig', g);
+
+      if (s.isNotEmpty) {
+        filter = filter.eq('status', s);
+      }
+
+      final rec =
+          await filter.order('id', ascending: true).limit(1).maybeSingle();
+
+      final token = (rec?['public_token'] ?? '').toString();
+
+      if (token.isEmpty) {
+        setState(() => _error = 'Ressource introuvable (404).');
+        return;
+      }
+
+      if (!mounted) return;
+
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(
+          settings: RouteSettings(name: '/i/$token'),
+          builder: (_) => PublicItemPage(token: token),
+        ),
+      );
+    } catch (e) {
+      if (mounted) {
+        setState(() => _error = 'Erreur de redirection : $e');
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Scaffold(
+      appBar: AppBar(title: const Text('Inventorix — Public link')),
+      body: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: _error == null
+              ? Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: const [
+                    CircularProgressIndicator(),
+                    SizedBox(height: 12),
+                    Text('Redirection…'),
+                  ],
+                )
+              : Text(
+                  _error!,
+                  textAlign: TextAlign.center,
+                  style: theme.textTheme.titleMedium?.copyWith(
+                    color: theme.colorScheme.error,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+        ),
       ),
     );
   }

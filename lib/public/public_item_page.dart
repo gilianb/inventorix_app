@@ -1,9 +1,7 @@
-// lib/public/public_line_page.dart
-// Page publique : Titre pleine largeur • Image "carte" à gauche • Prix estimé à droite.
-// + Historique des prix (Collectr) sous le contenu, avec onglets Raw / Graded.
-// - Pas d’auth requise
-// - Responsive (deux colonnes en large, vertical en étroit)
-// - Lien appelée via /public?org=...&g=...&s=...
+// lib/public/public_item_page.dart
+// Page publique (aperçu dans l'app) basée sur un token immuable : /i/<public_token>
+// - Charge l'item via token, récupère product et infos affichables
+// - Affiche une image, un panneau de prix estimé et l'historique (Raw / Graded)
 
 // ignore_for_file: deprecated_member_use
 
@@ -11,26 +9,22 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-// ⬇️ Graphique d’historique (onglets Raw / Graded)
+// Graphique d’historique (onglets Raw / Graded)
 import '../details/widgets/price_history_chart.dart';
 
-class PublicLinePage extends StatefulWidget {
-  const PublicLinePage({
+class PublicItemPage extends StatefulWidget {
+  const PublicItemPage({
     super.key,
-    this.org,
-    this.groupSig,
-    this.status,
+    required this.token,
   });
 
-  final String? org;
-  final String? groupSig;
-  final String? status;
+  final String token;
 
   @override
-  State<PublicLinePage> createState() => _PublicLinePageState();
+  State<PublicItemPage> createState() => _PublicItemPageState();
 }
 
-class _PublicLinePageState extends State<PublicLinePage> {
+class _PublicItemPageState extends State<PublicItemPage> {
   final _sb = Supabase.instance.client;
 
   bool _loading = true;
@@ -59,79 +53,77 @@ class _PublicLinePageState extends State<PublicLinePage> {
     });
 
     try {
-      // Params éventuels transmis par l’URL
-      final uri = Uri.base;
-      final org = widget.org ?? uri.queryParameters['org'];
-      final sig = widget.groupSig ?? uri.queryParameters['g'];
-      final st = widget.status ?? uri.queryParameters['s'];
-
-      if ((org == null || org.isEmpty) ||
-          (sig == null || sig.isEmpty) ||
-          (st == null || st.isEmpty)) {
-        throw 'Invalid link (missing org/g/s).';
+      final token = widget.token;
+      if (token.isEmpty) {
+        throw 'Invalid link (missing token).';
       }
 
-      // Tente la vue agrégée, sinon fallback item+product
-      Map<String, dynamic>? row;
-
+      // 1) Essaye l'RPC si disponible (pub_get_item_by_token)
+      Map<String, dynamic>? pubRow;
       try {
-        row = await _sb
-            .from('v_item_groups')
-            .select(
-              'product_name, photo_url, estimated_price, product_id, type, currency',
-            )
-            .eq('org_id', org)
-            .eq('group_sig', sig)
-            .eq('status', st)
-            .limit(1)
-            .maybeSingle();
-      } catch (_) {
-        // ignore
-      }
+        final rpcRes = await _sb.rpc('pub_get_item_by_token', params: {
+          'p_token': token,
+        });
 
-      if (row == null) {
-        final item = await _sb
-            .from('item')
-            .select('product_id, estimated_price, photo_url, currency')
-            .eq('org_id', org)
-            .eq('group_sig', sig)
-            .eq('status', st)
-            .limit(1)
-            .maybeSingle();
-
-        if (item == null) throw 'Resource not found (404).';
-
-        final pid = (item['product_id'] as num?)?.toInt();
-        Map<String, dynamic>? product;
-        if (pid != null) {
-          product = await _sb
-              .from('product')
-              .select('name, photo_url, type')
-              .eq('id', pid)
-              .maybeSingle();
+        if (rpcRes != null) {
+          if (rpcRes is List && rpcRes.isNotEmpty) {
+            pubRow = Map<String, dynamic>.from(rpcRes.first as Map);
+          } else if (rpcRes is Map) {
+            pubRow = Map<String, dynamic>.from(rpcRes);
+          }
         }
-
-        row = {
-          'product_name': product?['name']?.toString() ?? 'Produit',
-          'photo_url': (item['photo_url'] ?? product?['photo_url'])?.toString(),
-          'estimated_price':
-              (item['estimated_price'] as num?)?.toDouble() ?? 0.0,
-          'product_id': pid,
-          'type': product?['type']?.toString() ?? 'single',
-          'currency': (item['currency'] ?? 'USD').toString(),
-        };
+      } catch (_) {
+        // RPC non présent ou non accessible -> on tombera sur le fallback
       }
 
-      _title = (row['product_name'] ?? '').toString();
-      _photoUrl = (row['photo_url'] as String?)?.trim().isEmpty ?? true
-          ? null
-          : (row['photo_url'] as String);
-      _estimated = (row['estimated_price'] as num?)?.toDouble();
+      if (pubRow != null) {
+        _title = (pubRow['product_name'] ?? '').toString();
+        final purl = (pubRow['photo_url'] ?? '').toString();
+        _photoUrl = purl.isEmpty ? null : purl;
+        _estimated = (pubRow['estimated_price'] as num?)?.toDouble();
+        _productId = (pubRow['product_id'] as num?)?.toInt();
+        _isSingle =
+            ((pubRow['type'] ?? 'single').toString().toLowerCase() == 'single');
+        _currency = (pubRow['currency'] ?? 'USD').toString();
 
-      _productId = (row['product_id'] as num?)?.toInt();
+        setState(() => _loading = false);
+        return;
+      }
+
+      // 2) Fallback: jointure côté client item -> product -> games
+      final item = await _sb
+          .from('item')
+          .select(
+              'id, product_id, estimated_price, photo_url, currency, status, grade_id, language, game_id')
+          .eq('public_token', token)
+          .limit(1)
+          .maybeSingle();
+
+      if (item == null) throw 'Item not found (404).';
+
+      final pid = (item['product_id'] as num?)?.toInt();
+      Map<String, dynamic>? product;
+      if (pid != null) {
+        product = await _sb
+            .from('product')
+            .select('name, photo_url, type, game_id')
+            .eq('id', pid)
+            .maybeSingle();
+      }
+
+      final gid = (item['game_id'] as num?)?.toInt() ??
+          (product?['game_id'] as num?)?.toInt();
+      if (gid != null) {}
+
+      _title = (product?['name'] ?? 'Item').toString();
+      final purl =
+          (item['photo_url'] ?? product?['photo_url'])?.toString() ?? '';
+      _photoUrl = purl.trim().isEmpty ? null : purl.trim();
+      _estimated = (item['estimated_price'] as num?)?.toDouble();
+      _productId = pid;
       _isSingle =
-          ((row['type'] ?? 'single').toString().toLowerCase() == 'single');
-      _currency = (row['currency'] ?? 'USD').toString();
+          ((product?['type'] ?? 'single').toString().toLowerCase() == 'single');
+      _currency = (item['currency'] ?? 'USD').toString();
 
       setState(() {
         _loading = false;
@@ -289,6 +281,7 @@ class _PublicContent extends StatelessWidget {
         Widget buildPricePanel() {
           return _PricePanel(
             value: estimated,
+            currency: currency,
           );
         }
 
@@ -297,7 +290,6 @@ class _PublicContent extends StatelessWidget {
           if (productId == null) {
             return const SizedBox.shrink();
           }
-          // Donne une hauteur bornée au widget d’onglets/graph (évite les erreurs d’unbounded height).
           final double graphHeight = wide ? 380 : 320;
 
           return Column(
@@ -361,27 +353,26 @@ class _PublicContent extends StatelessWidget {
 }
 
 class _PricePanel extends StatelessWidget {
-  const _PricePanel({required this.value});
+  const _PricePanel({required this.value, required this.currency});
   final double? value;
+  final String currency;
 
-  String _formatUsd(double? v) {
+  String _formatAmount(double? v) {
     if (v == null) return '—';
     final s = v.toStringAsFixed(0);
-    // Ajoute des séparateurs de milliers simples (1 234 567)
     final regex = RegExp(r'\B(?=(\d{3})+(?!\d))');
-    return '${s.replaceAllMapped(regex, (m) => ' ')} USD';
+    return s.replaceAllMapped(regex, (m) => ' ');
   }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final priceTxt = _formatUsd(value);
+    final priceTxt = _formatAmount(value);
 
     return Container(
       padding: const EdgeInsets.fromLTRB(18, 18, 18, 18),
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(20),
-        // joli gradient “carte prix”
         gradient: LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
@@ -441,7 +432,7 @@ class _PricePanel extends StatelessWidget {
               fit: BoxFit.scaleDown,
               alignment: Alignment.centerLeft,
               child: Text(
-                priceTxt,
+                '$priceTxt $currency',
                 maxLines: 1,
                 style: theme.textTheme.displaySmall?.copyWith(
                   fontWeight: FontWeight.w900,
@@ -462,17 +453,16 @@ class _PricePanel extends StatelessWidget {
               ),
             ),
 
-            // ⬇️ remplace Spacer() (interdit en hauteur non bornée) par un espace fixe
             const SizedBox(height: 12),
 
-            // Petit bloc décoratif (tags)
+            // Tags décoratifs
             Wrap(
               spacing: 8,
               runSpacing: 8,
-              children: const [
-                _ChipOutline(icon: Icons.shield_moon, label: 'Read-only'),
-                _ChipOutline(icon: Icons.public, label: 'Public'),
-                _ChipOutline(icon: Icons.currency_exchange, label: 'USD'),
+              children: [
+                const _ChipOutline(icon: Icons.shield_moon, label: 'Read-only'),
+                const _ChipOutline(icon: Icons.public, label: 'Public'),
+                _ChipOutline(icon: Icons.currency_exchange, label: currency),
               ],
             ),
           ],

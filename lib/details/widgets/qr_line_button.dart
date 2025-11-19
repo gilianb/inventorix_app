@@ -1,8 +1,14 @@
 // lib/details/widgets/qr_line_button.dart
 
+import 'dart:typed_data';
+import 'dart:ui' as ui;
+
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:qr_flutter/qr_flutter.dart';
+import 'package:printing/printing.dart';
+import 'package:pdf/widgets.dart' as pw;
+import 'package:pdf/pdf.dart';
 
 //icons
 import 'package:iconify_flutter/iconify_flutter.dart';
@@ -72,6 +78,72 @@ class QrLineButton extends StatelessWidget {
     );
   }
 
+  // -------- Impression du QR --------
+
+  Future<Uint8List> _buildQrPng(String data) async {
+    final painter = QrPainter(
+      data: data,
+      version: QrVersions.auto,
+      gapless: true,
+      color: const Color(0xFF000000),
+      emptyColor: const Color(0xFFFFFFFF),
+    );
+
+    final uiImage = await painter.toImage(600); // bonne résolution
+    final byteData = await uiImage.toByteData(format: ui.ImageByteFormat.png);
+    return byteData!.buffer.asUint8List();
+  }
+
+  Future<void> _printQr(String link) async {
+    try {
+      final qrBytes = await _buildQrPng(link);
+
+      final doc = pw.Document();
+
+      doc.addPage(
+        pw.Page(
+          pageFormat: PdfPageFormat.a4,
+          margin: const pw.EdgeInsets.all(20),
+          build: (context) {
+            return pw.Center(
+              child: pw.Column(
+                mainAxisSize: pw.MainAxisSize.min,
+                children: [
+                  pw.Container(
+                    padding: const pw.EdgeInsets.all(8),
+                    decoration: pw.BoxDecoration(
+                      border: pw.Border.all(width: 1),
+                    ),
+                    child: pw.Image(
+                      pw.MemoryImage(qrBytes),
+                      width: 160,
+                      height: 160,
+                    ),
+                  ),
+                  pw.SizedBox(height: 8),
+                  pw.Text(
+                    link,
+                    textAlign: pw.TextAlign.center,
+                    style: const pw.TextStyle(fontSize: 8),
+                  ),
+                ],
+              ),
+            );
+          },
+        ),
+      );
+
+      // Ouvre la boîte de dialogue d'impression du système / navigateur
+      await Printing.layoutPdf(
+        onLayout: (PdfPageFormat format) async => doc.save(),
+      );
+    } catch (e) {
+      debugPrint('Error printing QR: $e');
+    }
+  }
+
+  // -------- UI bottom sheet --------
+
   Future<void> _showQrBottomSheet(BuildContext ctx) async {
     final link = publicUrl;
     if (link == null || link.isEmpty) return;
@@ -115,8 +187,6 @@ class QrLineButton extends StatelessWidget {
                       SelectableText(
                         link,
                         textAlign: TextAlign.center,
-                        // forcer le wrap des très longues URLs
-                        // (SelectableText wrappe si la largeur est contrainte)
                       ),
                       if (appLink != null && appLink!.isNotEmpty) ...[
                         const SizedBox(height: 8),
@@ -149,6 +219,11 @@ class QrLineButton extends StatelessWidget {
                               if (onCopy != null) await onCopy!(link);
                               if (context.mounted) Navigator.of(context).pop();
                             },
+                          ),
+                          FilledButton.icon(
+                            icon: const Iconify(Mdi.printer),
+                            label: const Text('Print'),
+                            onPressed: () => _printQr(link),
                           ),
                         ],
                       ),
@@ -234,6 +309,11 @@ class _QrFullScreen extends StatelessWidget {
                         }
                       },
                     ),
+                    FilledButton.icon(
+                      icon: const Iconify(Mdi.printer),
+                      label: const Text('Print'),
+                      onPressed: () => _printQr(link),
+                    ),
                   ],
                 ),
               ],
@@ -242,5 +322,66 @@ class _QrFullScreen extends StatelessWidget {
         ),
       ),
     );
+  }
+
+  Future<Uint8List> _buildQrPng(String data) async {
+    final painter = QrPainter(
+      data: data,
+      version: QrVersions.auto,
+      gapless: true,
+      color: const Color(0xFF000000),
+      emptyColor: const Color(0xFFFFFFFF),
+    );
+
+    final uiImage = await painter.toImage(600);
+    final byteData = await uiImage.toByteData(format: ui.ImageByteFormat.png);
+    return byteData!.buffer.asUint8List();
+  }
+
+  Future<void> _printQr(String link) async {
+    try {
+      final qrBytes = await _buildQrPng(link);
+
+      final doc = pw.Document();
+
+      doc.addPage(
+        pw.Page(
+          pageFormat: PdfPageFormat.a4,
+          margin: const pw.EdgeInsets.all(20),
+          build: (context) {
+            return pw.Center(
+              child: pw.Column(
+                mainAxisSize: pw.MainAxisSize.min,
+                children: [
+                  pw.Container(
+                    padding: const pw.EdgeInsets.all(8),
+                    decoration: pw.BoxDecoration(
+                      border: pw.Border.all(width: 1),
+                    ),
+                    child: pw.Image(
+                      pw.MemoryImage(qrBytes),
+                      width: 160,
+                      height: 160,
+                    ),
+                  ),
+                  pw.SizedBox(height: 8),
+                  pw.Text(
+                    link,
+                    textAlign: pw.TextAlign.center,
+                    style: const pw.TextStyle(fontSize: 8),
+                  ),
+                ],
+              ),
+            );
+          },
+        ),
+      );
+
+      await Printing.layoutPdf(
+        onLayout: (PdfPageFormat format) async => doc.save(),
+      );
+    } catch (e) {
+      debugPrint('Error printing QR (fullscreen): $e');
+    }
   }
 }

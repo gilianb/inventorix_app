@@ -1,4 +1,4 @@
-// lib/details/group_details_page.dart
+// lib/details/details_page.dart
 // ignore_for_file: unused_local_variable, deprecated_member_use
 
 import 'dart:async';
@@ -17,11 +17,11 @@ import 'widgets/media_thumb.dart';
 import 'widgets/items_table.dart';
 import 'widgets/price_trends.dart';
 import 'widgets/qr_line_button.dart'; // <-- QR widget
-import 'widgets/price_history_chart.dart'; // <-- NEW: graph historique
+import 'widgets/price_history_chart.dart'; // <-- graph historique
 
 import 'details_service.dart';
 import '../../inventory/widgets/finance_overview.dart';
-import '../public/public_line_page.dart'; // <-- Aperçu public
+import '../public/public_item_page.dart'; // <-- Aperçu public (NOUVEAU)
 
 //icons
 import 'package:iconify_flutter/iconify_flutter.dart';
@@ -33,11 +33,8 @@ const kAccentA = Color(0xFF6C5CE7);
 const kAccentB = Color(0xFF00D1B2);
 const kAccentC = Color(0xFFFFB545);
 
-// Base URL publique de la fiche "ligne" (surchargable au build)
-const kPublicQrBaseUrl = String.fromEnvironment(
-  'INV_PUBLIC_QR_BASE',
-  defaultValue: 'https://inventorix-web.vercel.app/public',
-);
+// Base URL publique (racine du site web — /i/<token> sera ajouté)
+const String kPublicQrBaseUrl = 'https://inventorix-web.vercel.app';
 
 const List<String> kViewCols = [
   'org_id',
@@ -409,6 +406,7 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
           'buyer_infos',
           'marge',
           'group_sig',
+          'public_token', // <-- IMPORTANT pour QR stable
         ];
 
         final raw = await _sb
@@ -621,7 +619,7 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
     if (changed == true) {
       _dirty = true;
 
-      // 🔎 Re-probe l’item d’ancre (post-edit) pour récupérer le NOUVEAU couple (org_id, group_sig, status)
+      // 🔎 Re-probe l’item d’ancre (post-edit)
       if (anchorId != null) {
         try {
           final p = await _sb
@@ -637,7 +635,7 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
             _ovAnchorItemId = anchorId;
           }
         } catch (_) {
-          // ignore, on retombe sur _loadAll standard
+          // ignore
         }
       }
 
@@ -653,50 +651,29 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
     return _items.where((e) => (e['status'] ?? '') == f).toList();
   }
 
-  // ----- URL de la "ligne" (org + group_sig + status) -----
+  // ----- Helpers QR par token -----
 
-  String? _currentOrgId() => _ovOrgId ?? _orgIdFromContext;
-
-  String? _currentGroupSig() {
-    final s = _ovGroupSig ??
-        (_viewRow?['group_sig'] ?? widget.group['group_sig'])?.toString();
-    return (s != null && s.isNotEmpty) ? s : null;
+  String? _firstVisiblePublicToken() {
+    final it = _filteredItems();
+    if (it.isNotEmpty) {
+      final t = (it.first['public_token'] ?? '').toString();
+      if (t.isNotEmpty) return t;
+    }
+    if (_items.isNotEmpty) {
+      final t = (_items.first['public_token'] ?? '').toString();
+      if (t.isNotEmpty) return t;
+    }
+    return null;
   }
 
-  String? _currentStatus() {
-    final s = _ovStatus ??
-        (_localStatusFilter ??
-            (_items.isNotEmpty ? _items.first['status']?.toString() : null) ??
-            widget.group['status']?.toString());
-    return (s != null && s.isNotEmpty) ? s : null;
+  String _buildItemPublicUrl(String token) {
+    final base = kPublicQrBaseUrl.endsWith('/')
+        ? kPublicQrBaseUrl.substring(0, kPublicQrBaseUrl.length - 1)
+        : kPublicQrBaseUrl;
+    return '$base/i/$token';
   }
 
-  String? _buildLinePublicUrl() {
-    final org = _currentOrgId();
-    final sig = _currentGroupSig();
-    final st = _currentStatus();
-    if (org == null || sig == null || st == null) return null;
-
-    final uri = Uri.parse(kPublicQrBaseUrl).replace(queryParameters: {
-      'org': org,
-      'g': sig,
-      's': st,
-    });
-    return uri.toString();
-  }
-
-  String? _buildLineAppDeepLink() {
-    final org = _currentOrgId();
-    final sig = _currentGroupSig();
-    final st = _currentStatus();
-    if (org == null || sig == null) return null;
-
-    return Uri(
-      scheme: 'inventorix',
-      host: 'i',
-      queryParameters: {'org': org, 'g': sig, 's': st},
-    ).toString();
-  }
+  String _buildItemAppDeepLink(String token) => 'inventorix://i/$token';
 
   @override
   Widget build(BuildContext context) {
@@ -762,8 +739,12 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
         (_productExtras?['tcg_player_id'] as String?) ??
         (widget.group['tcg_player_id']?.toString());
 
-    final publicUrl = _buildLinePublicUrl();
-    final appLink = _buildLineAppDeepLink();
+    // === Nouveau : URL/DeepLink à partir du token immuable ===
+    final publicToken = _firstVisiblePublicToken();
+    final String? publicUrl =
+        (publicToken != null) ? _buildItemPublicUrl(publicToken) : null;
+    final String? appLink =
+        (publicToken != null) ? _buildItemAppDeepLink(publicToken) : null;
 
     final bool isSingle =
         ((_viewRow?['type'] ?? widget.group['type'] ?? 'single')
@@ -877,15 +858,13 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
                               Align(
                                 alignment: Alignment.centerLeft,
                                 child: TextButton(
-                                  onPressed: (publicUrl == null)
+                                  onPressed: (publicToken == null)
                                       ? null
                                       : () {
                                           Navigator.of(context).push(
                                             MaterialPageRoute(
-                                              builder: (_) => PublicLinePage(
-                                                org: _currentOrgId(),
-                                                groupSig: _currentGroupSig(),
-                                                status: _currentStatus(),
+                                              builder: (_) => PublicItemPage(
+                                                token: publicToken,
                                               ),
                                             ),
                                           );
@@ -959,15 +938,13 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
                         Align(
                           alignment: Alignment.centerLeft,
                           child: TextButton(
-                            onPressed: (publicUrl == null)
+                            onPressed: (publicToken == null)
                                 ? null
                                 : () {
                                     Navigator.of(context).push(
                                       MaterialPageRoute(
-                                        builder: (_) => PublicLinePage(
-                                          org: _currentOrgId(),
-                                          groupSig: _currentGroupSig(),
-                                          status: _currentStatus(),
+                                        builder: (_) => PublicItemPage(
+                                          token: publicToken,
                                         ),
                                       ),
                                     );
@@ -1051,7 +1028,7 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
                 reloadTick: _trendsReloadTick,
               ),
 
-              // --- NEW: Graph d'historique Collectr (2 onglets) ---
+              // --- Graph d'historique Collectr (2 onglets) ---
               const SizedBox(height: 12),
               PriceHistoryTabs(
                 productId: (_viewRow?['product_id'] ??

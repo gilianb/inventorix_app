@@ -560,7 +560,7 @@ class _MainInventoryPageState extends State<MainInventoryPage>
         kStatusOrder.where((s) => s != 'vault').toList();
 
     // ======== Application de l'édition de groupe (corrigée: plus de "mixed") ========
-    Future<void> _applyGroupStatusToSelection() async {
+    Future<void> applyGroupStatusToSelection() async {
       if (_groupNewStatus == null || _groupNewStatus!.isEmpty) {
         _snack('Pick a status to apply.');
         return;
@@ -968,7 +968,7 @@ class _MainInventoryPageState extends State<MainInventoryPage>
                                         onPressed: (_groupNewStatus != null &&
                                                 _selectedKeys.isNotEmpty &&
                                                 !_applyingGroup)
-                                            ? _applyGroupStatusToSelection
+                                            ? applyGroupStatusToSelection
                                             : null,
                                         icon: _applyingGroup
                                             ? const SizedBox(
