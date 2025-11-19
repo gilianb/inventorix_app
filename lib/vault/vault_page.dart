@@ -85,6 +85,23 @@ class _vaultPageState extends State<vaultPage> {
     }
   }
 
+  /// Rafraîchit _groups et _kpiItems en arrière-plan
+  /// sans toucher à _loading (donc pas de gros loader global).
+  Future<void> _refreshSilent() async {
+    try {
+      final newGroups = await _fetchGroupsFromView();
+      final newKpiItems = await _fetchvaultItemsForKpis();
+
+      if (!mounted) return;
+      setState(() {
+        _groups = newGroups;
+        _kpiItems = newKpiItems;
+      });
+    } catch (_) {
+      // best effort : si ça plante, on garde l'optimistic update local
+    }
+  }
+
   Future<void> _loadRole() async {
     try {
       final uid = _sb.auth.currentUser?.id;
@@ -453,22 +470,32 @@ class _vaultPageState extends State<vaultPage> {
     final Object? orgId =
         ((widget.orgId ?? '').isNotEmpty) ? widget.orgId as Object : null;
 
+    final String status = (line['status'] ?? '').toString();
+
+    // 1️⃣ Tentative idéale : group_sig + status
     if (groupSig != null) {
       var q = _sb
           .from('item')
           .select('id')
           .eq('group_sig', groupSig)
-          .eq('status', (line['status'] ?? '').toString());
+          .eq('status', status);
       if (orgId != null) q = q.eq('org_id', orgId);
+
       final List<dynamic> raw =
           await q.order('id', ascending: true).limit(20000);
-      return raw
+      final ids = raw
           .map((e) => (e as Map)['id'])
           .whereType<int>()
           .toList(growable: false);
+
+      if (ids.isNotEmpty) {
+        // ✅ Cas normal : on a trouvé les items via group_sig
+        return ids;
+      }
+      // ⚠️ Sinon, on continue sur le fallback "par clés" (utile si group_sig a changé)
     }
 
-    // --- Fallback par clés ---
+    // 2️⃣ Fallback par clés (comme MainInventory)
     dynamic norm(dynamic v) {
       if (v == null) return null;
       if (v is String && v.trim().isEmpty) return null;
@@ -534,7 +561,8 @@ class _vaultPageState extends State<vaultPage> {
         }
       }
 
-      q = q.eq('status', (line['status'] ?? '').toString());
+      // 🔑 on utilise le statut "courant" de la ligne
+      q = q.eq('status', status);
 
       final List<dynamic> raw =
           await q.order('id', ascending: true).limit(20000);
@@ -727,7 +755,7 @@ class _vaultPageState extends State<vaultPage> {
           }
         }
       });
-
+      _refreshSilent();
       _snack('Modified (${ids.length} item(s)).');
     } on PostgrestException catch (e) {
       _snack('Supabase error: ${e.message}');
