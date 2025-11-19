@@ -1,0 +1,20 @@
+veripage public :
+flutter build web --release --dart-define=SUPABASE_URL=https://zfxuqieskmaseqshdfex.supabase.co --dart-define=SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpmeHVxaWVza21hc2Vxc2hkZmV4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTk5MDAwMzIsImV4cCI6MjA3NTQ3NjAzMn0.aOui_AiG7iMFuHbkaQgODxqE0dw4q8Pgd3QBMKScenU 
+
+cd build/web  
+cp ../../web-404.html 404.html                                      
+cp ../../vercel.public.json vercel.json                           
+vercel link --project inventorix-public                
+vercel --prod --yes 
+
+
+
+deploy for WEB ALL IN ONE:
+
+ flutter build web --release --dart-define=SUPABASE_URL=https://zfxuqieskmaseqshdfex.supabase.co `--dart-define=SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpmeHVxaWVza21hc2Vxc2hkZmV4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTk5MDAwMzIsImV4cCI6MjA3NTQ3NjAzMn0.aOui_AiG7iMFuHbkaQgODxqE0dw4q8Pgd3QBMKScenU `
+>>
+cp vercel.json build/web/    
+cd build/web                                                                                      
+vercel link --project inventorix-web     
+vercel --prod --yes 
+    
