@@ -288,6 +288,25 @@ class _MainInventoryPageState extends State<MainInventoryPage>
     }
   }
 
+  /// Rafraîchit _groups / _kpiItems / _finalizedInvestOverride
+  /// sans toucher au flag _loading (pas de gros spinner global).
+  Future<void> _refreshSilent() async {
+    try {
+      final newGroups = await _fetchGroupedFromView();
+      final newKpiItems = await _fetchItemsForKpis();
+      final newFinalizedInvest = await _fetchFinalizedInvestAggregate();
+
+      if (!mounted) return;
+      setState(() {
+        _groups = newGroups;
+        _kpiItems = newKpiItems;
+        _finalizedInvestOverride = newFinalizedInvest;
+      });
+    } catch (_) {
+      // best-effort : en cas d'erreur on garde l'optimistic update local
+    }
+  }
+
   /// RPC côté serveur : total investi pour FINALIZED, avec filtres alignés à l’UI
   Future<num> _fetchFinalizedInvestAggregate() async {
     try {
@@ -1148,7 +1167,7 @@ class _MainInventoryPageState extends State<MainInventoryPage>
     final String? groupSig = line['group_sig']?.toString();
     final String status = (line['status'] ?? '').toString();
 
-    // 1️⃣ Cas idéal : on a group_sig → on s’en sert directement
+    // 1️⃣ Tentative "idéal": group_sig + status
     if (groupSig != null && groupSig.isNotEmpty && status.isNotEmpty) {
       final raw = await _sb
           .from('item')
@@ -1159,13 +1178,22 @@ class _MainInventoryPageState extends State<MainInventoryPage>
           .order('id', ascending: true)
           .limit(20000);
 
-      return raw
+      final ids = raw
           .map((e) => (e as Map)['id'])
           .whereType<int>()
           .toList(growable: false);
+
+      if (ids.isNotEmpty) {
+        // ✅ Cas normal: on a trouvé les items avec le group_sig courant
+        return ids;
+      }
+
+      // ⚠️ Si on arrive ici : soit le group_sig a changé après l'update status,
+      // soit la vue a recombiné les lignes. On va retomber sur le fallback
+      // "legacy" plus large pour ne pas obliger à refresh la page.
     }
 
-    // 2️⃣ Fallback : ancienne logique (moins précise, mais compatible)
+    // 2️⃣ Fallback : ancienne logique (sans dépendre de group_sig)
     dynamic norm(dynamic v) {
       if (v == null) return null;
       if (v is String && v.trim().isEmpty) return null;
@@ -1230,6 +1258,7 @@ class _MainInventoryPageState extends State<MainInventoryPage>
         }
       }
 
+      // IMPORTANT : on utilise le statut "courant" de la ligne
       q = q.eq('status', status);
 
       final List<dynamic> raw =
@@ -1419,6 +1448,7 @@ class _MainInventoryPageState extends State<MainInventoryPage>
           _groups[gi] = g;
         }
       });
+      _refreshSilent();
 
       _snack('Modified (${ids.length} item(s)).');
     } on PostgrestException catch (e) {

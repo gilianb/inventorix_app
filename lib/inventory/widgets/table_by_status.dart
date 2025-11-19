@@ -13,7 +13,18 @@ import 'package:iconify_flutter/icons/mdi.dart';
 
 enum InventoryTableMode { full, vault }
 
-class InventoryTableByStatus extends StatelessWidget {
+/// Type de tri (pour choisir l'ordre par défaut)
+enum _SortKind { text, number, date }
+
+/// Descripteur d'une colonne triable
+class _ColumnSortSpec {
+  const _ColumnSortSpec(this.kind, this.selector);
+
+  final _SortKind kind;
+  final Comparable? Function(Map<String, dynamic> row) selector;
+}
+
+class InventoryTableByStatus extends StatefulWidget {
   const InventoryTableByStatus({
     super.key,
     this.mode = InventoryTableMode.full,
@@ -60,6 +71,11 @@ class InventoryTableByStatus extends StatelessWidget {
   final void Function(Map<String, dynamic> line, bool selected)? onToggleSelect;
   final void Function(bool selectAll)? onToggleSelectAll;
 
+  @override
+  State<InventoryTableByStatus> createState() => _InventoryTableByStatusState();
+}
+
+class _InventoryTableByStatusState extends State<InventoryTableByStatus> {
   // dimensions “fixes”
   static const double _headH = 56;
   static const double _rowH = 56;
@@ -84,6 +100,275 @@ class InventoryTableByStatus extends StatelessWidget {
     'finalized',
     'vault',
   ];
+
+  /// Lignes triées localement (copie de widget.lines)
+  late List<Map<String, dynamic>> _sortedLines;
+
+  /// Index de la colonne triée (dans la liste [columns] du DataTable)
+  int? _sortColumnIndex;
+
+  /// true = flèche vers le haut, false = flèche vers le bas
+  bool _sortAscending = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _resetSortedLines();
+  }
+
+  @override
+  void didUpdateWidget(covariant InventoryTableByStatus oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _resetSortedLines();
+  }
+
+  void _resetSortedLines() {
+    _sortedLines = List<Map<String, dynamic>>.from(widget.lines);
+
+    // Si on change la config des colonnes (showUnitCosts, mode, etc.),
+    // on vérifie que sortColumnIndex reste valide.
+    final specs = _columnSpecs();
+    if (_sortColumnIndex != null) {
+      if (_sortColumnIndex! < 0 ||
+          _sortColumnIndex! >= specs.length ||
+          specs.isEmpty) {
+        _sortColumnIndex = null;
+      } else {
+        _sortLines(_sortColumnIndex!, _sortAscending);
+      }
+    }
+  }
+
+  DateTime? _parseDate(dynamic v) {
+    if (v == null) return null;
+    if (v is DateTime) return v;
+    final s = v.toString();
+    if (s.isEmpty) return null;
+    return DateTime.tryParse(s);
+  }
+
+  /// Déclare, dans le même ordre que les DataColumns,
+  /// la façon de trier chaque colonne.
+  List<_ColumnSortSpec> _columnSpecs() {
+    if (widget.mode == InventoryTableMode.vault) {
+      return [
+        // Photo → URL
+        _ColumnSortSpec(
+          _SortKind.text,
+          (r) => (r['photo_url'] ?? '').toString().toLowerCase(),
+        ),
+        _ColumnSortSpec(
+          _SortKind.text,
+          (r) => (r['grading_note'] ?? '').toString().toLowerCase(),
+        ),
+        _ColumnSortSpec(
+          _SortKind.text,
+          (r) => (r['product_name'] ?? '').toString().toLowerCase(),
+        ),
+        _ColumnSortSpec(
+          _SortKind.text,
+          (r) => (r['language'] ?? '').toString().toLowerCase(),
+        ),
+        _ColumnSortSpec(
+          _SortKind.text,
+          (r) => (r['game_label'] ?? '').toString().toLowerCase(),
+        ),
+        _ColumnSortSpec(
+          _SortKind.date,
+          (r) => _parseDate(r['purchase_date']),
+        ),
+        _ColumnSortSpec(
+          _SortKind.number,
+          (r) => (r['qty_status'] as num? ?? 0),
+        ),
+        _ColumnSortSpec(
+          _SortKind.text,
+          (r) => (r['status'] ?? '').toString().toLowerCase(),
+        ),
+        // Price / unit = unit_cost + unit_fees
+        _ColumnSortSpec(
+          _SortKind.number,
+          (r) {
+            final unitCost = (r['unit_cost'] as num?) ?? 0;
+            final unitFees = (r['unit_fees'] as num?) ?? 0;
+            return unitCost + unitFees;
+          },
+        ),
+        // Market / unit
+        _ColumnSortSpec(
+          _SortKind.number,
+          (r) => (r['market_price'] as num?) ?? 0,
+        ),
+      ];
+    }
+
+    // ---- FULL mode ----
+    final specs = <_ColumnSortSpec>[
+      _ColumnSortSpec(
+        _SortKind.text,
+        (r) => (r['photo_url'] ?? '').toString().toLowerCase(),
+      ),
+      _ColumnSortSpec(
+        _SortKind.text,
+        (r) => (r['grading_note'] ?? '').toString().toLowerCase(),
+      ),
+      _ColumnSortSpec(
+        _SortKind.text,
+        (r) => (r['product_name'] ?? '').toString().toLowerCase(),
+      ),
+      _ColumnSortSpec(
+        _SortKind.text,
+        (r) => (r['language'] ?? '').toString().toLowerCase(),
+      ),
+      _ColumnSortSpec(
+        _SortKind.text,
+        (r) => (r['game_label'] ?? '').toString().toLowerCase(),
+      ),
+      _ColumnSortSpec(
+        _SortKind.date,
+        (r) => _parseDate(r['purchase_date']),
+      ),
+      _ColumnSortSpec(
+        _SortKind.number,
+        (r) => (r['qty_status'] as num? ?? 0),
+      ),
+      _ColumnSortSpec(
+        _SortKind.text,
+        (r) => (r['status'] ?? '').toString().toLowerCase(),
+      ),
+    ];
+
+    if (widget.showUnitCosts) {
+      // Price / unit
+      specs.add(
+        _ColumnSortSpec(
+          _SortKind.number,
+          (r) {
+            final qtyTotal = (r['qty_total'] as num?) ?? 0;
+            final totalWithFees = (r['total_cost_with_fees'] as num?) ?? 0;
+            if (qtyTotal == 0) return 0;
+            return totalWithFees / qtyTotal;
+          },
+        ),
+      );
+      // Price (Qty×unit)
+      specs.add(
+        _ColumnSortSpec(
+          _SortKind.number,
+          (r) {
+            final qtyTotal = (r['qty_total'] as num?) ?? 0;
+            final totalWithFees = (r['total_cost_with_fees'] as num?) ?? 0;
+            final q = (r['qty_status'] as num?) ?? 0;
+            final unit = qtyTotal > 0 ? (totalWithFees / qtyTotal) : 0;
+            return unit * q;
+          },
+        ),
+      );
+    }
+
+    if (widget.showEstimated) {
+      specs.add(
+        _ColumnSortSpec(
+          _SortKind.number,
+          (r) => (r['estimated_price'] as num?) ?? 0,
+        ),
+      );
+    }
+
+    specs.addAll([
+      _ColumnSortSpec(
+        _SortKind.text,
+        (r) => (r['supplier_name'] ?? '').toString().toLowerCase(),
+      ),
+      _ColumnSortSpec(
+        _SortKind.text,
+        (r) => (r['buyer_company'] ?? '').toString().toLowerCase(),
+      ),
+      _ColumnSortSpec(
+        _SortKind.text,
+        (r) => (r['item_location'] ?? '').toString().toLowerCase(),
+      ),
+      _ColumnSortSpec(
+        _SortKind.text,
+        (r) => (r['grade_id'] ?? '').toString().toLowerCase(),
+      ),
+      _ColumnSortSpec(
+        _SortKind.date,
+        (r) => _parseDate(r['sale_date']),
+      ),
+    ]);
+
+    if (widget.showRevenue) {
+      specs.add(
+        _ColumnSortSpec(
+          _SortKind.number,
+          (r) => (r['sale_price'] as num?) ?? 0,
+        ),
+      );
+    }
+
+    specs.addAll([
+      _ColumnSortSpec(
+        _SortKind.text,
+        (r) => (r['tracking'] ?? '').toString().toLowerCase(),
+      ),
+      _ColumnSortSpec(
+        _SortKind.text,
+        (r) => (r['document_url'] ?? '').toString().toLowerCase(),
+      ),
+    ]);
+
+    return specs;
+  }
+
+  /// Détermine le sens initial du tri quand on clique pour la 1ère fois
+  bool _defaultAscendingFor(int columnIndex) {
+    final specs = _columnSpecs();
+    if (columnIndex < 0 || columnIndex >= specs.length) return true;
+    final kind = specs[columnIndex].kind;
+
+    switch (kind) {
+      case _SortKind.text:
+        return true; // A → Z
+      case _SortKind.number:
+      case _SortKind.date:
+        return false; // par défaut: du plus grand au plus petit (flèche ↓)
+    }
+  }
+
+  void _handleSort(int columnIndex) {
+    setState(() {
+      if (_sortColumnIndex == columnIndex) {
+        // on inverse le sens
+        _sortAscending = !_sortAscending;
+      } else {
+        _sortColumnIndex = columnIndex;
+        _sortAscending = _defaultAscendingFor(columnIndex);
+      }
+      _sortLines(_sortColumnIndex!, _sortAscending);
+    });
+  }
+
+  void _sortLines(int columnIndex, bool ascending) {
+    final specs = _columnSpecs();
+    if (columnIndex < 0 || columnIndex >= specs.length || specs.isEmpty) return;
+
+    final spec = specs[columnIndex];
+    final sel = spec.selector;
+
+    _sortedLines.sort((a, b) {
+      final av = sel(a);
+      final bv = sel(b);
+
+      // On met les valeurs nulles toujours en bas, quel que soit le sens
+      if (av == null && bv == null) return 0;
+      if (av == null) return 1;
+      if (bv == null) return -1;
+
+      final cmp = av.compareTo(bv);
+      return ascending ? cmp : -cmp;
+    });
+  }
 
   // ---- VAULT cells ----
   DataRow _vaultRow(BuildContext context, Map<String, dynamic> r,
@@ -154,7 +439,7 @@ class InventoryTableByStatus extends StatelessWidget {
       // Produit → détails
       DataCell(
         InkWell(
-          onTap: () => onOpen(r),
+          onTap: () => widget.onOpen(r),
           child: Text(
             r['product_name']?.toString() ?? '',
             style: const TextStyle(decoration: TextDecoration.underline),
@@ -177,13 +462,13 @@ class InventoryTableByStatus extends StatelessWidget {
       // Statut (inline désactivé en mode groupe)
       DataCell(
         _EditableStatusCell(
-          enabled: !groupMode,
+          enabled: !widget.groupMode,
           value: s,
           statuses: _allStatuses.where((x) => x != 'vault').toList(),
           color: statusColor(context, s),
           onSaved: (val) async {
             if (val != null && val.isNotEmpty && val != s) {
-              await onInlineUpdate(r, 'status', val);
+              await widget.onInlineUpdate(r, 'status', val);
             }
           },
         ),
@@ -239,7 +524,7 @@ class InventoryTableByStatus extends StatelessWidget {
       // Produit → détails
       DataCell(
         InkWell(
-          onTap: () => onOpen(r),
+          onTap: () => widget.onOpen(r),
           child: Text(
             r['product_name']?.toString() ?? '',
             style: const TextStyle(decoration: TextDecoration.underline),
@@ -262,34 +547,34 @@ class InventoryTableByStatus extends StatelessWidget {
       // Statut
       DataCell(
         _EditableStatusCell(
-          enabled: !groupMode,
+          enabled: !widget.groupMode,
           value: s,
           statuses: _allStatuses.toList(),
           color: statusColor(context, s),
           onSaved: (val) async {
             if (val != null && val.isNotEmpty && val != s) {
-              await onInlineUpdate(r, 'status', val);
+              await widget.onInlineUpdate(r, 'status', val);
             }
           },
         ),
       ),
     ];
 
-    if (showUnitCosts) {
+    if (widget.showUnitCosts) {
       cells.addAll([
         DataCell(Text('${money(unit)} $currency')),
         DataCell(Text('${money(sumUnitTotal)} $currency')),
       ]);
     }
 
-    if (showEstimated) {
+    if (widget.showEstimated) {
       cells.add(
         DataCell(
           _EditableTextCell(
             initialText: est == null ? '' : est.toString(),
             placeholder: '—',
             onSaved: (t) async {
-              await onInlineUpdate(r, 'estimated_price', t);
+              await widget.onInlineUpdate(r, 'estimated_price', t);
             },
           ),
         ),
@@ -303,7 +588,7 @@ class InventoryTableByStatus extends StatelessWidget {
           initialText: _txt(r['supplier_name']) == '—'
               ? ''
               : r['supplier_name'].toString(),
-          onSaved: (t) async => onInlineUpdate(r, 'supplier_name', t),
+          onSaved: (t) async => widget.onInlineUpdate(r, 'supplier_name', t),
         ),
       ),
       DataCell(
@@ -311,7 +596,7 @@ class InventoryTableByStatus extends StatelessWidget {
           initialText: _txt(r['buyer_company']) == '—'
               ? ''
               : r['buyer_company'].toString(),
-          onSaved: (t) async => onInlineUpdate(r, 'buyer_company', t),
+          onSaved: (t) async => widget.onInlineUpdate(r, 'buyer_company', t),
         ),
       ),
       DataCell(
@@ -319,14 +604,14 @@ class InventoryTableByStatus extends StatelessWidget {
           initialText: _txt(r['item_location']) == '—'
               ? ''
               : r['item_location'].toString(),
-          onSaved: (t) async => onInlineUpdate(r, 'item_location', t),
+          onSaved: (t) async => widget.onInlineUpdate(r, 'item_location', t),
         ),
       ),
       DataCell(
         _EditableTextCell(
           initialText:
               _txt(r['grade_id']) == '—' ? '' : r['grade_id'].toString(),
-          onSaved: (t) async => onInlineUpdate(r, 'grade_id', t),
+          onSaved: (t) async => widget.onInlineUpdate(r, 'grade_id', t),
         ),
       ),
       DataCell(
@@ -334,19 +619,19 @@ class InventoryTableByStatus extends StatelessWidget {
           initialText:
               _txt(r['sale_date']) == '—' ? '' : r['sale_date'].toString(),
           placeholder: 'YYYY-MM-DD',
-          onSaved: (t) async => onInlineUpdate(r, 'sale_date', t),
+          onSaved: (t) async => widget.onInlineUpdate(r, 'sale_date', t),
         ),
       ),
     ]);
 
-    if (showRevenue) {
+    if (widget.showRevenue) {
       final sale = r['sale_price'];
       cells.add(
         DataCell(
           _EditableTextCell(
             initialText: sale == null ? '' : sale.toString(),
             placeholder: '—',
-            onSaved: (t) async => onInlineUpdate(r, 'sale_price', t),
+            onSaved: (t) async => widget.onInlineUpdate(r, 'sale_price', t),
           ),
         ),
       );
@@ -358,7 +643,7 @@ class InventoryTableByStatus extends StatelessWidget {
         _EditableTextCell(
           initialText:
               _txt(r['tracking']) == '—' ? '' : r['tracking'].toString(),
-          onSaved: (t) async => onInlineUpdate(r, 'tracking', t),
+          onSaved: (t) async => widget.onInlineUpdate(r, 'tracking', t),
         ),
       ),
     );
@@ -382,11 +667,14 @@ class InventoryTableByStatus extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final lines = _sortedLines;
+
     // ------ Colonne fixe gauche (✏️ ou ✅) ------
-    final allSelected =
-        groupMode && selection.length == lines.length && lines.isNotEmpty;
-    final anySelected = groupMode && selection.isNotEmpty;
-    final bool? headerCheckValue = !groupMode
+    final allSelected = widget.groupMode &&
+        widget.selection.length == lines.length &&
+        lines.isNotEmpty;
+    final anySelected = widget.groupMode && widget.selection.isNotEmpty;
+    final bool? headerCheckValue = !widget.groupMode
         ? false
         : (allSelected ? true : (anySelected ? null : false));
 
@@ -397,14 +685,14 @@ class InventoryTableByStatus extends StatelessWidget {
           height: _headH,
           alignment: Alignment.center,
           color: Theme.of(context).colorScheme.surfaceVariant.withOpacity(.35),
-          child: groupMode
+          child: widget.groupMode
               ? Checkbox(
                   tristate: true,
                   value: headerCheckValue,
                   onChanged: (_) {
-                    if (onToggleSelectAll != null) {
+                    if (widget.onToggleSelectAll != null) {
                       // si tout est déjà sélectionné → on clear ; sinon → select all
-                      onToggleSelectAll!.call(!allSelected);
+                      widget.onToggleSelectAll!.call(!allSelected);
                     }
                   },
                 )
@@ -412,23 +700,27 @@ class InventoryTableByStatus extends StatelessWidget {
         ),
         for (final r in lines)
           Builder(builder: (ctx) {
-            final key = lineKey(r);
-            final selected = groupMode ? selection.contains(key) : false;
+            final key = widget.lineKey(r);
+            final selected =
+                widget.groupMode ? widget.selection.contains(key) : false;
             return Container(
               width: _sideW,
               height: _rowH,
               color: _rowBg(context, r, selected: selected),
               alignment: Alignment.center,
-              child: groupMode
+              child: widget.groupMode
                   ? Checkbox(
                       value: selected,
-                      onChanged: (v) => onToggleSelect?.call(r, (v ?? false)),
+                      onChanged: (v) =>
+                          widget.onToggleSelect?.call(r, (v ?? false)),
                     )
                   : IconButton(
                       tooltip: 'Edit this listing',
                       icon: const Iconify(Mdi.pencil,
                           size: 20, color: Color.fromARGB(255, 34, 35, 36)),
-                      onPressed: onEdit == null ? null : () => onEdit!(r),
+                      onPressed: widget.onEdit == null
+                          ? null
+                          : () => widget.onEdit!(r),
                     ),
             );
           }),
@@ -436,7 +728,7 @@ class InventoryTableByStatus extends StatelessWidget {
     );
 
     // ------ Colonne fixe droite (❌) ------
-    final fixedRight = !showDelete
+    final fixedRight = !widget.showDelete
         ? const SizedBox.shrink()
         : Column(
             children: [
@@ -452,8 +744,9 @@ class InventoryTableByStatus extends StatelessWidget {
               ),
               for (final r in lines)
                 Builder(builder: (ctx) {
-                  final key = lineKey(r);
-                  final selected = groupMode ? selection.contains(key) : false;
+                  final key = widget.lineKey(r);
+                  final selected =
+                      widget.groupMode ? widget.selection.contains(key) : false;
                   return Container(
                     width: _sideW,
                     height: _rowH,
@@ -463,49 +756,62 @@ class InventoryTableByStatus extends StatelessWidget {
                       tooltip: 'Delete this row',
                       icon: const Iconify(Mdi.close,
                           size: 18, color: Colors.redAccent),
-                      onPressed: onDelete == null ? null : () => onDelete!(r),
+                      onPressed: widget.onDelete == null
+                          ? null
+                          : () => widget.onDelete!(r),
                     ),
                   );
                 }),
             ],
           );
 
-    // ------ DataColumns dynamiques ------
+    // ------ DataColumns dynamiques + onSort ------
     List<DataColumn> columns;
-    if (mode == InventoryTableMode.vault) {
-      columns = const [
-        DataColumn(label: Text('Photo')),
-        DataColumn(label: Text('Grading note')),
-        DataColumn(label: Text('Product')),
-        DataColumn(label: Text('Language')),
-        DataColumn(label: Text('Game')),
-        DataColumn(label: Text('Purchase')),
-        DataColumn(label: Text('Qty')),
-        DataColumn(label: Text('Status')),
-        DataColumn(label: Text('Price / unit')),
-        DataColumn(label: Text('Market / unit')),
+    int colIdx = -1;
+
+    DataColumn sortableCol(String title) {
+      final thisIndex = ++colIdx;
+      return DataColumn(
+        label: Text(title),
+        // on ignore le "ascending" passé par DataTable, on gère nous-mêmes
+        onSort: (int _, bool __) => _handleSort(thisIndex),
+      );
+    }
+
+    if (widget.mode == InventoryTableMode.vault) {
+      columns = [
+        sortableCol('Photo'),
+        sortableCol('Grading note'),
+        sortableCol('Product'),
+        sortableCol('Language'),
+        sortableCol('Game'),
+        sortableCol('Purchase'),
+        sortableCol('Qty'),
+        sortableCol('Status'),
+        sortableCol('Price / unit'),
+        sortableCol('Market / unit'),
       ];
     } else {
       columns = <DataColumn>[
-        const DataColumn(label: Text('Photo')),
-        const DataColumn(label: Text('Grading note')),
-        const DataColumn(label: Text('Product')),
-        const DataColumn(label: Text('Language')),
-        const DataColumn(label: Text('Game')),
-        const DataColumn(label: Text('Purchase')),
-        const DataColumn(label: Text('Qty')),
-        const DataColumn(label: Text('Status')),
-        if (showUnitCosts) const DataColumn(label: Text('Price / unit')),
-        if (showUnitCosts) const DataColumn(label: Text('Price (Qty×unit)')),
-        if (showEstimated) const DataColumn(label: Text('Estimated / unit')),
-        const DataColumn(label: Text('Supplier')),
-        const DataColumn(label: Text('Buyer')),
-        const DataColumn(label: Text('Item location')),
-        const DataColumn(label: Text('Grade ID')),
-        const DataColumn(label: Text('Sale date')),
-        if (showRevenue) const DataColumn(label: Text('Sale price')),
-        const DataColumn(label: Text('Tracking')),
-        const DataColumn(label: Text('Doc')),
+        sortableCol('Photo'),
+        sortableCol('Grading note'),
+        sortableCol('Product'),
+        sortableCol('Language'),
+        sortableCol('Game'),
+        sortableCol('Purchase'),
+        sortableCol('Qty'),
+        sortableCol('Status'),
+        if (widget.showUnitCosts) sortableCol('Price / unit'),
+        if (widget.showUnitCosts) sortableCol('Price (Qty×unit)'),
+        if (widget.showEstimated) sortableCol('Estimated / unit'),
+        sortableCol('Supplier'),
+        sortableCol('Buyer'),
+        sortableCol('Item location'),
+        sortableCol('Grade ID'),
+        sortableCol('Sale date'),
+        if (widget.showRevenue) sortableCol('Sale price'),
+        sortableCol('Tracking'),
+        sortableCol('Doc'),
       ];
     }
 
@@ -518,10 +824,14 @@ class InventoryTableByStatus extends StatelessWidget {
       ),
       child: DataTable(
         showCheckboxColumn: false,
+        sortColumnIndex: _sortColumnIndex,
+        sortAscending: _sortAscending,
         columns: columns,
         rows: lines.map((r) {
-          final selected = groupMode ? selection.contains(lineKey(r)) : false;
-          return mode == InventoryTableMode.vault
+          final selected = widget.groupMode
+              ? widget.selection.contains(widget.lineKey(r))
+              : false;
+          return widget.mode == InventoryTableMode.vault
               ? _vaultRow(context, r, selected: selected)
               : _fullRow(context, r, selected: selected);
         }).toList(),
