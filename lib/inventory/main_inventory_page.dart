@@ -1343,6 +1343,20 @@ class _MainInventoryPageState extends State<MainInventoryPage>
 
   // 👇 helper: trouve l'index du groupe correspondant à la "ligne"
   int? _findGroupIndexForLine(Map<String, dynamic> line) {
+    // 1️⃣ D’abord : on essaie de matcher par org_id + group_sig (clé logique du groupe)
+    final String? lineGroupSig = line['group_sig']?.toString();
+    if (lineGroupSig != null && lineGroupSig.isNotEmpty) {
+      for (int i = 0; i < _groups.length; i++) {
+        final g = _groups[i];
+        final gSig = g['group_sig']?.toString() ?? '';
+        final gOrg = g['org_id']?.toString() ?? '';
+        if (gSig == lineGroupSig && gOrg == widget.orgId) {
+          return i;
+        }
+      }
+    }
+
+    // 2️⃣ Fallback "ancienne logique" au cas où (par sécurité)
     bool same(dynamic a, dynamic b) => (a ?? '') == (b ?? '');
     for (int i = 0; i < _groups.length; i++) {
       final g = _groups[i];
