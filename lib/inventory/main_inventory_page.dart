@@ -75,6 +75,9 @@ class _MainInventoryPageState extends State<MainInventoryPage>
   // UI state
   final _searchCtrl = TextEditingController();
   String? _gameFilter;
+  String? _languageFilter; // NEW: filtre langue
+  String _priceBand = 'any'; // NEW: 'any' | 'p1' | 'p2' | 'p3' | 'p4'
+
   bool _loading = true;
   bool _breakdownExpanded = false;
   String _typeFilter = 'single'; // 'single' | 'sealed'
@@ -273,6 +276,34 @@ class _MainInventoryPageState extends State<MainInventoryPage>
     }
   }
 
+  /// NEW: limites min/max pour la tranche de prix (estimated_price)
+  Map<String, double?> _priceBounds() {
+    double? minPrice;
+    double? maxPrice;
+
+    switch (_priceBand) {
+      case 'p1': // < 50
+        maxPrice = 50;
+        break;
+      case 'p2': // 50 - 200
+        minPrice = 50;
+        maxPrice = 200;
+        break;
+      case 'p3': // 200 - 1000
+        minPrice = 200;
+        maxPrice = 1000;
+        break;
+      case 'p4': // > 1000
+        minPrice = 1000;
+        break;
+      case 'any':
+      default:
+        break;
+    }
+
+    return {'min': minPrice, 'max': maxPrice};
+  }
+
   Future<void> _refresh() async {
     setState(() => _loading = true);
     try {
@@ -406,10 +437,40 @@ class _MainInventoryPageState extends State<MainInventoryPage>
         .eq('type', _typeFilter)
         .eq('org_id', widget.orgId);
 
+    // Date
     final after = _purchaseDateStart();
     if (after != null) {
       final afterStr = after.toIso8601String().split('T').first;
       query = query.gte('purchase_date', afterStr);
+    }
+
+    // NEW: filtre jeu (via game_id)
+    if ((_gameFilter ?? '').isNotEmpty) {
+      final row = await _sb
+          .from('games')
+          .select('id,label')
+          .eq('label', _gameFilter!)
+          .maybeSingle();
+      final gid = (row?['id'] as int?);
+      if (gid != null) {
+        query = query.eq('game_id', gid);
+      }
+    }
+
+    // NEW: filtre langue
+    if ((_languageFilter ?? '').isNotEmpty) {
+      query = query.eq('language', _languageFilter as Object);
+    }
+
+    // NEW: filtre tranche de prix sur estimated_price
+    final bounds = _priceBounds();
+    final minPrice = bounds['min'];
+    final maxPrice = bounds['max'];
+    if (minPrice != null) {
+      query = query.gte('estimated_price', minPrice);
+    }
+    if (maxPrice != null) {
+      query = query.lte('estimated_price', maxPrice);
     }
 
     final List<dynamic> raw =
@@ -419,6 +480,7 @@ class _MainInventoryPageState extends State<MainInventoryPage>
         .map<Map<String, dynamic>>((e) => Map<String, dynamic>.from(e as Map))
         .toList();
 
+    // Search texte (client-side, comme avant)
     final rawQ = _searchCtrl.text.trim().toLowerCase();
     if (rawQ.isNotEmpty) {
       final tokens =
@@ -470,6 +532,7 @@ class _MainInventoryPageState extends State<MainInventoryPage>
       'type',
       'status',
       'purchase_date',
+      'language',
     ].join(', ');
 
     var q = _sb
@@ -485,6 +548,7 @@ class _MainInventoryPageState extends State<MainInventoryPage>
       q = q.gte('purchase_date', d);
     }
 
+    // NEW: filtre jeu
     if ((_gameFilter ?? '').isNotEmpty) {
       final row = await _sb
           .from('games')
@@ -493,6 +557,22 @@ class _MainInventoryPageState extends State<MainInventoryPage>
           .maybeSingle();
       final gid = (row?['id'] as int?);
       if (gid != null) q = q.eq('game_id', gid);
+    }
+
+    // NEW: filtre langue
+    if ((_languageFilter ?? '').isNotEmpty) {
+      q = q.eq('language', _languageFilter as Object);
+    }
+
+    // NEW: filtre tranche de prix sur estimated_price
+    final bounds = _priceBounds();
+    final minPrice = bounds['min'];
+    final maxPrice = bounds['max'];
+    if (minPrice != null) {
+      q = q.gte('estimated_price', minPrice);
+    }
+    if (maxPrice != null) {
+      q = q.lte('estimated_price', maxPrice);
     }
 
     final List<dynamic> raw = await q.limit(50000);
@@ -717,6 +797,8 @@ class _MainInventoryPageState extends State<MainInventoryPage>
                     children: [
                       SearchAndGameFilter(
                         searchCtrl: _searchCtrl,
+
+                        // Jeux
                         games: _groups
                             .map((r) => (r['game_label'] ?? '') as String)
                             .where((s) => s.isNotEmpty)
@@ -729,6 +811,26 @@ class _MainInventoryPageState extends State<MainInventoryPage>
                           _refresh();
                         },
                         onSearch: _refresh,
+
+                        // NEW: langues
+                        languages: _groups
+                            .map((r) => (r['language'] ?? '') as String)
+                            .where((s) => s.isNotEmpty)
+                            .toSet()
+                            .toList()
+                          ..sort(),
+                        selectedLanguage: _languageFilter,
+                        onLanguageChanged: (v) {
+                          setState(() => _languageFilter = v);
+                          _refresh();
+                        },
+
+                        // NEW: tranche de prix
+                        priceBand: _priceBand,
+                        onPriceBandChanged: (band) {
+                          setState(() => _priceBand = band);
+                          _refresh();
+                        },
                       ),
                       const SizedBox(height: 8),
                       Wrap(

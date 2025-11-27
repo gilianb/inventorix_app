@@ -22,6 +22,15 @@ String prettyStatus(String raw) {
   return s.substring(0, 1).toUpperCase() + s.substring(1);
 }
 
+/// Etiquettes lisibles pour les tranches de prix
+const Map<String, String> kPriceBandLabels = {
+  'any': 'All prices',
+  'p1': '< 50',
+  'p2': '50 – 200',
+  'p3': '200 – 1000',
+  'p4': '> 1000',
+};
+
 class SearchAndGameFilter extends StatelessWidget {
   const SearchAndGameFilter({
     super.key,
@@ -30,17 +39,39 @@ class SearchAndGameFilter extends StatelessWidget {
     required this.selectedGame,
     required this.onGameChanged,
     required this.onSearch,
+
+    // NEW
+    required this.languages,
+    required this.selectedLanguage,
+    required this.onLanguageChanged,
+    required this.priceBand,
+    required this.onPriceBandChanged,
   });
 
   final TextEditingController searchCtrl;
+
+  // Jeux
   final List<String> games;
   final String? selectedGame;
   final ValueChanged<String?> onGameChanged;
+
   final VoidCallback onSearch;
+
+  // NEW Langues
+  final List<String> languages;
+  final String? selectedLanguage;
+  final ValueChanged<String?> onLanguageChanged;
+
+  // NEW Tranche de prix (estimated_price)
+  /// 'any' | 'p1' | 'p2' | 'p3' | 'p4'
+  final String priceBand;
+  final ValueChanged<String> onPriceBandChanged;
 
   @override
   Widget build(BuildContext context) {
     final hasGames = games.isNotEmpty;
+    final hasLanguages = languages.isNotEmpty;
+
     return Padding(
       padding: const EdgeInsets.all(12),
       child: Wrap(
@@ -48,6 +79,7 @@ class SearchAndGameFilter extends StatelessWidget {
         runSpacing: 8,
         crossAxisAlignment: WrapCrossAlignment.center,
         children: [
+          // Search
           ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 420),
             child: TextField(
@@ -66,16 +98,63 @@ class SearchAndGameFilter extends StatelessWidget {
               ),
             ),
           ),
+
+          // Jeu
           if (hasGames)
-            DropdownButton<String>(
+            DropdownButton<String?>(
               value: selectedGame,
               hint: const Text('Filter by game'),
               items: [
-                const DropdownMenuItem(value: null, child: Text('All games')),
-                ...games.map((g) => DropdownMenuItem(value: g, child: Text(g))),
+                const DropdownMenuItem<String?>(
+                  value: null,
+                  child: Text('All games'),
+                ),
+                ...games.map(
+                  (g) => DropdownMenuItem<String?>(
+                    value: g,
+                    child: Text(g),
+                  ),
+                ),
               ],
               onChanged: onGameChanged,
             ),
+
+          // NEW : Langue
+          if (hasLanguages)
+            DropdownButton<String?>(
+              value: selectedLanguage,
+              hint: const Text('Filter by language'),
+              items: [
+                const DropdownMenuItem<String?>(
+                  value: null,
+                  child: Text('All languages'),
+                ),
+                ...languages.map(
+                  (lang) => DropdownMenuItem<String?>(
+                    value: lang,
+                    child: Text(lang),
+                  ),
+                ),
+              ],
+              onChanged: onLanguageChanged,
+            ),
+
+          // NEW : Tranche de prix (sur estimated_price)
+          DropdownButton<String>(
+            value: priceBand,
+            hint: const Text('Price'),
+            items: kPriceBandLabels.entries
+                .map(
+                  (e) => DropdownMenuItem<String>(
+                    value: e.key,
+                    child: Text(e.value),
+                  ),
+                )
+                .toList(),
+            onChanged: (v) {
+              if (v != null) onPriceBandChanged(v);
+            },
+          ),
         ],
       ),
     );
@@ -143,6 +222,7 @@ class TypeTabs extends StatelessWidget {
   }
 }
 
+// ActiveStatusFilterBar inchangé...
 class ActiveStatusFilterBar extends StatelessWidget {
   const ActiveStatusFilterBar({
     super.key,

@@ -42,7 +42,10 @@ class _vaultPageState extends State<vaultPage> {
   // Filtres/UI (alignés avec la page principale)
   final _searchCtrl = TextEditingController();
   String? _gameFilter; // valeur = game_label
+  String? _languageFilter; // NEW: filtre langue
   String _typeFilter = 'single'; // 'single' | 'sealed'
+  String _priceBand = 'any'; // NEW: 'any' | 'p1' | 'p2' | 'p3' | 'p4'
+
   OrgRole _role = OrgRole.viewer; // mutable
   bool _roleLoaded = false; // on attend le chargement
   RolePermissions get _perm => kRoleMatrix[_role]!;
@@ -72,6 +75,35 @@ class _vaultPageState extends State<vaultPage> {
 
   void _snack(String m) =>
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
+
+  /// Limites min/max pour la tranche de prix (estimated_price)
+  /// 'any' | 'p1' | 'p2' | 'p3' | 'p4'
+  Map<String, double?> _priceBounds() {
+    double? minPrice;
+    double? maxPrice;
+
+    switch (_priceBand) {
+      case 'p1': // < 50
+        maxPrice = 50;
+        break;
+      case 'p2': // 50 - 200
+        minPrice = 50;
+        maxPrice = 200;
+        break;
+      case 'p3': // 200 - 1000
+        minPrice = 200;
+        maxPrice = 1000;
+        break;
+      case 'p4': // > 1000
+        minPrice = 1000;
+        break;
+      case 'any':
+      default:
+        break;
+    }
+
+    return {'min': minPrice, 'max': maxPrice};
+  }
 
   Future<void> _refresh() async {
     setState(() => _loading = true);
@@ -189,6 +221,32 @@ class _vaultPageState extends State<vaultPage> {
       q = q.eq('org_id', widget.orgId as Object);
     }
 
+    // Filtre jeu (via game_id) si sélectionné
+    if ((_gameFilter ?? '').isNotEmpty) {
+      final gid = await _resolveGameIdByLabel(_gameFilter!);
+      if (gid != null) {
+        q = q.eq('game_id', gid);
+      } else {
+        return const [];
+      }
+    }
+
+    // Filtre langue
+    if ((_languageFilter ?? '').isNotEmpty) {
+      q = q.eq('language', _languageFilter as Object);
+    }
+
+    // Filtre tranche de prix sur estimated_price
+    final bounds = _priceBounds();
+    final minPrice = bounds['min'];
+    final maxPrice = bounds['max'];
+    if (minPrice != null) {
+      q = q.gte('estimated_price', minPrice);
+    }
+    if (maxPrice != null) {
+      q = q.lte('estimated_price', maxPrice);
+    }
+
     final List<dynamic> raw =
         await q.order('purchase_date', ascending: false).limit(1000);
 
@@ -250,11 +308,6 @@ class _vaultPageState extends State<vaultPage> {
       }
 
       rows = rows.where(rowMatches).toList();
-    }
-
-    // ===== Filtre jeu local (par label) =====
-    if ((_gameFilter ?? '').isNotEmpty) {
-      rows = rows.where((r) => (r['game_label'] ?? '') == _gameFilter).toList();
     }
 
     // ===== Enrichissement "market": price per grade + delta % à partir de price_history =====
@@ -358,13 +411,14 @@ class _vaultPageState extends State<vaultPage> {
     var sel = _sb.from('item').select('''
           id, org_id, game_id, type, status, sale_price,
           unit_cost, unit_fees, shipping_fees, commission_fees, grading_fees,
-          estimated_price, currency
+          estimated_price, currency, language
         ''').eq('status', 'vault').eq('type', _typeFilter);
 
     if ((widget.orgId ?? '').isNotEmpty) {
       sel = sel.eq('org_id', widget.orgId as Object);
     }
 
+    // Filtre jeu
     if ((_gameFilter ?? '').isNotEmpty) {
       final gid = await _resolveGameIdByLabel(_gameFilter!);
       if (gid != null) {
@@ -372,6 +426,22 @@ class _vaultPageState extends State<vaultPage> {
       } else {
         return const [];
       }
+    }
+
+    // Filtre langue
+    if ((_languageFilter ?? '').isNotEmpty) {
+      sel = sel.eq('language', _languageFilter as Object);
+    }
+
+    // Filtre tranche de prix sur estimated_price
+    final bounds = _priceBounds();
+    final minPrice = bounds['min'];
+    final maxPrice = bounds['max'];
+    if (minPrice != null) {
+      sel = sel.gte('estimated_price', minPrice);
+    }
+    if (maxPrice != null) {
+      sel = sel.lte('estimated_price', maxPrice);
     }
 
     final List<dynamic> rows = await sel.limit(50000);
@@ -797,6 +867,13 @@ class _vaultPageState extends State<vaultPage> {
         .toList()
       ..sort();
 
+    final languagesForFilter = _groups
+        .map((r) => (r['language'] ?? '') as String)
+        .where((s) => s.isNotEmpty)
+        .toSet()
+        .toList()
+      ..sort();
+
     final body = (_loading || !_roleLoaded)
         ? const Center(child: CircularProgressIndicator())
         : RefreshIndicator(
@@ -834,6 +911,8 @@ class _vaultPageState extends State<vaultPage> {
                           children: [
                             SearchAndGameFilter(
                               searchCtrl: _searchCtrl,
+
+                              // Jeux
                               games: gamesForFilter,
                               selectedGame: _gameFilter,
                               onGameChanged: (v) {
@@ -841,18 +920,28 @@ class _vaultPageState extends State<vaultPage> {
                                 _refresh();
                               },
                               onSearch: _refresh,
+
+                              // Langues
+                              languages: languagesForFilter,
+                              selectedLanguage: _languageFilter,
+                              onLanguageChanged: (v) {
+                                setState(() => _languageFilter = v);
+                                _refresh();
+                              },
+
+                              // Tranche de prix
+                              priceBand: _priceBand,
+                              onPriceBandChanged: (band) {
+                                setState(() => _priceBand = band);
+                                _refresh();
+                              },
                             ),
                             const SizedBox(height: 8),
-                            SegmentedButton<String>(
-                              segments: const [
-                                ButtonSegment(
-                                    value: 'single', label: Text('Single')),
-                                ButtonSegment(
-                                    value: 'sealed', label: Text('Sealed')),
-                              ],
-                              selected: {_typeFilter},
-                              onSelectionChanged: (s) {
-                                setState(() => _typeFilter = s.first);
+                            // Même TypeTabs que la main page
+                            TypeTabs(
+                              typeFilter: _typeFilter,
+                              onTypeChanged: (t) {
+                                setState(() => _typeFilter = t);
                                 _refresh();
                               },
                             ),
@@ -896,13 +985,13 @@ class _vaultPageState extends State<vaultPage> {
 
                 InventoryTableByStatus(
                   mode:
-                      InventoryTableMode.vault, // 👈 only the requested columns
+                      InventoryTableMode.vault, // 👈 colonnes spécifiques vault
                   lines: lines,
                   onOpen: _openDetails,
-                  onEdit: _openEdit,
-                  onDelete: _deleteLine,
-                  showDelete: true,
-                  showUnitCosts: true, // keep "Prix / u."
+                  onEdit: _perm.canEditItems ? _openEdit : null,
+                  onDelete: _perm.canDeleteLines ? _deleteLine : null,
+                  showDelete: _perm.canDeleteLines,
+                  showUnitCosts: _perm.canSeeUnitCosts, // aligné RBAC
                   showRevenue: false, // hidden in vault
                   showEstimated: false, // hidden in vault
                   onInlineUpdate: _applyInlineUpdate, // 👈 inline + log + patch
@@ -932,23 +1021,25 @@ class _vaultPageState extends State<vaultPage> {
         ),
       ),
       body: body,
-      floatingActionButton: FloatingActionButton.extended(
-        backgroundColor: kAccentA,
-        foregroundColor: Colors.white,
-        onPressed: () async {
-          final orgId = widget.orgId;
-          if (orgId == null || orgId.isEmpty) {
-            _snack('No organization selected.');
-            return;
-          }
-          final changed = await Navigator.of(context).push<bool>(
-            MaterialPageRoute(builder: (_) => NewStockPage(orgId: orgId)),
-          );
-          if (changed == true) _refresh();
-        },
-        icon: const Iconify(Mdi.plus, color: Colors.white),
-        label: const Text('New stock'),
-      ),
+      floatingActionButton: (!_roleLoaded || !_perm.canCreateStock)
+          ? null
+          : FloatingActionButton.extended(
+              backgroundColor: kAccentA,
+              foregroundColor: Colors.white,
+              onPressed: () async {
+                final orgId = widget.orgId;
+                if (orgId == null || orgId.isEmpty) {
+                  _snack('No organization selected.');
+                  return;
+                }
+                final changed = await Navigator.of(context).push<bool>(
+                  MaterialPageRoute(builder: (_) => NewStockPage(orgId: orgId)),
+                );
+                if (changed == true) _refresh();
+              },
+              icon: const Iconify(Mdi.plus, color: Colors.white),
+              label: const Text('New stock'),
+            ),
     );
   }
 }

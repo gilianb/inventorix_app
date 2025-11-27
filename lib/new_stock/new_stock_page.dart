@@ -384,13 +384,13 @@ class _NewStockPageState extends State<NewStockPage> {
                 // ——— Achat ———
                 PurchaseSection(
                   supplierField: LookupAutocompleteField(
-                    tableName: 'supplier',
+                    tableName: 'fournisseur',
                     label: 'Supplier (optional)',
                     controller: _supplierNameCtrl,
                     addDialogTitle: 'New supplier',
                   ),
                   buyerField: LookupAutocompleteField(
-                    tableName: 'buyer_company',
+                    tableName: 'society',
                     label: 'Buyer company (optional)',
                     controller: _buyerCompanyCtrl,
                     addDialogTitle: 'New buyer company',
