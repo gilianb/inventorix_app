@@ -83,9 +83,12 @@ class _MainInventoryPageState extends State<MainInventoryPage>
   String _typeFilter = 'single'; // 'single' | 'sealed'
   String? _statusFilter; // filtre de la liste
 
-  /// Filtre de période (sur purchase_date)
-  /// 'all' | 'month' (30j) | 'week' (7j)
-  String _dateFilter = 'all';
+  /// Sur quelle date on base le filtre :
+  /// 'purchase' (purchase_date) ou 'sale' (sale_date)
+  String _dateBase = 'purchase';
+
+  /// Période à appliquer : 'all' | 'month' (30j) | 'week' (7j)
+  String _dateRange = 'all';
 
   TabController? _tabCtrl;
 
@@ -264,15 +267,16 @@ class _MainInventoryPageState extends State<MainInventoryPage>
     }
   }
 
-  DateTime? _purchaseDateStart() {
+  /// Date de début pour la plage (week / month)
+  DateTime? _dateRangeStart() {
     final now = DateTime.now();
-    switch (_dateFilter) {
+    switch (_dateRange) {
       case 'week':
         return now.subtract(const Duration(days: 7));
       case 'month':
         return now.subtract(const Duration(days: 30));
       default:
-        return null;
+        return null; // all time
     }
   }
 
@@ -341,7 +345,7 @@ class _MainInventoryPageState extends State<MainInventoryPage>
   /// RPC côté serveur : total investi pour FINALIZED, avec filtres alignés à l’UI
   Future<num> _fetchFinalizedInvestAggregate() async {
     try {
-      final after = _purchaseDateStart();
+      final after = _dateRangeStart();
       final String? dateFrom = after?.toIso8601String().split('T').first;
 
       int? gameId;
@@ -437,11 +441,27 @@ class _MainInventoryPageState extends State<MainInventoryPage>
         .eq('type', _typeFilter)
         .eq('org_id', widget.orgId);
 
-    // Date
-    final after = _purchaseDateStart();
-    if (after != null) {
-      final afterStr = after.toIso8601String().split('T').first;
-      query = query.gte('purchase_date', afterStr);
+    // Date (purchase_date ou sale_date selon _dateBase)
+    final after = _dateRangeStart();
+    late final String orderColumn;
+
+    if (_dateBase == 'purchase') {
+      if (after != null) {
+        final afterStr = after.toIso8601String().split('T').first;
+        query = query.gte('purchase_date', afterStr);
+      }
+      // Tri par date d'achat décroissante
+      orderColumn = 'purchase_date';
+    } else {
+      // Mode "Sale" : ne garder que les lignes avec une sale_date
+      query = query.not('sale_date', 'is', null);
+
+      if (after != null) {
+        final afterStr = after.toIso8601String().split('T').first;
+        query = query.gte('sale_date', afterStr);
+      }
+      // Tri par date de vente décroissante
+      orderColumn = 'sale_date';
     }
 
     // NEW: filtre jeu (via game_id)
@@ -473,8 +493,10 @@ class _MainInventoryPageState extends State<MainInventoryPage>
       query = query.lte('estimated_price', maxPrice);
     }
 
+    // 👇 ici on n’assigne PLUS le résultat de .order() à query,
+    // on l’utilise juste pour la requête finale
     final List<dynamic> raw =
-        await query.order('purchase_date', ascending: false).limit(500);
+        await query.order(orderColumn, ascending: false).limit(500);
 
     var rows = raw
         .map<Map<String, dynamic>>((e) => Map<String, dynamic>.from(e as Map))
@@ -542,10 +564,19 @@ class _MainInventoryPageState extends State<MainInventoryPage>
         .eq('type', _typeFilter)
         .inFilter('status', statuses);
 
-    final after = _purchaseDateStart();
-    if (after != null) {
-      final d = after.toIso8601String().split('T').first;
-      q = q.gte('purchase_date', d);
+    final after = _dateRangeStart();
+    if (_dateBase == 'purchase') {
+      if (after != null) {
+        final d = after.toIso8601String().split('T').first;
+        q = q.gte('purchase_date', d);
+      }
+    } else {
+      // Mode "Sale" : uniquement les items avec sale_date
+      q = q.not('sale_date', 'is', null);
+      if (after != null) {
+        final d = after.toIso8601String().split('T').first;
+        q = q.gte('sale_date', d);
+      }
     }
 
     // NEW: filtre jeu
@@ -838,6 +869,7 @@ class _MainInventoryPageState extends State<MainInventoryPage>
                         runSpacing: 8,
                         crossAxisAlignment: WrapCrossAlignment.center,
                         children: [
+                          // Type de produit (Single / Sealed)
                           TypeTabs(
                             typeFilter: _typeFilter,
                             onTypeChanged: (t) {
@@ -845,18 +877,48 @@ class _MainInventoryPageState extends State<MainInventoryPage>
                               _refresh();
                             },
                           ),
+
+                          // Onglets : base de date (Purchase vs Sale)
                           SegmentedButton<String>(
                             segments: const [
                               ButtonSegment(
-                                  value: 'all', label: Text('All time')),
+                                value: 'purchase',
+                                label: Text('Purchase'),
+                                icon:
+                                    Icon(Icons.shopping_bag_outlined, size: 16),
+                              ),
                               ButtonSegment(
-                                  value: 'month', label: Text('Last month')),
-                              ButtonSegment(
-                                  value: 'week', label: Text('Last week')),
+                                value: 'sale',
+                                label: Text('Sale'),
+                                icon: Icon(Icons.sell_outlined, size: 16),
+                              ),
                             ],
-                            selected: {_dateFilter},
+                            selected: {_dateBase},
                             onSelectionChanged: (s) {
-                              setState(() => _dateFilter = s.first);
+                              setState(() => _dateBase = s.first);
+                              _refresh();
+                            },
+                          ),
+
+                          // Onglets : période (All time / Last month / Last week)
+                          SegmentedButton<String>(
+                            segments: const [
+                              ButtonSegment(
+                                value: 'all',
+                                label: Text('All time'),
+                              ),
+                              ButtonSegment(
+                                value: 'month',
+                                label: Text('Last month'),
+                              ),
+                              ButtonSegment(
+                                value: 'week',
+                                label: Text('Last week'),
+                              ),
+                            ],
+                            selected: {_dateRange},
+                            onSelectionChanged: (s) {
+                              setState(() => _dateRange = s.first);
                               _refresh();
                             },
                           ),
