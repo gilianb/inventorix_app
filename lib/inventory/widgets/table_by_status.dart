@@ -1282,12 +1282,99 @@ class _FileCell extends StatelessWidget {
         }
       }();
 
-      return InkWell(
+      return _HoverableImageThumb(
+        imgUrl: imgUrl,
         onTap: _open,
+      );
+    }
+
+    return IconButton(
+      icon: const Iconify(Mdi.file_document),
+      tooltip: 'Open document',
+      onPressed: _open,
+    );
+  }
+}
+
+class _HoverableImageThumb extends StatefulWidget {
+  const _HoverableImageThumb({
+    required this.imgUrl,
+    this.onTap,
+  });
+
+  final String imgUrl;
+  final VoidCallback? onTap;
+
+  @override
+  State<_HoverableImageThumb> createState() => _HoverableImageThumbState();
+}
+
+class _HoverableImageThumbState extends State<_HoverableImageThumb> {
+  OverlayEntry? _overlayEntry;
+
+  void _showPreview(PointerEnterEvent event) {
+    if (_overlayEntry != null) return;
+
+    final overlay = Overlay.of(context);
+
+    // Position globale de la souris
+    final offset = event.position;
+
+    _overlayEntry = OverlayEntry(
+      builder: (ctx) {
+        return Positioned(
+          left: offset.dx + 12, // petit décalage à droite
+          top: offset.dy + 12, // petit décalage en dessous
+          child: IgnorePointer(
+            ignoring:
+                true, // pour ne pas interférer avec les events de la cellule
+            child: Material(
+              elevation: 6,
+              borderRadius: BorderRadius.circular(8),
+              clipBehavior: Clip.antiAlias,
+              child: Container(
+                constraints: const BoxConstraints(
+                  maxWidth: 300,
+                  maxHeight: 300,
+                ),
+                child: Image.network(
+                  widget.imgUrl,
+                  fit: BoxFit.contain,
+                  // petite optimisation, pas besoin d'une énorme résolution
+                  filterQuality: FilterQuality.medium,
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+
+    overlay.insert(_overlayEntry!);
+  }
+
+  void _hidePreview([PointerExitEvent? event]) {
+    _overlayEntry?.remove();
+    _overlayEntry = null;
+  }
+
+  @override
+  void dispose() {
+    _hidePreview();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      onEnter: _showPreview,
+      onExit: _hidePreview,
+      child: InkWell(
+        onTap: widget.onTap,
         child: ClipRRect(
           borderRadius: BorderRadius.circular(4),
           child: Image.network(
-            imgUrl,
+            widget.imgUrl,
             height: 32,
             width: 32,
             fit: BoxFit.cover,
@@ -1315,13 +1402,7 @@ class _FileCell extends StatelessWidget {
             ),
           ),
         ),
-      );
-    }
-
-    return IconButton(
-      icon: const Iconify(Mdi.file_document),
-      tooltip: 'Open document',
-      onPressed: _open,
+      ),
     );
   }
 }
