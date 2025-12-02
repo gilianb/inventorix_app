@@ -27,6 +27,10 @@ import '../public/public_item_page.dart'; // <-- Aperçu public (NOUVEAU)
 import 'package:iconify_flutter/iconify_flutter.dart';
 import 'package:iconify_flutter/icons/mdi.dart';
 
+//invoice
+import 'package:inventorix_app/invoicing/invoice_actions.dart';
+import 'package:inventorix_app/invoicing/ui/invoice_create_dialog.dart';
+
 const String kDefaultAssetPhoto = 'assets/images/default_card.png';
 
 const kAccentA = Color(0xFF6C5CE7);
@@ -674,6 +678,84 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
   }
 
   String _buildItemAppDeepLink(String token) => 'inventorix://i/$token';
+//invoice services
+  Future<void> _onCreateInvoiceForGroup() async {
+    final orgId = _orgIdFromContext;
+    if (orgId == null) {
+      _snack('Missing organization id.');
+      return;
+    }
+
+    if (_items.isEmpty) {
+      _snack('No items available for this group.');
+      return;
+    }
+
+    final firstItem = _items.first;
+    final int? itemId = (firstItem['id'] as num?)?.toInt();
+
+    if (itemId == null) {
+      _snack('Invalid item id.');
+      return;
+    }
+
+    final currency =
+        (firstItem['currency'] ?? _viewRow?['currency'] ?? 'USD').toString();
+
+    // Try to get org name for seller default
+    String? orgName;
+    try {
+      final orgRow = await _sb
+          .from('organization')
+          .select('name')
+          .eq('id', orgId)
+          .maybeSingle();
+      orgName = orgRow?['name']?.toString();
+    } catch (_) {
+      // ignore, orgName stays null
+    }
+
+    final buyerNameDefault =
+        (firstItem['buyer_company'] ?? firstItem['buyer_infos'])?.toString();
+
+    // Show form dialog
+    final formResult = await InvoiceCreateDialog.show(
+      context,
+      currency: currency,
+      sellerName: orgName,
+      buyerName: buyerNameDefault,
+    );
+
+    if (formResult == null) {
+      return; // user cancelled
+    }
+
+    try {
+      final actions = InvoiceActions(_sb);
+
+      final invoice = await actions.createBillForItemAndGeneratePdf(
+        orgId: orgId,
+        itemId: itemId,
+        currency: currency,
+        taxRate: formResult.taxRate,
+        sellerName: formResult.sellerName,
+        sellerAddress: formResult.sellerAddress,
+        sellerCountry: formResult.sellerCountry,
+        sellerVatNumber: formResult.sellerVatNumber,
+        buyerName: formResult.buyerName,
+        buyerAddress: formResult.buyerAddress,
+        buyerCountry: formResult.buyerCountry,
+        buyerEmail: formResult.buyerEmail,
+        paymentTerms: formResult.paymentTerms,
+        notes: formResult.notes,
+      );
+
+      _snack('Invoice ${invoice.invoiceNumber} created.');
+      await _loadAll(); // refresh to update document_url etc.
+    } catch (e) {
+      _snack('Error while creating invoice: $e');
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -761,6 +843,13 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
         appBar: AppBar(
           leading: BackButton(onPressed: () => Navigator.pop(context, _dirty)),
           actions: [
+            // NEW: bouton Create invoice (réservé à l'owner si tu veux)
+            if (_isOwner)
+              IconButton(
+                tooltip: 'Create invoice',
+                icon: const Icon(Icons.receipt_long),
+                onPressed: _items.isEmpty ? null : _onCreateInvoiceForGroup,
+              ),
             IconButton(
               tooltip: 'Edit items',
               icon: const Iconify(Mdi.pencil),

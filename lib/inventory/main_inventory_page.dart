@@ -26,6 +26,9 @@ import 'package:inventorix_app/org/roles.dart';
 import 'package:iconify_flutter/iconify_flutter.dart';
 import 'package:iconify_flutter/icons/mdi.dart';
 
+//invoice
+import 'package:inventorix_app/invoicing/ui/invoice_management_page.dart';
+
 /// Accents (UI only)
 const kAccentA = Color(0xFF6C5CE7); // violet
 const kAccentB = Color(0xFF00D1B2); // menthe
@@ -1650,40 +1653,62 @@ class _MainInventoryPageState extends State<MainInventoryPage>
     return Scaffold(
       appBar: AppBar(
         title: const Text('Inventorix'),
-        // ⬇️  AJOUT
         actions: [
           IconTheme(
             data: const IconThemeData(opacity: 1.0),
-            child: Row(children: [
-              IconButton(
-                tooltip: isLoggedIn ? 'Sign out' : 'Sign in',
-                icon: Iconify(isLoggedIn ? Mdi.logout : Mdi.login,
-                    color: const Color.fromARGB(255, 2, 35, 61)),
-                onPressed: _onTapAuthButton,
-              ),
-              IconButton(
-                tooltip: 'Change organization',
-                icon: const Iconify(Mdi.switch_account,
-                    color: Color.fromARGB(255, 2, 35, 61)),
-                onPressed: () async {
-                  await OrgPrefs.clear();
-                  if (!mounted) return;
-                  final picked = await Navigator.of(context).push<String>(
-                    MaterialPageRoute(
-                        builder: (_) => const OrganizationsPage()),
-                  );
-                  if (picked != null && mounted) {
-                    Navigator.of(context).pushReplacement(
+            child: Row(
+              children: [
+                // NEW: bouton vers la page de gestion des factures
+                IconButton(
+                  tooltip: 'Invoices',
+                  icon: const Iconify(
+                    Mdi.file_document_outline,
+                    color: Color.fromARGB(255, 2, 35, 61),
+                  ),
+                  onPressed: () {
+                    Navigator.of(context).push(
                       MaterialPageRoute(
-                          builder: (_) => MainInventoryPage(orgId: picked)),
+                        builder: (_) =>
+                            InvoiceManagementPage(orgId: widget.orgId),
+                      ),
                     );
-                  }
-                },
-              ),
-            ]),
+                  },
+                ),
+                IconButton(
+                  tooltip: isLoggedIn ? 'Sign out' : 'Sign in',
+                  icon: Iconify(
+                    isLoggedIn ? Mdi.logout : Mdi.login,
+                    color: const Color.fromARGB(255, 2, 35, 61),
+                  ),
+                  onPressed: _onTapAuthButton,
+                ),
+                IconButton(
+                  tooltip: 'Change organization',
+                  icon: const Iconify(
+                    Mdi.switch_account,
+                    color: Color.fromARGB(255, 2, 35, 61),
+                  ),
+                  onPressed: () async {
+                    await OrgPrefs.clear();
+                    if (!mounted) return;
+                    final picked = await Navigator.of(context).push<String>(
+                      MaterialPageRoute(
+                        builder: (_) => const OrganizationsPage(),
+                      ),
+                    );
+                    if (picked != null && mounted) {
+                      Navigator.of(context).pushReplacement(
+                        MaterialPageRoute(
+                          builder: (_) => MainInventoryPage(orgId: picked),
+                        ),
+                      );
+                    }
+                  },
+                ),
+              ],
+            ),
           ),
         ],
-
         bottom: TabBar(
           controller: _tabCtrl,
           tabs: _tabs(),
