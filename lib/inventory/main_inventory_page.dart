@@ -1650,114 +1650,118 @@ class _MainInventoryPageState extends State<MainInventoryPage>
 
     final isLoggedIn = _sb.auth.currentSession != null;
 
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Inventorix'),
-        actions: [
-          IconTheme(
-            data: const IconThemeData(opacity: 1.0),
-            child: Row(
-              children: [
-                // NEW: bouton vers la page de gestion des factures
-                IconButton(
-                  tooltip: 'Invoices',
-                  icon: const Iconify(
-                    Mdi.file_document_outline,
-                    color: Color.fromARGB(255, 2, 35, 61),
-                  ),
-                  onPressed: () {
-                    Navigator.of(context).push(
-                      MaterialPageRoute(
-                        builder: (_) =>
-                            InvoiceManagementPage(orgId: widget.orgId),
-                      ),
-                    );
-                  },
-                ),
-                IconButton(
-                  tooltip: isLoggedIn ? 'Sign out' : 'Sign in',
-                  icon: Iconify(
-                    isLoggedIn ? Mdi.logout : Mdi.login,
-                    color: const Color.fromARGB(255, 2, 35, 61),
-                  ),
-                  onPressed: _onTapAuthButton,
-                ),
-                IconButton(
-                  tooltip: 'Change organization',
-                  icon: const Iconify(
-                    Mdi.switch_account,
-                    color: Color.fromARGB(255, 2, 35, 61),
-                  ),
-                  onPressed: () async {
-                    await OrgPrefs.clear();
-                    if (!mounted) return;
-                    final picked = await Navigator.of(context).push<String>(
-                      MaterialPageRoute(
-                        builder: (_) => const OrganizationsPage(),
-                      ),
-                    );
-                    if (picked != null && mounted) {
-                      Navigator.of(context).pushReplacement(
+    return WillPopScope(
+      // 🔒 empêche le "back" (geste 2 doigts, bouton retour navigateur, etc.)
+      onWillPop: () async => false,
+      child: Scaffold(
+        appBar: AppBar(
+          title: const Text('Inventorix'),
+          actions: [
+            IconTheme(
+              data: const IconThemeData(opacity: 1.0),
+              child: Row(
+                children: [
+                  // NEW: bouton vers la page de gestion des factures
+                  IconButton(
+                    tooltip: 'Invoices',
+                    icon: const Iconify(
+                      Mdi.file_document_outline,
+                      color: Color.fromARGB(255, 2, 35, 61),
+                    ),
+                    onPressed: () {
+                      Navigator.of(context).push(
                         MaterialPageRoute(
-                          builder: (_) => MainInventoryPage(orgId: picked),
+                          builder: (_) =>
+                              InvoiceManagementPage(orgId: widget.orgId),
                         ),
                       );
-                    }
-                  },
-                ),
-              ],
+                    },
+                  ),
+                  IconButton(
+                    tooltip: isLoggedIn ? 'Sign out' : 'Sign in',
+                    icon: Iconify(
+                      isLoggedIn ? Mdi.logout : Mdi.login,
+                      color: const Color.fromARGB(255, 2, 35, 61),
+                    ),
+                    onPressed: _onTapAuthButton,
+                  ),
+                  IconButton(
+                    tooltip: 'Change organization',
+                    icon: const Iconify(
+                      Mdi.switch_account,
+                      color: Color.fromARGB(255, 2, 35, 61),
+                    ),
+                    onPressed: () async {
+                      await OrgPrefs.clear();
+                      if (!mounted) return;
+                      final picked = await Navigator.of(context).push<String>(
+                        MaterialPageRoute(
+                          builder: (_) => const OrganizationsPage(),
+                        ),
+                      );
+                      if (picked != null && mounted) {
+                        Navigator.of(context).pushReplacement(
+                          MaterialPageRoute(
+                            builder: (_) => MainInventoryPage(orgId: picked),
+                          ),
+                        );
+                      }
+                    },
+                  ),
+                ],
+              ),
+            ),
+          ],
+          bottom: TabBar(
+            controller: _tabCtrl,
+            tabs: _tabs(),
+            labelColor: Theme.of(context).colorScheme.onPrimary,
+            unselectedLabelColor:
+                Theme.of(context).colorScheme.onPrimary.withOpacity(.75),
+            indicatorColor: Theme.of(context).colorScheme.onPrimary,
+          ),
+          flexibleSpace: Container(
+            decoration: const BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment(-1, -1),
+                end: Alignment(1, 1),
+                colors: [kAccentA, kAccentB],
+              ),
             ),
           ),
-        ],
-        bottom: TabBar(
+        ),
+        body: TabBarView(
           controller: _tabCtrl,
-          tabs: _tabs(),
-          labelColor: Theme.of(context).colorScheme.onPrimary,
-          unselectedLabelColor:
-              Theme.of(context).colorScheme.onPrimary.withOpacity(.75),
-          indicatorColor: Theme.of(context).colorScheme.onPrimary,
+          children: _tabViews(),
         ),
-        flexibleSpace: Container(
-          decoration: const BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment(-1, -1),
-              end: Alignment(1, 1),
-              colors: [kAccentA, kAccentB],
-            ),
-          ),
-        ),
-      ),
-      body: TabBarView(
-        controller: _tabCtrl,
-        children: _tabViews(),
-      ),
-      floatingActionButton: AnimatedBuilder(
-        animation: _tabCtrl!,
-        builder: (context, _) {
-          if (_tabCtrl!.index != 0 || !_perm.canCreateStock) {
-            return const SizedBox.shrink();
-          }
-          return FloatingActionButton.extended(
-            backgroundColor: kAccentA,
-            foregroundColor: Colors.white,
-            onPressed: () async {
-              final orgId = widget.orgId;
-              if (orgId.isEmpty) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('No organization selected.')),
-                );
-                return;
-              }
+        floatingActionButton: AnimatedBuilder(
+          animation: _tabCtrl!,
+          builder: (context, _) {
+            if (_tabCtrl!.index != 0 || !_perm.canCreateStock) {
+              return const SizedBox.shrink();
+            }
+            return FloatingActionButton.extended(
+              backgroundColor: kAccentA,
+              foregroundColor: Colors.white,
+              onPressed: () async {
+                final orgId = widget.orgId;
+                if (orgId.isEmpty) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('No organization selected.')),
+                  );
+                  return;
+                }
 
-              final changed = await Navigator.of(context).push<bool>(
-                MaterialPageRoute(builder: (_) => NewStockPage(orgId: orgId)),
-              );
-              if (changed == true) _refresh();
-            },
-            icon: const Iconify(Mdi.plus, color: Colors.white),
-            label: const Text('New stock'),
-          );
-        },
+                final changed = await Navigator.of(context).push<bool>(
+                  MaterialPageRoute(builder: (_) => NewStockPage(orgId: orgId)),
+                );
+                if (changed == true) _refresh();
+              },
+              icon: const Iconify(Mdi.plus, color: Colors.white),
+              label: const Text('New stock'),
+            );
+          },
+        ),
       ),
     );
   }
