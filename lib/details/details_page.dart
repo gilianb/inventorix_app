@@ -4,13 +4,13 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:printing/printing.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../inventory/widgets/edit.dart' show EditItemsDialog;
 
 import 'widgets/info_extras_card.dart';
-import 'widgets/info_banner.dart';
 
 import 'widgets/details_header.dart';
 import 'widgets/media_thumb.dart';
@@ -27,9 +27,10 @@ import '../public/public_item_page.dart'; // <-- Aperçu public (NOUVEAU)
 import 'package:iconify_flutter/iconify_flutter.dart';
 import 'package:iconify_flutter/icons/mdi.dart';
 
-//invoice
-import 'package:inventorix_app/invoicing/invoice_actions.dart';
+// invoicing
+import 'package:inventorix_app/invoicing/invoiceActions.dart';
 import 'package:inventorix_app/invoicing/ui/invoice_create_dialog.dart';
+import 'package:inventorix_app/invoicing/ui/attach_purchase_invoice_dialog.dart';
 
 const String kDefaultAssetPhoto = 'assets/images/default_card.png';
 
@@ -94,6 +95,9 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
   Map<String, dynamic>? _viewRow;
   List<Map<String, dynamic>> _items = [];
   List<Map<String, dynamic>> _movements = [];
+
+  /// Toutes les invoices liées aux items visibles (sale + purchase)
+  List<Map<String, dynamic>> _relatedInvoices = [];
 
   String? _localStatusFilter;
   bool _showItemsTable = true;
@@ -376,6 +380,7 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
       }
 
       List<Map<String, dynamic>> items = [];
+      List<Map<String, dynamic>> relatedInvoices = [];
 
       if (sig != null && orgId != null) {
         const itemCols = [
@@ -456,6 +461,9 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
 
         _productExtras = await _fetchProductExtras(pidEff);
 
+        // Invoices liées (sale + purchase) pour les items
+        relatedInvoices = await _fetchRelatedInvoices(orgId, items);
+
         // (Re)subscribe au couple (orgId,sig)
         _subscribeToGroup(orgId: orgId, groupSig: sig);
 
@@ -482,6 +490,7 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
           _viewRow = viewRow;
           _items = items;
           _movements = hist;
+          _relatedInvoices = relatedInvoices;
           _trendsReloadTick++;
         });
         return;
@@ -505,6 +514,7 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
           _movements = const [];
           _viewRow = _initial;
           _productExtras = null;
+          _relatedInvoices = const [];
           _trendsReloadTick++;
         });
         return;
@@ -529,6 +539,12 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
       final pid = pidEff ?? (items.first['product_id'] as num?)?.toInt();
       _productExtras = await _fetchProductExtras(pid);
 
+      // Invoices liées dans ce cas (on déduit org depuis le 1er item)
+      final effOrgId = orgId ?? items.first['org_id']?.toString();
+      if (effOrgId != null) {
+        relatedInvoices = await _fetchRelatedInvoices(effOrgId, items);
+      }
+
       // 🔒 Coller aussi ici
       _ovOrgId = items.first['org_id']?.toString();
       _ovGroupSig = items.first['group_sig']?.toString();
@@ -539,6 +555,7 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
         _viewRow = {..._initial, ...items.first};
         _items = items;
         _movements = hist;
+        _relatedInvoices = relatedInvoices;
         _trendsReloadTick++;
       });
     } catch (e) {
@@ -565,6 +582,101 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
       }
     } catch (_) {}
     return null;
+  }
+
+  /// Charge toutes les invoices (sale + purchase) liées aux items donnés.
+  Future<List<Map<String, dynamic>>> _fetchRelatedInvoices(
+    String orgId,
+    List<Map<String, dynamic>> items,
+  ) async {
+    if (items.isEmpty) return [];
+    final itemIds =
+        items.map((e) => (e['id'] as num?)?.toInt()).whereType<int>().toList();
+    if (itemIds.isEmpty) return [];
+
+    final rows = await _sb
+        .from('invoice')
+        .select(
+          'id, invoice_type, status, invoice_number, document_url, related_item_id',
+        )
+        .eq('org_id', orgId)
+        .inFilter('related_item_id', itemIds);
+
+    return List<Map<String, dynamic>>.from(
+      (rows as List).map((e) => Map<String, dynamic>.from(e as Map)),
+    );
+  }
+
+  Map<String, dynamic>? _firstInvoiceOfType(String type) {
+    for (final inv in _relatedInvoices) {
+      final t = (inv['invoice_type'] ?? '').toString();
+      final doc = (inv['document_url'] ?? '').toString();
+      if (t == type && doc.isNotEmpty) return inv;
+    }
+    return null;
+  }
+
+  Future<void> _openInvoiceDocument(String documentUrl) async {
+    // Si c'est déjà une URL HTTP -> on ouvre directement
+    if (documentUrl.startsWith('http://') ||
+        documentUrl.startsWith('https://')) {
+      final uri = Uri.tryParse(documentUrl);
+      if (uri != null) {
+        await launchUrl(uri, mode: LaunchMode.externalApplication);
+        return;
+      }
+    }
+
+    // Sinon on considère que c'est un chemin Storage "invoices/..."
+    final fullPath = documentUrl;
+    final pathInBucket = fullPath.replaceFirst('invoices/', '');
+    try {
+      final bytes = await _sb.storage.from('invoices').download(pathInBucket);
+      await Printing.layoutPdf(onLayout: (_) async => bytes);
+    } catch (e) {
+      _snack('Error opening document: $e');
+    }
+  }
+
+  /// Construit la petite rangée de boutons "Sales invoice" / "Purchase invoice".
+  Widget _buildInvoiceDocButtons(String uDocFallback) {
+    final saleInv = _firstInvoiceOfType('sale');
+    final purchaseInv = _firstInvoiceOfType('purchase');
+
+    final saleDoc = (saleInv?['document_url'] ?? '').toString();
+    final purchaseDoc = (purchaseInv?['document_url'] ?? '').toString();
+
+    final hasSale = saleDoc.isNotEmpty;
+    final hasPurchase = purchaseDoc.isNotEmpty;
+    final hasFallback = !hasSale && !hasPurchase && uDocFallback.isNotEmpty;
+
+    if (!hasSale && !hasPurchase && !hasFallback) {
+      return const SizedBox.shrink();
+    }
+
+    return Row(
+      children: [
+        if (hasSale)
+          _InvoiceDocButton(
+            label: 'Sales invoice',
+            icon: Icons.receipt_long,
+            onPressed: () => _openInvoiceDocument(saleDoc),
+          ),
+        if (hasSale && (hasPurchase || hasFallback)) const SizedBox(width: 8),
+        if (hasPurchase)
+          _InvoiceDocButton(
+            label: 'Purchase invoice',
+            icon: Icons.shopping_bag_outlined,
+            onPressed: () => _openInvoiceDocument(purchaseDoc),
+          ),
+        if (!hasSale && !hasPurchase && hasFallback)
+          _InvoiceDocButton(
+            label: 'Main document',
+            icon: Icons.description,
+            onPressed: () => _openInvoiceDocument(uDocFallback),
+          ),
+      ],
+    );
   }
 
   Map<String, dynamic> _maskUnitInMap(Map<String, dynamic> m) {
@@ -678,7 +790,9 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
   }
 
   String _buildItemAppDeepLink(String token) => 'inventorix://i/$token';
-//invoice services
+
+  // ===================== INVOICING ACTIONS =====================
+
   Future<void> _onCreateInvoiceForGroup() async {
     final orgId = _orgIdFromContext;
     if (orgId == null) {
@@ -756,6 +870,67 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
       _snack('Error while creating invoice: $e');
     }
   }
+
+  Future<void> _onAttachPurchaseInvoice() async {
+    final orgId = _orgIdFromContext;
+    if (orgId == null) {
+      _snack('Missing organization id.');
+      return;
+    }
+
+    if (_items.isEmpty) {
+      _snack('No items available for this group.');
+      return;
+    }
+
+    final firstItem = _items.first;
+    final int? itemId = (firstItem['id'] as num?)?.toInt();
+
+    if (itemId == null) {
+      _snack('Invalid item id.');
+      return;
+    }
+
+    final currency =
+        (firstItem['currency'] ?? _viewRow?['currency'] ?? 'USD').toString();
+
+    final defaultSupplier =
+        (firstItem['supplier_name'] ?? _viewRow?['supplier_name'])?.toString();
+
+    // Open dialog to collect supplier + invoice number + file
+    final formResult = await AttachPurchaseInvoiceDialog.show(
+      context,
+      currency: currency,
+      supplierName: defaultSupplier,
+    );
+
+    if (formResult == null) {
+      return; // user cancelled
+    }
+
+    try {
+      final actions = InvoiceActions(_sb);
+
+      await actions.attachPurchaseInvoiceForItem(
+        orgId: orgId,
+        itemId: itemId,
+        currency: currency,
+        supplierName: formResult.supplierName,
+        externalInvoiceNumber: formResult.invoiceNumber,
+        fileBytes: formResult.fileBytes,
+        fileName: formResult.fileName,
+        notes: formResult.notes,
+      );
+
+      _snack(
+          'Purchase invoice ${formResult.invoiceNumber} attached to this item.');
+      await _loadAll();
+    } catch (e) {
+      _snack('Error while attaching purchase invoice: $e');
+    }
+  }
+
+  // ===================== BUILD =====================
 
   @override
   Widget build(BuildContext context) {
@@ -843,10 +1018,15 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
         appBar: AppBar(
           leading: BackButton(onPressed: () => Navigator.pop(context, _dirty)),
           actions: [
-            // NEW: bouton Create invoice (réservé à l'owner si tu veux)
             if (_isOwner)
               IconButton(
-                tooltip: 'Create invoice',
+                tooltip: 'Attach purchase invoice',
+                icon: const Icon(Icons.upload_file),
+                onPressed: _items.isEmpty ? null : _onAttachPurchaseInvoice,
+              ),
+            if (_isOwner)
+              IconButton(
+                tooltip: 'Create sales invoice',
                 icon: const Icon(Icons.receipt_long),
                 onPressed: _items.isEmpty ? null : _onCreateInvoiceForGroup,
               ),
@@ -917,18 +1097,8 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
                                     : null,
                               ),
                               const SizedBox(height: 8),
-                              if (uDoc.isNotEmpty)
-                                InfoBanner(
-                                  icon: Icons.description,
-                                  message: 'Document available — tap to open',
-                                  onTap: () async {
-                                    final uri = Uri.tryParse(uDoc);
-                                    if (uri != null) {
-                                      await launchUrl(uri,
-                                          mode: LaunchMode.externalApplication);
-                                    }
-                                  },
-                                ),
+                              // Petits boutons SELL / PURCHASE
+                              _buildInvoiceDocButtons(uDoc),
                               const SizedBox(height: 8),
                               // Bouton QR sous la vignette (wide)
                               Align(
@@ -998,18 +1168,8 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
                               : null,
                         ),
                         const SizedBox(height: 8),
-                        if (uDoc.isNotEmpty)
-                          InfoBanner(
-                            icon: Icons.description,
-                            message: 'Document available — tap to open',
-                            onTap: () async {
-                              final uri = Uri.tryParse(uDoc);
-                              if (uri != null) {
-                                await launchUrl(uri,
-                                    mode: LaunchMode.externalApplication);
-                              }
-                            },
-                          ),
+                        // Petits boutons SELL / PURCHASE (mobile)
+                        _buildInvoiceDocButtons(uDoc),
                         const SizedBox(height: 8),
                         // Bouton QR (narrow)
                         Align(
@@ -1146,6 +1306,31 @@ class _AppbarGradient extends StatelessWidget {
           colors: [kAccentA, kAccentB],
         ),
       ),
+    );
+  }
+}
+
+class _InvoiceDocButton extends StatelessWidget {
+  final String label;
+  final IconData icon;
+  final VoidCallback onPressed;
+
+  const _InvoiceDocButton({
+    required this.label,
+    required this.icon,
+    required this.onPressed,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return OutlinedButton.icon(
+      style: OutlinedButton.styleFrom(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        textStyle: const TextStyle(fontSize: 13),
+      ),
+      icon: Icon(icon, size: 18),
+      label: Text(label),
+      onPressed: onPressed,
     );
   }
 }
