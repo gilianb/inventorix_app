@@ -18,6 +18,8 @@ class InvoicePdfBuilder {
     final paymentTerms =
         invoice.paymentTerms ?? 'Payment due within 7 days by bank transfer.';
 
+    final bool hasVat = _hasVat(invoice, lines);
+
     doc.addPage(
       pw.MultiPage(
         pageFormat: PdfPageFormat.a4,
@@ -27,9 +29,9 @@ class InvoicePdfBuilder {
           pw.SizedBox(height: 20),
           _buildSellerBuyer(invoice),
           pw.SizedBox(height: 20),
-          _buildItemsTable(invoice, lines),
+          _buildItemsTable(invoice, lines, hasVat: hasVat),
           pw.SizedBox(height: 20),
-          _buildTotals(invoice),
+          _buildTotals(invoice, hasVat: hasVat),
           pw.SizedBox(height: 20),
           _buildNotes(paymentTerms, invoice.notes),
         ],
@@ -37,6 +39,15 @@ class InvoicePdfBuilder {
     );
 
     return doc.save();
+  }
+
+  /// Détecte si cette facture est "avec TVA" ou "sans TVA"
+  bool _hasVat(Invoice invoice, List<InvoiceLine> lines) {
+    if (invoice.totalTax != 0) return true;
+    for (final l in lines) {
+      if (l.taxRate != 0 || l.totalTax != 0) return true;
+    }
+    return false;
   }
 
   pw.Widget _buildHeader(Invoice invoice, String title) {
@@ -150,7 +161,56 @@ class InvoicePdfBuilder {
     );
   }
 
-  pw.Widget _buildItemsTable(Invoice invoice, List<InvoiceLine> lines) {
+  pw.Widget _buildItemsTable(
+    Invoice invoice,
+    List<InvoiceLine> lines, {
+    required bool hasVat,
+  }) {
+    if (!hasVat) {
+      // ===== Template SANS TVA =====
+      final headers = [
+        'Description',
+        'Qty',
+        'Unit price',
+        'Total',
+      ];
+
+      final data = lines.map((line) {
+        final total = line.totalInclTax; // = totalExcl quand pas de TVA
+        return [
+          line.description,
+          line.quantity.toString(),
+          formatMoney(line.unitPrice, invoice.currency),
+          formatMoney(total, invoice.currency),
+        ];
+      }).toList();
+
+      return pw.Table.fromTextArray(
+        headers: headers,
+        data: data,
+        headerStyle: pw.TextStyle(
+          fontWeight: pw.FontWeight.bold,
+        ),
+        headerDecoration: const pw.BoxDecoration(
+          border: pw.Border(
+            bottom: pw.BorderSide(width: 0.5),
+          ),
+        ),
+        cellAlignment: pw.Alignment.centerLeft,
+        columnWidths: {
+          0: const pw.FlexColumnWidth(4),
+          1: const pw.FlexColumnWidth(1),
+          2: const pw.FlexColumnWidth(2),
+          3: const pw.FlexColumnWidth(2),
+        },
+        cellPadding: const pw.EdgeInsets.symmetric(
+          vertical: 4,
+          horizontal: 2,
+        ),
+      );
+    }
+
+    // ===== Template AVEC TVA =====
     final headers = [
       'Description',
       'Qty',
@@ -187,7 +247,6 @@ class InvoicePdfBuilder {
         ),
       ),
       cellAlignment: pw.Alignment.centerLeft,
-      // ❌ on ne met plus cellDecoration (source de l'erreur)
       columnWidths: {
         0: const pw.FlexColumnWidth(3),
         1: const pw.FlexColumnWidth(1),
@@ -198,11 +257,41 @@ class InvoicePdfBuilder {
         6: const pw.FlexColumnWidth(2),
         7: const pw.FlexColumnWidth(2),
       },
-      cellPadding: const pw.EdgeInsets.symmetric(vertical: 4, horizontal: 2),
+      cellPadding: const pw.EdgeInsets.symmetric(
+        vertical: 4,
+        horizontal: 2,
+      ),
     );
   }
 
-  pw.Widget _buildTotals(Invoice invoice) {
+  pw.Widget _buildTotals(Invoice invoice, {required bool hasVat}) {
+    if (!hasVat) {
+      // ===== Bloc totaux SANS TVA =====
+      return pw.Align(
+        alignment: pw.Alignment.centerRight,
+        child: pw.Container(
+          width: 260,
+          padding: const pw.EdgeInsets.all(8),
+          decoration: pw.BoxDecoration(
+            border: pw.Border.all(width: 0.5),
+          ),
+          child: pw.Column(
+            crossAxisAlignment: pw.CrossAxisAlignment.stretch,
+            children: [
+              _rowTotal(
+                'Total',
+                formatMoney(invoice.totalInclTax, invoice.currency),
+                isBold: true,
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    // ===== Bloc totaux AVEC TVA =====
+    final vatLabel = _vatLabel(invoice);
+
     return pw.Align(
       alignment: pw.Alignment.centerRight,
       child: pw.Container(
@@ -219,7 +308,7 @@ class InvoicePdfBuilder {
               formatMoney(invoice.totalExclTax, invoice.currency),
             ),
             _rowTotal(
-              'Tax total',
+              vatLabel,
               formatMoney(invoice.totalTax, invoice.currency),
             ),
             pw.Divider(),
@@ -232,6 +321,20 @@ class InvoicePdfBuilder {
         ),
       ),
     );
+  }
+
+  /// Essaie de calculer un label du type "VAT 5 %"
+  String _vatLabel(Invoice invoice) {
+    final ex = invoice.totalExclTax;
+    final t = invoice.totalTax;
+    if (ex <= 0 || t <= 0) return 'VAT';
+    final rate = (t / ex) * 100;
+    if (rate > 0 && rate < 1000) {
+      final rStr =
+          rate % 1 == 0 ? rate.toStringAsFixed(0) : rate.toStringAsFixed(1);
+      return 'VAT $rStr %';
+    }
+    return 'VAT';
   }
 
   pw.Widget _rowTotal(String label, String value, {bool isBold = false}) {

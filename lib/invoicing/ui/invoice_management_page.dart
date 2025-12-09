@@ -4,10 +4,14 @@ import 'package:printing/printing.dart';
 import 'package:file_picker/file_picker.dart';
 
 import '../invoiceService.dart';
+import '../invoiceActions.dart';
 import '../invoice_format.dart';
 import '../models/enums.dart';
 import '../models/invoice.dart';
 import '../models/invoiceFolder.dart';
+
+// Dialog de sélection des items pour créer une facture de vente
+import 'invoice_select_items_dialog.dart';
 
 /// Internal tree node used only in this page to build a hierarchical folder view.
 class _FolderNode {
@@ -311,7 +315,7 @@ class _InvoiceManagementPageState extends State<InvoiceManagementPage> {
         await _invoiceService.deleteInvoice(inv, deletePdf: true);
       }
 
-// 2) delete folders themselves
+      // 2) delete folders themselves
       for (final id in folderIds) {
         await client.from('invoice_folder').delete().eq('id', id);
       }
@@ -741,6 +745,72 @@ class _InvoiceManagementPageState extends State<InvoiceManagementPage> {
   }
 
   // ---------------------------------------------------------------------------
+  // Create NEW sales invoice (grouped) from this page
+  // ---------------------------------------------------------------------------
+
+  Future<void> _onCreateSalesInvoiceFromManagement() async {
+    // Ouvre le dialog de sélection d’items + infos facture
+    final result = await InvoiceSelectItemsDialog.show(
+      context,
+      orgId: widget.orgId,
+    );
+
+    if (result == null) return;
+
+    if (result.itemIds.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No items selected for the invoice.')),
+      );
+      return;
+    }
+
+    try {
+      final actions = InvoiceActions(Supabase.instance.client);
+
+      final invoice = await actions.createBillForItemsAndGeneratePdf(
+        orgId: widget.orgId,
+        itemIds: result.itemIds,
+        currency: result.currency,
+        taxRate: result.taxRate,
+        dueDate: result.dueDate,
+        // Seller
+        sellerName: result.sellerName,
+        sellerAddress: result.sellerAddress,
+        sellerCountry: result.sellerCountry,
+        sellerVatNumber: result.sellerVatNumber,
+        sellerTaxRegistration: result.sellerTaxRegistration,
+        sellerRegistrationNumber: result.sellerRegistrationNumber,
+        // Buyer
+        buyerName: result.buyerName,
+        buyerAddress: result.buyerAddress,
+        buyerCountry: result.buyerCountry,
+        buyerVatNumber: result.buyerVatNumber,
+        buyerTaxRegistration: result.buyerTaxRegistration,
+        buyerEmail: result.buyerEmail,
+        buyerPhone: result.buyerPhone,
+        // Other
+        paymentTerms: result.paymentTerms,
+        notes: result.notes,
+      );
+
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Invoice ${invoice.invoiceNumber} created.'),
+        ),
+      );
+
+      await _loadData();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error while creating invoice: $e')),
+      );
+    }
+  }
+
+  // ---------------------------------------------------------------------------
   // Build
   // ---------------------------------------------------------------------------
 
@@ -752,6 +822,11 @@ class _InvoiceManagementPageState extends State<InvoiceManagementPage> {
       appBar: AppBar(
         title: const Text('Invoices'),
         actions: [
+          IconButton(
+            onPressed: _onCreateSalesInvoiceFromManagement,
+            icon: const Icon(Icons.receipt_long_outlined),
+            tooltip: 'New sales invoice',
+          ),
           IconButton(
             onPressed: _createFolderDialog,
             icon: const Icon(Icons.create_new_folder_outlined),

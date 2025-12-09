@@ -24,6 +24,8 @@ class _ColumnSortSpec {
   final Comparable? Function(Map<String, dynamic> row) selector;
 }
 
+const double _kColumnDividerWidth = 10.0;
+
 class InventoryTableByStatus extends StatefulWidget {
   const InventoryTableByStatus({
     super.key,
@@ -81,6 +83,10 @@ class _InventoryTableByStatusState extends State<InventoryTableByStatus> {
   static const double _rowH = 56;
   static const double _sideW = 52;
 
+  // limites de largeur des colonnes
+  static const double _minColWidth = 60;
+  static const double _maxColWidth = 720;
+
   String _txt(dynamic v) =>
       (v == null || (v is String && v.trim().isEmpty)) ? '—' : v.toString();
 
@@ -104,11 +110,14 @@ class _InventoryTableByStatusState extends State<InventoryTableByStatus> {
   /// Lignes triées localement (copie de widget.lines)
   late List<Map<String, dynamic>> _sortedLines;
 
-  /// Index de la colonne triée (dans la liste [columns] du DataTable)
+  /// Index de la colonne triée
   int? _sortColumnIndex;
 
   /// true = flèche vers le haut, false = flèche vers le bas
   bool _sortAscending = true;
+
+  /// Largeurs actuelles des colonnes
+  List<double>? _columnWidths;
 
   @override
   void initState() {
@@ -120,6 +129,15 @@ class _InventoryTableByStatusState extends State<InventoryTableByStatus> {
   void didUpdateWidget(covariant InventoryTableByStatus oldWidget) {
     super.didUpdateWidget(oldWidget);
     _resetSortedLines();
+
+    final columnsChanged = widget.mode != oldWidget.mode ||
+        widget.showUnitCosts != oldWidget.showUnitCosts ||
+        widget.showEstimated != oldWidget.showEstimated ||
+        widget.showRevenue != oldWidget.showRevenue;
+
+    if (columnsChanged) {
+      _columnWidths = null; // on recalculera des valeurs par défaut
+    }
   }
 
   void _resetSortedLines() {
@@ -147,7 +165,7 @@ class _InventoryTableByStatusState extends State<InventoryTableByStatus> {
     return DateTime.tryParse(s);
   }
 
-  /// Déclare, dans le même ordre que les DataColumns,
+  /// Déclare, dans le même ordre que les colonnes affichées,
   /// la façon de trier chaque colonne.
   List<_ColumnSortSpec> _columnSpecs() {
     if (widget.mode == InventoryTableMode.vault) {
@@ -321,6 +339,137 @@ class _InventoryTableByStatusState extends State<InventoryTableByStatus> {
     return specs;
   }
 
+  /// Titres des colonnes, dans le même ordre que _columnSpecs()
+  List<String> _columnTitles() {
+    if (widget.mode == InventoryTableMode.vault) {
+      return const [
+        'Photo',
+        'Grading note',
+        'Product',
+        'Language',
+        'Game',
+        'Purchase',
+        'Qty',
+        'Status',
+        'Price / unit',
+        'Market / unit',
+      ];
+    }
+
+    final titles = <String>[
+      'Photo',
+      'Grading note',
+      'Product',
+      'Language',
+      'Game',
+      'Purchase',
+      'Qty',
+      'Status',
+      if (widget.showUnitCosts) 'Price / unit',
+      if (widget.showUnitCosts) 'Price (Qty×unit)',
+      if (widget.showEstimated) 'Estimated / unit',
+      'Supplier',
+      'Buyer',
+      'Item location',
+      'Grade ID',
+      'Sale date',
+      if (widget.showRevenue) 'Sale price',
+      'Tracking',
+      'Doc',
+    ];
+    return titles;
+  }
+
+  /// Largeurs par défaut (un peu plus petites) – dans le même ordre
+  List<double> _buildDefaultWidths(int count) {
+    if (widget.mode == InventoryTableMode.vault) {
+      final base = <double>[
+        70, // Photo
+        120, // Grading
+        230, // Product
+        90, // Language
+        110, // Game
+        110, // Purchase
+        60, // Qty
+        130, // Status
+        110, // Price / unit
+        140, // Market / unit
+      ];
+      assert(base.length == count);
+      return base;
+    }
+
+    final base = <double>[
+      70, // Photo
+      120, // Grading
+      230, // Product
+      90, // Language
+      110, // Game
+      110, // Purchase
+      60, // Qty
+      130, // Status
+      if (widget.showUnitCosts) 110, // Price / unit
+      if (widget.showUnitCosts) 120, // Price (Qty×unit)
+      if (widget.showEstimated) 120, // Estimated
+      140, // Supplier
+      140, // Buyer
+      160, // Item location
+      110, // Grade ID
+      110, // Sale date
+      if (widget.showRevenue) 120, // Sale price
+      170, // Tracking
+      100, // Doc
+    ];
+    assert(base.length == count);
+    return base;
+  }
+
+  List<double> _ensureColumnWidths(int count) {
+    if (_columnWidths == null || _columnWidths!.length != count) {
+      _columnWidths = _buildDefaultWidths(count);
+    }
+    return _columnWidths!;
+  }
+
+  void _onResizeColumn(int columnIndex, double delta) {
+    if (_columnWidths == null) return;
+    setState(() {
+      final w = _columnWidths!;
+      final newWidth =
+          (w[columnIndex] + delta).clamp(_minColWidth, _maxColWidth);
+      w[columnIndex] = newWidth;
+    });
+  }
+
+  double _totalTableWidth(List<double> widths) {
+    if (widths.isEmpty) return 0;
+    return widths.fold<double>(0, (sum, w) => sum + w) +
+        _kColumnDividerWidth * (widths.length - 1);
+  }
+
+  /// Wrapper pour ajouter automatiquement un tooltip aux Text simples
+  Widget _maybeWrapWithTooltip(Widget child) {
+    if (child is Text) {
+      final data = child.data;
+      if (data == null || data.isEmpty || data == '—') {
+        return child;
+      }
+      return Tooltip(
+        message: data,
+        waitDuration: const Duration(milliseconds: 400),
+        child: Text(
+          data,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          textAlign: child.textAlign,
+          style: child.style,
+          softWrap: false,
+        ),
+      );
+    }
+    return child;
+  }
+
   /// Détermine le sens initial du tri quand on clique pour la 1ère fois
   bool _defaultAscendingFor(int columnIndex) {
     final specs = _columnSpecs();
@@ -438,11 +587,17 @@ class _InventoryTableByStatusState extends State<InventoryTableByStatus> {
 
       // Produit → détails
       DataCell(
-        InkWell(
-          onTap: () => widget.onOpen(r),
-          child: Text(
-            r['product_name']?.toString() ?? '',
-            style: const TextStyle(decoration: TextDecoration.underline),
+        Tooltip(
+          message: r['product_name']?.toString() ?? '',
+          waitDuration: const Duration(milliseconds: 400),
+          child: InkWell(
+            onTap: () => widget.onOpen(r),
+            child: Text(
+              r['product_name']?.toString() ?? '',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(decoration: TextDecoration.underline),
+            ),
           ),
         ),
       ),
@@ -523,11 +678,17 @@ class _InventoryTableByStatusState extends State<InventoryTableByStatus> {
 
       // Produit → détails
       DataCell(
-        InkWell(
-          onTap: () => widget.onOpen(r),
-          child: Text(
-            r['product_name']?.toString() ?? '',
-            style: const TextStyle(decoration: TextDecoration.underline),
+        Tooltip(
+          message: r['product_name']?.toString() ?? '',
+          waitDuration: const Duration(milliseconds: 400),
+          child: InkWell(
+            onTap: () => widget.onOpen(r),
+            child: Text(
+              r['product_name']?.toString() ?? '',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(decoration: TextDecoration.underline),
+            ),
           ),
         ),
       ),
@@ -765,76 +926,97 @@ class _InventoryTableByStatusState extends State<InventoryTableByStatus> {
             ],
           );
 
-    // ------ DataColumns dynamiques + onSort ------
-    List<DataColumn> columns;
-    int colIdx = -1;
+    // ------ Colonnes dynamiques + tri + largeurs ------
+    final columnTitles = _columnTitles();
+    final colCount = columnTitles.length;
 
-    DataColumn sortableCol(String title) {
-      final thisIndex = ++colIdx;
-      return DataColumn(
-        label: Text(title),
-        // on ignore le "ascending" passé par DataTable, on gère nous-mêmes
-        onSort: (int _, bool __) => _handleSort(thisIndex),
+    // sécurité dev : specs == titres
+    assert(_columnSpecs().length == colCount,
+        'columnSpecs() and _columnTitles() length mismatch');
+
+    final widths = _ensureColumnWidths(colCount);
+    final tableWidth = _totalTableWidth(widths);
+
+    // DataRows réutilisant toute la logique existante
+    final dataRows = lines.map<DataRow>((r) {
+      final selected = widget.groupMode
+          ? widget.selection.contains(widget.lineKey(r))
+          : false;
+      return widget.mode == InventoryTableMode.vault
+          ? _vaultRow(context, r, selected: selected)
+          : _fullRow(context, r, selected: selected);
+    }).toList();
+
+    Widget buildHeaderRow() {
+      return Container(
+        height: _headH,
+        color: Theme.of(context).colorScheme.surfaceVariant.withOpacity(.35),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            for (int i = 0; i < colCount; i++) ...[
+              SizedBox(
+                width: widths[i],
+                child: _HeaderCell(
+                  title: columnTitles[i],
+                  isSorted: _sortColumnIndex == i,
+                  ascending: _sortAscending,
+                  onTap: () => _handleSort(i),
+                ),
+              ),
+              if (i < colCount - 1)
+                _ColumnResizeHandle(
+                  height: _headH,
+                  onDrag: (delta) => _onResizeColumn(i, delta),
+                ),
+            ],
+          ],
+        ),
       );
     }
 
-    if (widget.mode == InventoryTableMode.vault) {
-      columns = [
-        sortableCol('Photo'),
-        sortableCol('Grading note'),
-        sortableCol('Product'),
-        sortableCol('Language'),
-        sortableCol('Game'),
-        sortableCol('Purchase'),
-        sortableCol('Qty'),
-        sortableCol('Status'),
-        sortableCol('Price / unit'),
-        sortableCol('Market / unit'),
-      ];
-    } else {
-      columns = <DataColumn>[
-        sortableCol('Photo'),
-        sortableCol('Grading note'),
-        sortableCol('Product'),
-        sortableCol('Language'),
-        sortableCol('Game'),
-        sortableCol('Purchase'),
-        sortableCol('Qty'),
-        sortableCol('Status'),
-        if (widget.showUnitCosts) sortableCol('Price / unit'),
-        if (widget.showUnitCosts) sortableCol('Price (Qty×unit)'),
-        if (widget.showEstimated) sortableCol('Estimated / unit'),
-        sortableCol('Supplier'),
-        sortableCol('Buyer'),
-        sortableCol('Item location'),
-        sortableCol('Grade ID'),
-        sortableCol('Sale date'),
-        if (widget.showRevenue) sortableCol('Sale price'),
-        sortableCol('Tracking'),
-        sortableCol('Doc'),
-      ];
+    Widget buildDataRowWidget(DataRow row) {
+      final bg =
+          row.color?.resolve(const <MaterialState>{}) ?? Colors.transparent;
+      final cells = row.cells;
+
+      return Container(
+        height: _rowH,
+        color: bg,
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            for (int i = 0; i < colCount; i++) ...[
+              SizedBox(
+                width: widths[i],
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: _maybeWrapWithTooltip(cells[i].child),
+                ),
+              ),
+              if (i < colCount - 1)
+                _ColumnResizeHandle(
+                  height: _rowH,
+                  onDrag: (delta) => _onResizeColumn(i, delta),
+                ),
+            ],
+          ],
+        ),
+      );
     }
 
-    // ------ Tableau central ------
-    final centerTable = DataTableTheme(
-      data: const DataTableThemeData(
-        headingRowHeight: _headH,
-        dataRowMinHeight: _rowH,
-        dataRowMaxHeight: _rowH,
-      ),
-      child: DataTable(
-        showCheckboxColumn: false,
-        sortColumnIndex: _sortColumnIndex,
-        sortAscending: _sortAscending,
-        columns: columns,
-        rows: lines.map((r) {
-          final selected = widget.groupMode
-              ? widget.selection.contains(widget.lineKey(r))
-              : false;
-          return widget.mode == InventoryTableMode.vault
-              ? _vaultRow(context, r, selected: selected)
-              : _fullRow(context, r, selected: selected);
-        }).toList(),
+    // Tableau central : scroll horizontal + sélection de texte
+    final centerTable = SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: SizedBox(
+        width: tableWidth,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            buildHeaderRow(),
+            for (final row in dataRows) buildDataRowWidget(row),
+          ],
+        ),
       ),
     );
 
@@ -844,18 +1026,17 @@ class _InventoryTableByStatusState extends State<InventoryTableByStatus> {
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(14),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            fixedLeft, // ✅ / ✏️
-            Expanded(
-              child: SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
-                child: centerTable, // ⇦ scroll groupé
+        child: SelectionArea(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              fixedLeft, // ✅ / ✏️
+              Expanded(
+                child: centerTable, // ⇦ scroll + colonnes redimensionnables
               ),
-            ),
-            fixedRight, // ❌
-          ],
+              fixedRight, // ❌
+            ],
+          ),
         ),
       ),
     );
@@ -941,9 +1122,21 @@ class _EditableTextCellState extends State<_EditableTextCell> {
     if (!_editing) {
       final display = (_c.text.isEmpty ? (widget.placeholder ?? '—') : _c.text);
       return GestureDetector(
+        behavior: HitTestBehavior.opaque,
         onDoubleTap: _startEdit,
         onLongPress: _startEdit,
-        child: Text(display),
+        child: Tooltip(
+          message: display,
+          waitDuration: const Duration(milliseconds: 400),
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: Text(
+              display,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ),
       );
     }
 
@@ -1218,6 +1411,86 @@ class _EditableStatusCellState extends State<_EditableStatusCell> {
                   ],
                 ),
         ],
+      ),
+    );
+  }
+}
+
+/* ============== Header + handle de resize ============== */
+
+class _HeaderCell extends StatelessWidget {
+  const _HeaderCell({
+    required this.title,
+    required this.isSorted,
+    required this.ascending,
+    required this.onTap,
+  });
+
+  final String title;
+  final bool isSorted;
+  final bool ascending;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final style = Theme.of(context).textTheme.labelLarge;
+
+    return InkWell(
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            Expanded(
+              child: Text(
+                title,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: style?.copyWith(fontWeight: FontWeight.w600),
+              ),
+            ),
+            if (isSorted)
+              Icon(
+                ascending ? Icons.arrow_upward : Icons.arrow_downward,
+                size: 16,
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ColumnResizeHandle extends StatelessWidget {
+  const _ColumnResizeHandle({
+    required this.height,
+    required this.onDrag,
+  });
+
+  final double height;
+  final ValueChanged<double> onDrag;
+
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      cursor: SystemMouseCursors.resizeColumn,
+      child: GestureDetector(
+        behavior: HitTestBehavior.translucent,
+        onHorizontalDragUpdate: (details) {
+          onDrag(details.delta.dx);
+        },
+        child: SizedBox(
+          width: _kColumnDividerWidth,
+          height: height,
+          child: Center(
+            child: Container(
+              width: 3,
+              height: height,
+              //color: Theme.of(context).dividerColor.withOpacity(0.6),
+            ),
+          ),
+        ),
       ),
     );
   }

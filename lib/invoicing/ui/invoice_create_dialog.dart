@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 class InvoiceFormResult {
   final String sellerName;
@@ -32,7 +33,12 @@ class InvoiceFormResult {
 
 class InvoiceCreateDialog extends StatefulWidget {
   final String defaultCurrency;
+
+  /// Nom de la société (ex: valeur de item.buyer_company ou organization.name).
+  /// On va l’utiliser pour faire un SELECT sur `society.name`.
   final String? defaultSellerName;
+
+  /// Nom par défaut du client final (buyer_infos).
   final String? defaultBuyerName;
 
   const InvoiceCreateDialog({
@@ -81,12 +87,20 @@ class _InvoiceCreateDialogState extends State<InvoiceCreateDialog> {
   );
   final _notesCtrl = TextEditingController();
 
+  /// Case "TVA 5 % (Dubai)" – coche/décoche en mettant 5 ou 0 dans le champ.
+  bool _vat5Checked = false;
+
+  bool _loadingSociety = false;
+
   @override
   void initState() {
     super.initState();
     _sellerNameCtrl =
         TextEditingController(text: widget.defaultSellerName ?? '');
     _buyerNameCtrl = TextEditingController(text: widget.defaultBuyerName ?? '');
+
+    // Pré-remplissage auto depuis `society` si possible
+    _loadSocietyDefaultsIfAny();
   }
 
   @override
@@ -103,6 +117,72 @@ class _InvoiceCreateDialogState extends State<InvoiceCreateDialog> {
     _paymentTermsCtrl.dispose();
     _notesCtrl.dispose();
     super.dispose();
+  }
+
+  /// Essaie de charger la société correspondant à defaultSellerName
+  /// à partir de la table `society` :
+  ///  - match sur society.name (unique)
+  ///  - active = true
+  /// Et pré-remplit :
+  ///  - sellerName     ← full_name (si présent) sinon on laisse tel quel
+  ///  - sellerAddress  ← address
+  ///  - sellerCountry  ← country_city
+  ///  - sellerVat      ← tax_number
+  Future<void> _loadSocietyDefaultsIfAny() async {
+    final rawName = widget.defaultSellerName?.trim();
+    if (rawName == null || rawName.isEmpty) return;
+
+    setState(() {
+      _loadingSociety = true;
+    });
+
+    try {
+      final client = Supabase.instance.client;
+
+      // Lien logique : item.buyer_company == society.name
+      final row = await client
+          .from('society')
+          .select('full_name, address, tax_number, country_city')
+          .eq('name', rawName)
+          .eq('active', true)
+          .maybeSingle();
+
+      if (row == null || !mounted) {
+        setState(() => _loadingSociety = false);
+        return;
+      }
+
+      final fullName = (row['full_name'] ?? '').toString().trim();
+      final address = (row['address'] ?? '').toString().trim();
+      final countryCity = (row['country_city'] ?? '').toString().trim();
+      final taxNumber = (row['tax_number'] ?? '').toString().trim();
+
+      if (fullName.isNotEmpty) {
+        _sellerNameCtrl.text = fullName;
+      }
+      if (address.isNotEmpty) {
+        _sellerAddressCtrl.text = address;
+      }
+      if (countryCity.isNotEmpty) {
+        _sellerCountryCtrl.text = countryCity;
+      }
+      if (taxNumber.isNotEmpty) {
+        _sellerVatCtrl.text = taxNumber;
+      }
+    } catch (_) {
+      // best-effort : si ça plante, l’utilisateur remplira à la main.
+    } finally {
+      if (mounted) {
+        setState(() => _loadingSociety = false);
+      }
+    }
+  }
+
+  void _toggleVat5(bool? value) {
+    setState(() {
+      _vat5Checked = value ?? false;
+      _taxCtrl.text = _vat5Checked ? '5' : '0';
+    });
   }
 
   void _submit() {
@@ -137,7 +217,7 @@ class _InvoiceCreateDialogState extends State<InvoiceCreateDialog> {
       paymentTerms: _paymentTermsCtrl.text.trim().isEmpty
           ? 'Payment due within 7 days by bank transfer.'
           : _paymentTermsCtrl.text.trim(),
-      notes: _notesCtrl.text.trim().isEmpty ? null : _notesCtrl.text.trim(),
+      notes: _notesCtrl.text.trim().isNotEmpty ? _notesCtrl.text.trim() : null,
     );
 
     Navigator.of(context).pop(result);
@@ -156,12 +236,24 @@ class _InvoiceCreateDialogState extends State<InvoiceCreateDialog> {
               // SELLER
               Align(
                 alignment: Alignment.centerLeft,
-                child: Text(
-                  'Seller',
-                  style: Theme.of(context)
-                      .textTheme
-                      .titleSmall
-                      ?.copyWith(fontWeight: FontWeight.bold),
+                child: Row(
+                  children: [
+                    Text(
+                      'Seller',
+                      style: Theme.of(context)
+                          .textTheme
+                          .titleSmall
+                          ?.copyWith(fontWeight: FontWeight.bold),
+                    ),
+                    if (_loadingSociety) ...[
+                      const SizedBox(width: 8),
+                      const SizedBox(
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                    ],
+                  ],
                 ),
               ),
               const SizedBox(height: 4),
@@ -208,7 +300,7 @@ class _InvoiceCreateDialogState extends State<InvoiceCreateDialog> {
               TextFormField(
                 controller: _buyerNameCtrl,
                 decoration: const InputDecoration(
-                  labelText: 'Buyer name',
+                  labelText: 'Buyer name (end customer)',
                 ),
               ),
               TextFormField(
@@ -231,7 +323,19 @@ class _InvoiceCreateDialogState extends State<InvoiceCreateDialog> {
               ),
               const SizedBox(height: 12),
 
-              // OTHER
+              // TVA TOGGLE + TAX / CURRENCY
+              Align(
+                alignment: Alignment.centerLeft,
+                child: CheckboxListTile(
+                  contentPadding: EdgeInsets.zero,
+                  dense: true,
+                  value: _vat5Checked,
+                  onChanged: _toggleVat5,
+                  title: const Text('Apply VAT 5 % (Dubai)'),
+                  controlAffinity: ListTileControlAffinity.leading,
+                ),
+              ),
+              const SizedBox(height: 4),
               Row(
                 children: [
                   Expanded(

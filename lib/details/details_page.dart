@@ -585,6 +585,9 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
   }
 
   /// Charge toutes les invoices (sale + purchase) liées aux items donnés.
+  ///
+  /// - Purchase: via invoice.related_item_id
+  /// - Sales (single & multi-items): via invoice_line.item_id
   Future<List<Map<String, dynamic>>> _fetchRelatedInvoices(
     String orgId,
     List<Map<String, dynamic>> items,
@@ -594,7 +597,10 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
         items.map((e) => (e['id'] as num?)?.toInt()).whereType<int>().toList();
     if (itemIds.isEmpty) return [];
 
-    final rows = await _sb
+    final List<Map<String, dynamic>> result = [];
+
+    // 1) Invoices liées directement à un item (PURCHASE + anciennes SALES 1-item)
+    final directRows = await _sb
         .from('invoice')
         .select(
           'id, invoice_type, status, invoice_number, document_url, related_item_id',
@@ -602,9 +608,43 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
         .eq('org_id', orgId)
         .inFilter('related_item_id', itemIds);
 
-    return List<Map<String, dynamic>>.from(
-      (rows as List).map((e) => Map<String, dynamic>.from(e as Map)),
-    );
+    for (final r in (directRows as List)) {
+      result.add(Map<String, dynamic>.from(r as Map));
+    }
+
+    // 2) Invoices liées via invoice_line (SALES multi-items ou même single)
+    final lineRows = await _sb
+        .from('invoice_line')
+        .select(
+          'item_id, invoice:invoice(id, invoice_type, status, invoice_number, document_url, related_item_id)',
+        )
+        .inFilter('item_id', itemIds);
+
+    final Map<int, Map<String, dynamic>> byInvoiceId = {
+      for (final r in result)
+        if (r['id'] != null) (r['id'] as int): r,
+    };
+
+    for (final r in (lineRows as List)) {
+      final map = Map<String, dynamic>.from(r as Map);
+      final inv = map['invoice'] as Map<String, dynamic>?;
+      if (inv == null) continue;
+
+      final int invId = (inv['id'] as num).toInt();
+      if (byInvoiceId.containsKey(invId)) {
+        continue; // déjà ajouté depuis les directRows
+      }
+
+      final merged = <String, dynamic>{
+        ...inv,
+        // on garde l'item_id pour info si besoin plus tard
+        'related_item_id': inv['related_item_id'],
+        'line_item_id': map['item_id'],
+      };
+      byInvoiceId[invId] = merged;
+    }
+
+    return byInvoiceId.values.toList();
   }
 
   Map<String, dynamic>? _firstInvoiceOfType(String type) {
@@ -792,7 +832,6 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
   String _buildItemAppDeepLink(String token) => 'inventorix://i/$token';
 
   // ===================== INVOICING ACTIONS =====================
-
   Future<void> _onCreateInvoiceForGroup() async {
     final orgId = _orgIdFromContext;
     if (orgId == null) {
@@ -816,7 +855,11 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
     final currency =
         (firstItem['currency'] ?? _viewRow?['currency'] ?? 'USD').toString();
 
-    // Try to get org name for seller default
+    // 1) On lit buyer_company de l’item (notre société interne)
+    final rawBuyerCompany =
+        (firstItem['buyer_company'] ?? '').toString().trim();
+
+    // 2) On lit l’org name comme fallback éventuel
     String? orgName;
     try {
       final orgRow = await _sb
@@ -824,19 +867,24 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
           .select('name')
           .eq('id', orgId)
           .maybeSingle();
-      orgName = orgRow?['name']?.toString();
+      orgName = orgRow?['name']?.toString().trim();
     } catch (_) {
-      // ignore, orgName stays null
+      // ignore
     }
 
-    final buyerNameDefault =
-        (firstItem['buyer_company'] ?? firstItem['buyer_infos'])?.toString();
+    // 3) Seller par défaut = buyer_company (society.name) si présent, sinon orgName
+    final sellerNameDefault =
+        rawBuyerCompany.isNotEmpty ? rawBuyerCompany : orgName;
 
-    // Show form dialog
+    // 4) Buyer (client final) = buyer_infos uniquement
+    final buyerInfos = (firstItem['buyer_infos'] ?? '').toString().trim();
+    final buyerNameDefault = buyerInfos.isNotEmpty ? buyerInfos : 'Customer';
+
+    // 5) On ouvre le formulaire avec ces valeurs
     final formResult = await InvoiceCreateDialog.show(
       context,
       currency: currency,
-      sellerName: orgName,
+      sellerName: sellerNameDefault,
       buyerName: buyerNameDefault,
     );
 
