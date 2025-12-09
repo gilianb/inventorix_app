@@ -31,6 +31,7 @@ import 'package:iconify_flutter/icons/mdi.dart';
 import 'package:inventorix_app/invoicing/invoiceActions.dart';
 import 'package:inventorix_app/invoicing/ui/invoice_create_dialog.dart';
 import 'package:inventorix_app/invoicing/ui/attach_purchase_invoice_dialog.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 
 const String kDefaultAssetPhoto = 'assets/images/default_card.png';
 
@@ -657,7 +658,7 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
   }
 
   Future<void> _openInvoiceDocument(String documentUrl) async {
-    // Si c'est déjà une URL HTTP -> on ouvre directement
+    // Si c'est déjà une URL HTTP -> on ouvre directement dans le navigateur
     if (documentUrl.startsWith('http://') ||
         documentUrl.startsWith('https://')) {
       final uri = Uri.tryParse(documentUrl);
@@ -670,9 +671,25 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
     // Sinon on considère que c'est un chemin Storage "invoices/..."
     final fullPath = documentUrl;
     final pathInBucket = fullPath.replaceFirst('invoices/', '');
+
     try {
-      final bytes = await _sb.storage.from('invoices').download(pathInBucket);
-      await Printing.layoutPdf(onLayout: (_) async => bytes);
+      if (kIsWeb) {
+        // 🌐 WEB : pas de plugin printing -> URL signée + nouvel onglet
+        final signedUrl = await _sb.storage
+            .from('invoices')
+            .createSignedUrl(pathInBucket, 60); // 60s
+
+        final uri = Uri.tryParse(signedUrl);
+        if (uri != null) {
+          await launchUrl(uri, mode: LaunchMode.externalApplication);
+        } else {
+          _snack('Invalid PDF URL');
+        }
+      } else {
+        // 📱/💻 Mobile & desktop : on garde Printing.layoutPdf
+        final bytes = await _sb.storage.from('invoices').download(pathInBucket);
+        await Printing.layoutPdf(onLayout: (_) async => bytes);
+      }
     } catch (e) {
       _snack('Error opening document: $e');
     }

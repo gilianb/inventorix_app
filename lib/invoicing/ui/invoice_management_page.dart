@@ -12,6 +12,8 @@ import '../models/invoiceFolder.dart';
 
 // Dialog de sélection des items pour créer une facture de vente
 import 'invoice_select_items_dialog.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:url_launcher/url_launcher.dart';
 
 /// Internal tree node used only in this page to build a hierarchical folder view.
 class _FolderNode {
@@ -336,7 +338,6 @@ class _InvoiceManagementPageState extends State<InvoiceManagementPage> {
   // ---------------------------------------------------------------------------
   // Invoice actions: view, move, attach/remove PDF, mark paid, delete
   // ---------------------------------------------------------------------------
-
   Future<void> _viewInvoicePdf(Invoice invoice) async {
     if (invoice.documentUrl == null) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -347,17 +348,35 @@ class _InvoiceManagementPageState extends State<InvoiceManagementPage> {
 
     final client = Supabase.instance.client;
 
-    // document_url stored as: 'invoices/<...path in bucket...>'
+    // document_url stocké comme: 'invoices/<...path in bucket...>'
     final fullPath = invoice.documentUrl!;
     final pathInBucket = fullPath.replaceFirst('invoices/', '');
 
     try {
-      final bytes =
-          await client.storage.from('invoices').download(pathInBucket);
+      if (kIsWeb) {
+        // 🌐 WEB : on génère une URL signée et on ouvre dans le navigateur
+        final signedUrl = await client.storage.from('invoices').createSignedUrl(
+              pathInBucket,
+              60, // URL valable 60 secondes
+            );
 
-      await Printing.layoutPdf(
-        onLayout: (_) async => bytes,
-      );
+        final uri = Uri.tryParse(signedUrl);
+        if (uri != null) {
+          await launchUrl(uri, mode: LaunchMode.externalApplication);
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Invalid PDF URL')),
+          );
+        }
+      } else {
+        // 📱/💻 Mobile & desktop : on garde le plugin printing
+        final bytes =
+            await client.storage.from('invoices').download(pathInBucket);
+
+        await Printing.layoutPdf(
+          onLayout: (_) async => bytes,
+        );
+      }
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Error while loading PDF: $e')),
