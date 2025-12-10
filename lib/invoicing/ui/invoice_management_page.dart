@@ -1,14 +1,16 @@
+// ignore_for_file: use_build_context_synchronously, deprecated_member_use
+
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:printing/printing.dart';
 import 'package:file_picker/file_picker.dart';
 
-import '../invoiceService.dart';
-import '../invoiceActions.dart';
+import '../invoice_service.dart';
+import '../invoice_actions.dart';
 import '../invoice_format.dart';
 import '../models/enums.dart';
 import '../models/invoice.dart';
-import '../models/invoiceFolder.dart';
+import '../models/invoice_folder.dart';
 
 // Dialog de sélection des items pour créer une facture de vente
 import 'invoice_select_items_dialog.dart';
@@ -914,7 +916,7 @@ class _InvoiceManagementPageState extends State<InvoiceManagementPage> {
           const SizedBox(height: 4),
           const Divider(),
           if (root != null)
-            ...root.children.map((node) => _buildFolderNodeTile(node)).toList(),
+            ...root.children.map((node) => _buildFolderNodeTile(node)),
         ],
       ),
     );
@@ -1041,14 +1043,12 @@ class _InvoiceManagementPageState extends State<InvoiceManagementPage> {
           onTap: () => _selectFolderByPrefix(node.path),
         ),
         // Children nodes
-        ...node.children
-            .map(
-              (child) => Padding(
-                padding: const EdgeInsets.only(left: 4),
-                child: _buildFolderNodeTile(child),
-              ),
-            )
-            .toList(),
+        ...node.children.map(
+          (child) => Padding(
+            padding: const EdgeInsets.only(left: 4),
+            child: _buildFolderNodeTile(child),
+          ),
+        ),
       ],
     );
   }
@@ -1076,7 +1076,7 @@ class _InvoiceManagementPageState extends State<InvoiceManagementPage> {
               onSelected: (_) => _selectFolderById(folder.id),
             ),
           );
-        }).toList(),
+        }),
       ],
     );
   }

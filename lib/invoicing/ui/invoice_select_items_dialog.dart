@@ -1,3 +1,5 @@
+// ignore_for_file: unused_local_variable, use_build_context_synchronously
+
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -274,12 +276,12 @@ class _InvoiceSelectItemsDialogState extends State<InvoiceSelectItemsDialog> {
         (first['currency'] ?? 'USD').toString().toUpperCase();
 
     // Buyer = client final (buyer_infos)
-    String _buyer(Map<String, dynamic> r) {
+    String buyer(Map<String, dynamic> r) {
       final bi = (r['buyer_infos'] as String?)?.trim();
       return (bi != null && bi.isNotEmpty) ? bi : 'Customer';
     }
 
-    final firstBuyer = _buyer(first);
+    final firstBuyer = buyer(first);
 
     // Vérification cohérence currency + buyer_infos sur tous les rows
     for (final r in selectedRows) {
@@ -291,14 +293,14 @@ class _InvoiceSelectItemsDialogState extends State<InvoiceSelectItemsDialog> {
         });
         return;
       }
-      final b = _buyer(r);
-      if (b != firstBuyer) {
+      final b = buyer(r);
+      /*if (b != firstBuyer) {
         setState(() {
           _error =
               'All selected items must share the same buyer. Found "$firstBuyer" and "$b".';
         });
         return;
-      }
+      }*/
     }
 
     // IDs des items
@@ -311,15 +313,14 @@ class _InvoiceSelectItemsDialogState extends State<InvoiceSelectItemsDialog> {
     for (final r in selectedRows) {
       final bc = (r['buyer_company'] as String?)?.trim();
       if (bc != null && bc.isNotEmpty) {
-        if (internalCompany == null) {
-          internalCompany = bc;
-        } else if (internalCompany != bc) {
+        internalCompany ??= bc;
+        /*else if (internalCompany != bc) {
           setState(() {
             _error =
                 'All selected items must share the same internal company (buyer_company). Found "$internalCompany" and "$bc".';
           });
           return;
-        }
+        }*/
       }
     }
 
@@ -351,7 +352,8 @@ class _InvoiceSelectItemsDialogState extends State<InvoiceSelectItemsDialog> {
     final formResult = await InvoiceCreateDialog.show(
       context,
       currency: currency,
-      sellerName: sellerNameDefault,
+      //sellerName: sellerNameDefault,
+      sellerName: 'cardshouker',
       buyerName: firstBuyer,
     );
 

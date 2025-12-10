@@ -1,10 +1,12 @@
+// ignore_for_file: deprecated_member_use
+
 import 'dart:typed_data';
 
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 
 import 'models/invoice.dart';
-import 'models/invoiceLine.dart';
+import 'models/invoice_line.dart';
 import 'invoice_format.dart';
 
 class InvoicePdfBuilder {

@@ -8,13 +8,17 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'models/enums.dart';
 import 'models/invoice.dart';
-import 'models/invoiceFolder.dart';
-import 'models/invoiceLine.dart';
+import 'models/invoice_folder.dart';
+import 'models/invoice_line.dart';
+
+/// Petit helper d'arrondi à 2 décimales (type facture)
+double _round2(double v) => (v * 100).roundToDouble() / 100;
 
 /// Internal helper to group items into one invoice line with quantity xN.
+/// Ici `unitPrice` est **HT** (excl. tax).
 class _InvoiceLineGroupData {
   final String description;
-  final double unitPrice;
+  final double unitPrice; // HT
   final int itemIdRepresentative;
   int quantity;
 
@@ -22,6 +26,7 @@ class _InvoiceLineGroupData {
     required this.description,
     required this.unitPrice,
     required this.itemIdRepresentative,
+    // ignore: unused_element_parameter
     this.quantity = 0,
   });
 }
@@ -258,9 +263,35 @@ class InvoiceService {
     final productName =
         (itemRow['product'] as Map)['name']?.toString() ?? 'Item';
 
-    // Prefer sale_price if present, otherwise fall back to unit_cost
-    final unitBase = (itemRow['sale_price'] ?? itemRow['unit_cost'] ?? 0);
-    final unitPrice = (unitBase as num).toDouble();
+    // ---------- LOGIQUE PRIX / TVA ----------
+    // sale_price = TTC quand taxRate > 0
+    final num? salePriceRaw = itemRow['sale_price'] as num?;
+    final num? unitCostRaw = itemRow['unit_cost'] as num?;
+
+    double unitPriceIncl; // TTC
+    double unitPriceExcl; // HT
+
+    if (taxRate > 0 && salePriceRaw != null) {
+      // sale_price est TTC -> on en déduit l'HT
+      unitPriceIncl = salePriceRaw.toDouble();
+      unitPriceExcl = _round2(unitPriceIncl / (1 + taxRate / 100.0));
+    } else {
+      // Pas de TVA ou pas de sale_price -> on considère la base comme HT
+      final base = (salePriceRaw ?? unitCostRaw ?? 0) as num;
+      unitPriceExcl = _round2(base.toDouble());
+      unitPriceIncl = (taxRate > 0)
+          ? _round2(unitPriceExcl * (1 + taxRate / 100.0))
+          : unitPriceExcl;
+    }
+
+    // Totaux pour 1 item
+    final double totalExcl = unitPriceExcl;
+    final double totalIncl =
+        (taxRate > 0 && salePriceRaw != null) // cas "TTC en entrée"
+            ? unitPriceIncl
+            : _round2(unitPriceExcl * (1 + taxRate / 100.0));
+    final double totalTax = _round2(totalIncl - totalExcl);
+    // ---------- FIN LOGIQUE PRIX / TVA ----------
 
     // Default buyer name from item: use buyer_infos ONLY (end customer)
     final itemBuyerInfos =
@@ -274,11 +305,6 @@ class InvoiceService {
         (buyerNameOverride != null && buyerNameOverride.trim().isNotEmpty)
             ? buyerNameOverride.trim()
             : computedBuyerName;
-
-    // 2. Compute totals (assuming unitPrice is tax-exclusive)
-    final totalExcl = unitPrice;
-    final totalTax = totalExcl * taxRate / 100;
-    final totalIncl = totalExcl + totalTax;
 
     // 3. Build invoice object
     final invoice = Invoice(
@@ -336,7 +362,7 @@ class InvoiceService {
       itemId: itemId,
       description: productName,
       quantity: 1,
-      unitPrice: unitPrice,
+      unitPrice: unitPriceExcl, // HT sur la ligne
       discount: 0,
       taxRate: taxRate,
       totalExclTax: totalExcl,
@@ -358,7 +384,8 @@ class InvoiceService {
   ///
   /// - All items must share the same currency.
   /// - Buyer = end customer from `buyer_infos` (NOT buyer_company).
-  /// - Lines are **grouped**: same product name & unit price => one line with quantity xN.
+  /// - Lines are **grouped**: same product name & same unit TTC price
+  ///   => one line with quantity xN.
   Future<Invoice> createInvoiceForItems({
     required String orgId,
     required List<int> itemIds,
@@ -411,7 +438,7 @@ class InvoiceService {
         )
         .toList();
 
-    String _computeBuyerName(Map<String, dynamic> r) {
+    String computeBuyerName(Map<String, dynamic> r) {
       final itemBuyerInfos = (r['buyer_infos'] as String?)?.trim();
       return (itemBuyerInfos != null && itemBuyerInfos.isNotEmpty)
           ? itemBuyerInfos
@@ -419,7 +446,7 @@ class InvoiceService {
     }
 
     final firstItem = items.first;
-    final defaultBuyerName = _computeBuyerName(firstItem);
+    final defaultBuyerName = computeBuyerName(firstItem);
 
     final buyerName =
         (buyerNameOverride != null && buyerNameOverride.trim().isNotEmpty)
@@ -489,7 +516,7 @@ class InvoiceService {
 
     final createdInvoice = await createInvoice(invoice);
 
-    // 3. Group items (same product + same unit price) and create lines
+    // 3. Group items (same product + même PRIX TTC) et créer les lignes
     final Map<String, _InvoiceLineGroupData> grouped = {};
 
     for (final r in items) {
@@ -503,17 +530,34 @@ class InvoiceService {
         productName = 'Item';
       }
 
-      final unitBase = (r['sale_price'] ?? r['unit_cost'] ?? 0) as num;
-      final double unitPrice = unitBase.toDouble();
+      // ---------- LOGIQUE PRIX / TVA PAR ITEM ----------
+      final num? salePriceRaw = r['sale_price'] as num?;
+      final num? unitCostRaw = r['unit_cost'] as num?;
 
-      final key = '$productName|$unitPrice';
+      double unitPriceIncl; // TTC
+      double unitPriceExcl; // HT
+
+      if (taxRate > 0 && salePriceRaw != null) {
+        unitPriceIncl = salePriceRaw.toDouble();
+        unitPriceExcl = _round2(unitPriceIncl / (1 + taxRate / 100.0));
+      } else {
+        final base = (salePriceRaw ?? unitCostRaw ?? 0) as num;
+        unitPriceExcl = _round2(base.toDouble());
+        unitPriceIncl = (taxRate > 0)
+            ? _round2(unitPriceExcl * (1 + taxRate / 100.0))
+            : unitPriceExcl;
+      }
+      // ---------- FIN LOGIQUE PRIX / TVA ----------
+
+      // Clé de regroupement = produit + PRIX TTC (ce que tu vois en sale_price)
+      final key = '$productName|$unitPriceIncl';
 
       grouped
           .putIfAbsent(
             key,
             () => _InvoiceLineGroupData(
               description: productName,
-              unitPrice: unitPrice,
+              unitPrice: unitPriceExcl, // on stocke l'HT dans le groupe
               itemIdRepresentative: itemId,
             ),
           )
@@ -527,11 +571,12 @@ class InvoiceService {
     int lineOrder = 0;
     for (final g in grouped.values) {
       final int quantity = g.quantity;
-      final double unitPrice = g.unitPrice;
+      final double unitPriceExcl = g.unitPrice;
 
-      final double lineExcl = unitPrice * quantity;
-      final double lineTax = lineExcl * taxRate / 100;
-      final double lineIncl = lineExcl + lineTax;
+      final double lineExcl = _round2(unitPriceExcl * quantity);
+      final double lineIncl =
+          (taxRate > 0) ? _round2(lineExcl * (1 + taxRate / 100.0)) : lineExcl;
+      final double lineTax = _round2(lineIncl - lineExcl);
 
       totalExcl += lineExcl;
       totalTax += lineTax;
@@ -543,7 +588,7 @@ class InvoiceService {
         itemId: g.itemIdRepresentative, // un item représentatif du groupe
         description: g.description,
         quantity: quantity,
-        unitPrice: unitPrice,
+        unitPrice: unitPriceExcl, // HT sur la ligne
         discount: 0,
         taxRate: taxRate,
         totalExclTax: lineExcl,

@@ -1484,7 +1484,7 @@ class _ColumnResizeHandle extends StatelessWidget {
           width: _kColumnDividerWidth,
           height: height,
           child: Center(
-            child: Container(
+            child: SizedBox(
               width: 3,
               height: height,
               //color: Theme.of(context).dividerColor.withOpacity(0.6),

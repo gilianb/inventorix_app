@@ -28,7 +28,7 @@ import 'package:iconify_flutter/iconify_flutter.dart';
 import 'package:iconify_flutter/icons/mdi.dart';
 
 // invoicing
-import 'package:inventorix_app/invoicing/invoiceActions.dart';
+import 'package:inventorix_app/invoicing/invoice_actions.dart';
 import 'package:inventorix_app/invoicing/ui/invoice_create_dialog.dart';
 import 'package:inventorix_app/invoicing/ui/attach_purchase_invoice_dialog.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
@@ -861,22 +861,44 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
       return;
     }
 
-    final firstItem = _items.first;
-    final int? itemId = (firstItem['id'] as num?)?.toInt();
+    // 1) On prend d’abord les items filtrés par status (vue actuelle)
+    List<Map<String, dynamic>> candidates = _filteredItems();
+    if (candidates.isEmpty) {
+      // fallback : tous les items du groupe
+      candidates = List<Map<String, dynamic>>.from(_items);
+    }
 
-    if (itemId == null) {
-      _snack('Invalid item id.');
+    // 2) On ne garde que ceux qui ont un sale_price (donc vendus)
+    candidates = candidates
+        .where((e) => e['sale_price'] != null)
+        .toList(growable: false);
+
+    if (candidates.isEmpty) {
+      _snack('No sold items (with sale_price) in this group.');
       return;
     }
+
+    // On utilisera tous ces ids pour la facture
+    final itemIds = candidates
+        .map((e) => (e['id'] as num?)?.toInt())
+        .whereType<int>()
+        .toList(growable: false);
+
+    if (itemIds.isEmpty) {
+      _snack('No valid items to invoice.');
+      return;
+    }
+
+    final firstItem = candidates.first;
 
     final currency =
         (firstItem['currency'] ?? _viewRow?['currency'] ?? 'USD').toString();
 
-    // 1) On lit buyer_company de l’item (notre société interne)
+    // Société interne (CardShouker / Mister8 / YK...)
     final rawBuyerCompany =
         (firstItem['buyer_company'] ?? '').toString().trim();
 
-    // 2) On lit l’org name comme fallback éventuel
+    // Nom d’org comme fallback éventuel pour le vendeur
     String? orgName;
     try {
       final orgRow = await _sb
@@ -889,19 +911,22 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
       // ignore
     }
 
-    // 3) Seller par défaut = buyer_company (society.name) si présent, sinon orgName
+    // Seller par défaut = buyer_company (society.name) si présent, sinon orgName
     final sellerNameDefault =
         rawBuyerCompany.isNotEmpty ? rawBuyerCompany : orgName;
 
-    // 4) Buyer (client final) = buyer_infos uniquement
+    // Buyer (client final) = buyer_infos uniquement
     final buyerInfos = (firstItem['buyer_infos'] ?? '').toString().trim();
     final buyerNameDefault = buyerInfos.isNotEmpty ? buyerInfos : 'Customer';
 
-    // 5) On ouvre le formulaire avec ces valeurs
+    // Formulaire facture (nom vendeur / client / TVA / etc.)
     final formResult = await InvoiceCreateDialog.show(
+      // ignore: use_build_context_synchronously
       context,
       currency: currency,
-      sellerName: sellerNameDefault,
+      //sellerName: sellerNameDefault,
+      sellerName: 'cardshouker',
+
       buyerName: buyerNameDefault,
     );
 
@@ -912,25 +937,35 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
     try {
       final actions = InvoiceActions(_sb);
 
-      final invoice = await actions.createBillForItemAndGeneratePdf(
+      // On utilise le helper MULTI-ITEMS
+      final invoice = await actions.createBillForItemsAndGeneratePdf(
         orgId: orgId,
-        itemId: itemId,
+        itemIds: itemIds,
         currency: currency,
         taxRate: formResult.taxRate,
+        dueDate: null,
+        // Seller
         sellerName: formResult.sellerName,
         sellerAddress: formResult.sellerAddress,
         sellerCountry: formResult.sellerCountry,
         sellerVatNumber: formResult.sellerVatNumber,
+        sellerTaxRegistration: null,
+        sellerRegistrationNumber: null,
+        // Buyer (end customer)
         buyerName: formResult.buyerName,
         buyerAddress: formResult.buyerAddress,
         buyerCountry: formResult.buyerCountry,
+        buyerVatNumber: null,
+        buyerTaxRegistration: null,
         buyerEmail: formResult.buyerEmail,
+        buyerPhone: null,
+        // Other
         paymentTerms: formResult.paymentTerms,
         notes: formResult.notes,
       );
 
       _snack('Invoice ${invoice.invoiceNumber} created.');
-      await _loadAll(); // refresh to update document_url etc.
+      await _loadAll(); // refresh pour voir le document_url etc.
     } catch (e) {
       _snack('Error while creating invoice: $e');
     }

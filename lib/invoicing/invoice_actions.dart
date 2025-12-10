@@ -1,13 +1,15 @@
 // lib/invoicing/invoiceActions.dart
 
+// ignore_for_file: unintended_html_in_doc_comment
+
 import 'dart:typed_data';
 
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-import 'invoiceService.dart';
+import 'invoice_service.dart';
 import 'invoice_pdf_builder.dart';
 import 'models/invoice.dart';
-import 'models/invoiceLine.dart';
+import 'models/invoice_line.dart';
 
 class InvoiceActions {
   final SupabaseClient client;
@@ -37,6 +39,8 @@ class InvoiceActions {
   /// 3. Generate PDF
   /// 4. Upload to Supabase Storage
   /// 5. Link invoice + item.document_url
+  // ignore: duplicate_ignore
+  // ignore: unintended_html_in_doc_comment
   /// 6. Auto-assign folder: "<Seller>/sells/<Buyer>"
   Future<Invoice> createBillForItemAndGeneratePdf({
     required String orgId,
