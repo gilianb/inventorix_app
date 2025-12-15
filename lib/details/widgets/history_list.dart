@@ -86,6 +86,7 @@ class HistoryList extends StatelessWidget {
     // item fields
     'status': 'Status',
     'sale_price': 'Sale price',
+    'sale_currency': 'Sale currency',
     'sale_date': 'Sale date',
     'estimated_price': 'Estimated price',
     'tracking': 'Tracking',

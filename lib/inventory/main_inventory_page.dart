@@ -11,6 +11,9 @@ import '../../inventory/utils/status_utils.dart';
 import '../../inventory/widgets/edit.dart';
 import '../../inventory/widgets/finance_overview.dart';
 
+// ✅ FX constants (sale_price multi-devise -> USD)
+import '../../inventory/utils/fx_to_usd.dart';
+
 import 'package:inventorix_app/new_stock/new_stock_page.dart';
 import 'package:inventorix_app/details/details_page.dart';
 import 'package:inventorix_app/vault/vault_page.dart';
@@ -394,6 +397,8 @@ class _MainInventoryPageState extends State<MainInventoryPage>
       'grading_note',
       'sale_date',
       'sale_price',
+      // ✅ MULTI-DEVISE (sale_price)
+      'sale_currency',
       'tracking',
       'photo_url',
       'document_url',
@@ -496,8 +501,6 @@ class _MainInventoryPageState extends State<MainInventoryPage>
       query = query.lte('estimated_price', maxPrice);
     }
 
-    // 👇 ici on n’assigne PLUS le résultat de .order() à query,
-    // on l’utilise juste pour la requête finale
     final List<dynamic> raw =
         await query.order(orderColumn, ascending: false).limit(500);
 
@@ -552,6 +555,8 @@ class _MainInventoryPageState extends State<MainInventoryPage>
       if (canSeeCosts) 'grading_fees',
       'estimated_price',
       if (_perm.canSeeRevenue) 'sale_price',
+      // ✅ MULTI-DEVISE (sale_price)
+      if (_perm.canSeeRevenue) 'sale_currency',
       'game_id',
       'org_id',
       'type',
@@ -946,6 +951,10 @@ class _MainInventoryPageState extends State<MainInventoryPage>
                   currency: lines.isNotEmpty
                       ? (lines.first['currency']?.toString() ?? 'USD')
                       : 'USD',
+
+                  // ✅ FX constants injectées (sale_price multi-devise -> USD)
+                  baseCurrency: 'USD',
+                  fxToUsd: kFxToUsd,
 
                   // 👇 Mode Finalized + override investi (total sécurisé côté serveur)
                   finalizedMode: isFinalizedView,
@@ -1354,10 +1363,6 @@ class _MainInventoryPageState extends State<MainInventoryPage>
         // ✅ Cas normal: on a trouvé les items avec le group_sig courant
         return ids;
       }
-
-      // ⚠️ Si on arrive ici : soit le group_sig a changé après l'update status,
-      // soit la vue a recombiné les lignes. On va retomber sur le fallback
-      // "legacy" plus large pour ne pas obliger à refresh la page.
     }
 
     // 2️⃣ Fallback : ancienne logique (sans dépendre de group_sig)
@@ -1389,6 +1394,8 @@ class _MainInventoryPageState extends State<MainInventoryPage>
       'grading_fees',
       'sale_date',
       'sale_price',
+      // ✅ MULTI-DEVISE (sale_price)
+      'sale_currency',
       'tracking',
       'estimated_price',
       'item_location',
@@ -1425,7 +1432,6 @@ class _MainInventoryPageState extends State<MainInventoryPage>
         }
       }
 
-      // IMPORTANT : on utilise le statut "courant" de la ligne
       q = q.eq('status', status);
 
       final List<dynamic> raw =
@@ -1510,7 +1516,6 @@ class _MainInventoryPageState extends State<MainInventoryPage>
 
   // 👇 helper: trouve l'index du groupe correspondant à la "ligne"
   int? _findGroupIndexForLine(Map<String, dynamic> line) {
-    // 1️⃣ D’abord : on essaie de matcher par org_id + group_sig (clé logique du groupe)
     final String? lineGroupSig = line['group_sig']?.toString();
     if (lineGroupSig != null && lineGroupSig.isNotEmpty) {
       for (int i = 0; i < _groups.length; i++) {
@@ -1523,7 +1528,6 @@ class _MainInventoryPageState extends State<MainInventoryPage>
       }
     }
 
-    // 2️⃣ Fallback "ancienne logique" au cas où (par sécurité)
     bool same(dynamic a, dynamic b) => (a ?? '') == (b ?? '');
     for (int i = 0; i < _groups.length; i++) {
       final g = _groups[i];
@@ -1553,20 +1557,30 @@ class _MainInventoryPageState extends State<MainInventoryPage>
         parsed = (newValue ?? '').toString();
         if (parsed.isEmpty) return;
         break;
+
       case 'estimated_price':
       case 'sale_price':
       case 'unit_cost':
         final t = (newValue ?? '').toString().trim();
         parsed = t.isEmpty ? null : num.tryParse(t);
         break;
+
+      // ✅ MULTI-DEVISE (sale_price)
+      case 'sale_currency':
+        final t = (newValue ?? '').toString().trim();
+        parsed = t.isEmpty ? null : t;
+        break;
+
       case 'channel_id':
         final t = (newValue ?? '').toString().trim();
         parsed = t.isEmpty ? null : int.tryParse(t);
         break;
+
       case 'sale_date':
         final t = (newValue ?? '').toString().trim();
         parsed = t.isEmpty ? null : t; // YYYY-MM-DD
         break;
+
       default:
         final t = (newValue ?? '').toString().trim();
         parsed = t.isEmpty ? null : t;

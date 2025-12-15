@@ -405,6 +405,7 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
           'grading_fees',
           'sale_date',
           'sale_price',
+          'sale_currency', // ✅ NEW: devise liée à sale_price
           'tracking',
           'photo_url',
           'document_url',
@@ -638,7 +639,6 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
 
       final merged = <String, dynamic>{
         ...inv,
-        // on garde l'item_id pour info si besoin plus tard
         'related_item_id': inv['related_item_id'],
         'line_item_id': map['item_id'],
       };
@@ -658,7 +658,6 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
   }
 
   Future<void> _openInvoiceDocument(String documentUrl) async {
-    // Si c'est déjà une URL HTTP -> on ouvre directement dans le navigateur
     if (documentUrl.startsWith('http://') ||
         documentUrl.startsWith('https://')) {
       final uri = Uri.tryParse(documentUrl);
@@ -668,16 +667,14 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
       }
     }
 
-    // Sinon on considère que c'est un chemin Storage "invoices/..."
     final fullPath = documentUrl;
     final pathInBucket = fullPath.replaceFirst('invoices/', '');
 
     try {
       if (kIsWeb) {
-        // 🌐 WEB : pas de plugin printing -> URL signée + nouvel onglet
         final signedUrl = await _sb.storage
             .from('invoices')
-            .createSignedUrl(pathInBucket, 60); // 60s
+            .createSignedUrl(pathInBucket, 60);
 
         final uri = Uri.tryParse(signedUrl);
         if (uri != null) {
@@ -686,7 +683,6 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
           _snack('Invalid PDF URL');
         }
       } else {
-        // 📱/💻 Mobile & desktop : on garde Printing.layoutPdf
         final bytes = await _sb.storage.from('invoices').download(pathInBucket);
         await Printing.layoutPdf(onLayout: (_) async => bytes);
       }
@@ -695,7 +691,6 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
     }
   }
 
-  /// Construit la petite rangée de boutons "Sales invoice" / "Purchase invoice".
   Widget _buildInvoiceDocButtons(String uDocFallback) {
     final saleInv = _firstInvoiceOfType('sale');
     final purchaseInv = _firstInvoiceOfType('purchase');
@@ -756,11 +751,9 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
 
   Future<void> _onEditGroup() async {
-    // On conserve un id d’ancre (pour re-prober après edit)
     final anchorId =
         (_items.isNotEmpty ? (_items.first['id'] as num?)?.toInt() : null);
 
-    // Utiliser d'abord le filtre courant
     final curStatus = (_localStatusFilter ??
             (_items.isNotEmpty
                 ? (_items.first['status'] ?? '').toString()
@@ -792,7 +785,6 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
     if (changed == true) {
       _dirty = true;
 
-      // 🔎 Re-probe l’item d’ancre (post-edit)
       if (anchorId != null) {
         try {
           final p = await _sb
@@ -807,12 +799,9 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
             _ovStatus = (p['status'] ?? '').toString();
             _ovAnchorItemId = anchorId;
           }
-        } catch (_) {
-          // ignore
-        }
+        } catch (_) {}
       }
 
-      // petit délai pour laisser les vues / triggers se stabiliser
       await Future.delayed(const Duration(milliseconds: 160));
       await _loadAll();
     }
@@ -849,6 +838,7 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
   String _buildItemAppDeepLink(String token) => 'inventorix://i/$token';
 
   // ===================== INVOICING ACTIONS =====================
+
   Future<void> _onCreateInvoiceForGroup() async {
     final orgId = _orgIdFromContext;
     if (orgId == null) {
@@ -861,10 +851,24 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
       return;
     }
 
+    // Helper: sale currency (lié uniquement à sale_price)
+    String saleCurrencyOf(Map<String, dynamic> it) {
+      final raw = (it['sale_currency'] ??
+              it['sale_price_currency'] ??
+              it['sale_currency_code'])
+          ?.toString()
+          .trim();
+      if (raw != null && raw.isNotEmpty) return raw;
+
+      // fallback “historique”: si pas de sale_currency, on garde l’ancienne devise item
+      final cur =
+          (it['currency'] ?? _viewRow?['currency'] ?? 'USD').toString().trim();
+      return cur.isEmpty ? 'USD' : cur;
+    }
+
     // 1) On prend d’abord les items filtrés par status (vue actuelle)
     List<Map<String, dynamic>> candidates = _filteredItems();
     if (candidates.isEmpty) {
-      // fallback : tous les items du groupe
       candidates = List<Map<String, dynamic>>.from(_items);
     }
 
@@ -875,6 +879,31 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
 
     if (candidates.isEmpty) {
       _snack('No sold items (with sale_price) in this group.');
+      return;
+    }
+
+    // ✅ MULTI-DEVISE (lié à sale_price) :
+    // Une facture ne doit PAS mélanger plusieurs devises de vente.
+    final preferredSaleCurrency = saleCurrencyOf(candidates.first);
+
+    final saleCurrencySet = candidates.map((e) => saleCurrencyOf(e)).toSet();
+
+    if (saleCurrencySet.length > 1) {
+      final before = candidates.length;
+      candidates = candidates
+          .where((e) => saleCurrencyOf(e) == preferredSaleCurrency)
+          .toList(growable: false);
+
+      final skipped = before - candidates.length;
+      if (skipped > 0) {
+        _snack(
+          'Multiple sale currencies detected. Invoicing only $preferredSaleCurrency ($skipped item(s) skipped).',
+        );
+      }
+    }
+
+    if (candidates.isEmpty) {
+      _snack('No sold items to invoice in $preferredSaleCurrency.');
       return;
     }
 
@@ -891,14 +920,12 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
 
     final firstItem = candidates.first;
 
-    final currency =
-        (firstItem['currency'] ?? _viewRow?['currency'] ?? 'USD').toString();
+    // ✅ devise facture = devise de vente
+    final currency = saleCurrencyOf(firstItem);
 
-    // Société interne (CardShouker / Mister8 / YK...)
     final rawBuyerCompany =
         (firstItem['buyer_company'] ?? '').toString().trim();
 
-    // Nom d’org comme fallback éventuel pour le vendeur
     String? orgName;
     try {
       final orgRow = await _sb
@@ -907,41 +934,33 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
           .eq('id', orgId)
           .maybeSingle();
       orgName = orgRow?['name']?.toString().trim();
-    } catch (_) {
-      // ignore
-    }
+    } catch (_) {}
 
-    // Seller par défaut = buyer_company (society.name) si présent, sinon orgName
     final sellerNameDefault =
         rawBuyerCompany.isNotEmpty ? rawBuyerCompany : orgName;
 
-    // Buyer (client final) = buyer_infos uniquement
     final buyerInfos = (firstItem['buyer_infos'] ?? '').toString().trim();
     final buyerNameDefault = buyerInfos.isNotEmpty ? buyerInfos : 'Customer';
 
-    // Formulaire facture (nom vendeur / client / TVA / etc.)
     final formResult = await InvoiceCreateDialog.show(
-      // ignore: use_build_context_synchronously
       context,
       currency: currency,
       //sellerName: sellerNameDefault,
       sellerName: 'cardshouker',
-
       buyerName: buyerNameDefault,
     );
 
     if (formResult == null) {
-      return; // user cancelled
+      return;
     }
 
     try {
       final actions = InvoiceActions(_sb);
 
-      // On utilise le helper MULTI-ITEMS
       final invoice = await actions.createBillForItemsAndGeneratePdf(
         orgId: orgId,
         itemIds: itemIds,
-        currency: currency,
+        currency: currency, // ✅ sale currency
         taxRate: formResult.taxRate,
         dueDate: null,
         // Seller
@@ -951,7 +970,7 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
         sellerVatNumber: formResult.sellerVatNumber,
         sellerTaxRegistration: null,
         sellerRegistrationNumber: null,
-        // Buyer (end customer)
+        // Buyer
         buyerName: formResult.buyerName,
         buyerAddress: formResult.buyerAddress,
         buyerCountry: formResult.buyerCountry,
@@ -965,7 +984,7 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
       );
 
       _snack('Invoice ${invoice.invoiceNumber} created.');
-      await _loadAll(); // refresh pour voir le document_url etc.
+      await _loadAll();
     } catch (e) {
       _snack('Error while creating invoice: $e');
     }
@@ -991,13 +1010,13 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
       return;
     }
 
+    // ✅ purchase invoice reste basé sur la devise "item/coûts"
     final currency =
         (firstItem['currency'] ?? _viewRow?['currency'] ?? 'USD').toString();
 
     final defaultSupplier =
         (firstItem['supplier_name'] ?? _viewRow?['supplier_name'])?.toString();
 
-    // Open dialog to collect supplier + invoice number + file
     final formResult = await AttachPurchaseInvoiceDialog.show(
       context,
       currency: currency,
@@ -1005,7 +1024,7 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
     );
 
     if (formResult == null) {
-      return; // user cancelled
+      return;
     }
 
     try {
@@ -1048,7 +1067,6 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
             '')
         .toString();
 
-    // ---- items visibles (avec fallback local si vide) ----
     List<Map<String, dynamic>> sourceItems = _filteredItems();
     if (sourceItems.isEmpty && _items.isNotEmpty) {
       final fallback =
@@ -1059,7 +1077,6 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
 
     final visibleItems = _maskUnitInList(sourceItems);
 
-    // ---- marge header dérivée si besoin ----
     final soldMargins = visibleItems
         .map(_derivedMarginPct)
         .where((m) => m != null)
@@ -1096,7 +1113,6 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
         (_productExtras?['tcg_player_id'] as String?) ??
         (widget.group['tcg_player_id']?.toString());
 
-    // === Nouveau : URL/DeepLink à partir du token immuable ===
     final publicToken = _firstVisiblePublicToken();
     final String? publicUrl =
         (publicToken != null) ? _buildItemPublicUrl(publicToken) : null;
@@ -1154,7 +1170,6 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
                 historyCount: _movements.length,
                 showMargins: _isOwner,
               ),
-
               const SizedBox(height: 12),
               LayoutBuilder(
                 builder: (ctx, cons) {
@@ -1197,10 +1212,8 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
                                     : null,
                               ),
                               const SizedBox(height: 8),
-                              // Petits boutons SELL / PURCHASE
                               _buildInvoiceDocButtons(uDoc),
                               const SizedBox(height: 8),
-                              // Bouton QR sous la vignette (wide)
                               Align(
                                 alignment: Alignment.centerLeft,
                                 child: QrLineButton.inline(
@@ -1268,10 +1281,8 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
                               : null,
                         ),
                         const SizedBox(height: 8),
-                        // Petits boutons SELL / PURCHASE (mobile)
                         _buildInvoiceDocButtons(uDoc),
                         const SizedBox(height: 8),
-                        // Bouton QR (narrow)
                         Align(
                           alignment: Alignment.centerLeft,
                           child: QrLineButton.inline(
@@ -1315,8 +1326,6 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
                 },
               ),
               const SizedBox(height: 16),
-
-              // Items
               Row(
                 children: [
                   Text('Items',
@@ -1340,10 +1349,7 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
                   currency: currency,
                   showMargins: _isOwner,
                 ),
-
               const SizedBox(height: 16),
-
-              // Prix (simple)
               Row(
                 children: const [
                   Text('Price trends',
@@ -1376,8 +1382,6 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
                     (widget.group['tcg_player_id']?.toString()),
                 reloadTick: _trendsReloadTick,
               ),
-
-              // --- Graph d'historique Collectr (2 onglets) ---
               const SizedBox(height: 12),
               PriceHistoryTabs(
                 productId: (_viewRow?['product_id'] ??

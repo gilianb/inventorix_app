@@ -1,60 +1,57 @@
 // ignore_for_file: deprecated_member_use
 import 'package:flutter/material.dart';
 
+import '../utils/fx_to_usd.dart'; // ✅ <-- ajuste le chemin si besoin
+
 const kAccentA = Color(0xFF6C5CE7);
 const kAccentB = Color(0xFF00D1B2);
 const kAccentC = Color(0xFFFFB545);
 const kAccentG = Color(0xFF22C55E);
 
-/// Affiche 3 KPI financiers.
-/// Mode standard (par défaut) :
-///  - Investi + Estimé : uniquement pour les items NON vendus
-///  - Réalisé (Sold)   : uniquement pour les items vendus
-///
-/// Mode finalized (finalizedMode = true) :
-///  - Investi = Σ de tous les coûts (unit_cost + unit_fees + shipping_fees + commission_fees + grading_fees)
-///              ou bien la valeur fournie par [overrideInvested] si non nul,
-///  - KPI du milieu = Marge réelle = (Σ sale_price) - Investi
-///  - Réalisé = Σ sale_price
 class FinanceOverview extends StatelessWidget {
   const FinanceOverview({
     super.key,
     required this.items,
     required this.currency,
     this.finalizedMode = false,
-    this.overrideInvested, // 👈 total investi calculé côté serveur (RPC) pour Finalized
+    this.overrideInvested,
     this.titleInvested = 'Invested',
-    this.titleEstimated =
-        'Estimated value', // devient "Marge réelle" en finalized
+    this.titleEstimated = 'Estimated value',
     this.titleSold = 'Realized',
     this.subtitleInvested,
     this.subtitleEstimated,
     this.subtitleSold,
+
+    // ✅ Multi-devise sale_price -> USD
+    this.baseCurrency = 'USD',
+
+    /// Optionnel: permet de surcharger les constantes
+    this.fxToUsd,
   });
 
-  /// Items bruts (doivent contenir au moins en standard) :
-  /// unit_cost, unit_fees, shipping_fees, commission_fees, grading_fees,
-  /// estimated_price, sale_price (nullable)
-  ///
-  /// En finalizedMode avec overrideInvested, seuls sale_price sont réellement nécessaires.
   final List<Map<String, dynamic>> items;
+
+  /// Ancien param (fallback si l’item n’a pas de devise).
   final String currency;
 
-  /// Active le mode "finalized" (investi = tous coûts, KPI milieu = marge réelle).
   final bool finalizedMode;
-
-  /// Si présent (et finalizedMode = true), remplace le calcul local d’Investi.
-  /// Utile pour fournir un total exact calculé côté serveur (sécurisé) pour
-  /// les rôles qui n’ont pas accès aux coûts unitaires.
   final num? overrideInvested;
 
   final String titleInvested;
-  final String titleEstimated; // "Marge réelle" en finalized
+  final String titleEstimated;
   final String titleSold;
 
   final String? subtitleInvested;
   final String? subtitleEstimated;
   final String? subtitleSold;
+
+  /// Devise cible d’affichage / homogénéisation (par défaut USD).
+  final String baseCurrency;
+
+  /// Surcharge optionnelle (sinon on utilise kFxToUsd).
+  final Map<String, num>? fxToUsd;
+
+  Map<String, num> get _fx => fxToUsd ?? kFxToUsd; // ✅ fallback constants
 
   num _asNum(dynamic v) {
     if (v == null) return 0;
@@ -64,18 +61,80 @@ class FinanceOverview extends StatelessWidget {
 
   String _money(num n) => n.toDouble().toStringAsFixed(2);
 
-  /// Renvoie un record (invested, middle, sold)
-  /// - standard: middle = estimated (non vendus)
-  /// - finalized: middle = margin = sold - invested
-  (num invested, num middle, num sold) _compute() {
+  String _cur(dynamic v) =>
+      (v == null) ? '' : v.toString().trim().toUpperCase();
+
+  bool _isBase(String cur) =>
+      cur.trim().toUpperCase() == baseCurrency.toUpperCase();
+
+  /// Retourne le taux "1 unité de cur -> USD" si connu.
+  /// - baseCurrency => 1
+  /// - sinon => null si fx manquant/inconnu
+  num? _rateToBaseOrNull(String cur) {
+    final c = cur.trim().toUpperCase();
+    if (c.isEmpty) return null;
+    if (_isBase(c)) return 1;
+
+    final r = _fx[c];
+    if (r == null) return null;
+
+    final rr = _asNum(r);
+    return rr == 0 ? null : rr;
+  }
+
+  /// Convertit sale_price en baseCurrency (USD).
+  /// Retourne null si sale_currency != baseCurrency et pas de taux FX.
+  num? _saleToBaseOrNull(Map<String, dynamic> r) {
+    final sale = r['sale_price'];
+    if (sale == null) return 0;
+
+    final amount = _asNum(sale);
+
+    // ✅ Multi-devise sale_price: sale_currency > currency (legacy) > widget.currency
+    final saleCur = _cur(r['sale_currency']);
+    final legacyCur = _cur(r['currency']);
+    final usedCur = saleCur.isNotEmpty
+        ? saleCur
+        : (legacyCur.isNotEmpty ? legacyCur : _cur(currency));
+
+    if (usedCur.isEmpty) {
+      // Pas de devise: on suppose legacy déjà en baseCurrency
+      return amount;
+    }
+
+    if (_isBase(usedCur)) return amount;
+
+    final rate = _rateToBaseOrNull(usedCur);
+    if (rate == null) return null; // ✅ pas de taux => on exclut
+    return amount * rate;
+  }
+
+  (num invested, num middle, num sold, Set<String> missingFx) _compute() {
+    final missing = <String>{};
+
+    String _usedSaleCurrency(Map<String, dynamic> r) {
+      final saleCur = _cur(r['sale_currency']);
+      final legacyCur = _cur(r['currency']);
+      return saleCur.isNotEmpty
+          ? saleCur
+          : (legacyCur.isNotEmpty ? legacyCur : _cur(currency));
+    }
+
     if (finalizedMode) {
       num sold = 0;
+
       for (final r in items) {
-        final sale = r['sale_price'];
-        if (sale != null) sold += _asNum(sale);
+        if (r['sale_price'] == null) continue;
+
+        final conv = _saleToBaseOrNull(r);
+        if (conv == null) {
+          final usedCur = _usedSaleCurrency(r);
+          if (usedCur.isNotEmpty && !_isBase(usedCur)) missing.add(usedCur);
+          continue;
+        }
+        sold += conv;
       }
 
-      // 👇 Utilise l'override s'il est fourni, sinon calcule localement.
       num invested;
       if (overrideInvested != null) {
         invested = _asNum(overrideInvested);
@@ -91,32 +150,44 @@ class FinanceOverview extends StatelessWidget {
       }
 
       final margin = sold - invested;
-      return (invested, margin, sold);
+      return (invested, margin, sold, Set<String>.unmodifiable(missing));
     } else {
-      // Mode standard (inventaire normal)
       num invested = 0;
       num estimated = 0;
       num sold = 0;
 
       for (final r in items) {
-        final sale = r['sale_price'];
-        final isSold = sale != null;
+        final isSold = r['sale_price'] != null;
 
         if (isSold) {
-          sold += _asNum(sale);
+          final conv = _saleToBaseOrNull(r);
+          if (conv == null) {
+            final usedCur = _usedSaleCurrency(r);
+            if (usedCur.isNotEmpty && !_isBase(usedCur)) missing.add(usedCur);
+            continue;
+          }
+          sold += conv;
         } else {
-          // coûts unitaires (investi) pour NON vendus
           invested += _asNum(r['unit_cost']) +
               _asNum(r['unit_fees']) +
               _asNum(r['shipping_fees']) +
               _asNum(r['commission_fees']) +
               _asNum(r['grading_fees']);
-          // valeur estimée
           estimated += _asNum(r['estimated_price']);
         }
       }
-      return (invested, estimated, sold);
+
+      return (invested, estimated, sold, Set<String>.unmodifiable(missing));
     }
+  }
+
+  String? _mergeSubtitle(String? base, String? extra) {
+    final b = (base ?? '').trim();
+    final e = (extra ?? '').trim();
+    if (b.isEmpty && e.isEmpty) return null;
+    if (b.isEmpty) return e;
+    if (e.isEmpty) return b;
+    return '$b • $e';
   }
 
   Widget _kpiCard(
@@ -192,7 +263,12 @@ class FinanceOverview extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final (inv, mid, sold) = _compute();
+    final (inv, mid, sold, missingFx) = _compute();
+    final displayCur = baseCurrency;
+
+    final warnFx = missingFx.isEmpty
+        ? null
+        : '⚠ Missing FX: ${(missingFx.toList()..sort()).join(", ")}';
 
     final investedCard = _kpiCard(
       context,
@@ -200,7 +276,7 @@ class FinanceOverview extends StatelessWidget {
       iconBg: kAccentA,
       gradient: [kAccentA.withOpacity(.12), kAccentB.withOpacity(.06)],
       title: titleInvested,
-      value: '${_money(inv)} $currency',
+      value: '${_money(inv)} $displayCur',
       subtitle: subtitleInvested,
     );
 
@@ -211,9 +287,8 @@ class FinanceOverview extends StatelessWidget {
       gradient: finalizedMode
           ? [kAccentC.withOpacity(.14), kAccentB.withOpacity(.06)]
           : [kAccentB.withOpacity(.12), kAccentC.withOpacity(.06)],
-      title:
-          titleEstimated, // "Marge réelle" en finalized, sinon "Revenu potentiel"
-      value: '${_money(mid)} $currency',
+      title: titleEstimated,
+      value: '${_money(mid)} $displayCur',
       subtitle: subtitleEstimated,
     );
 
@@ -223,15 +298,14 @@ class FinanceOverview extends StatelessWidget {
       iconBg: kAccentG,
       gradient: [kAccentG.withOpacity(.14), kAccentB.withOpacity(.06)],
       title: titleSold,
-      value: '${_money(sold)} $currency',
-      subtitle: subtitleSold,
+      value: '${_money(sold)} $displayCur',
+      subtitle: _mergeSubtitle(subtitleSold, warnFx),
     );
 
     return LayoutBuilder(
       builder: (ctx, cons) {
         final maxW = cons.maxWidth;
         if (maxW >= 960) {
-          // Large
           return Row(
             children: [
               Expanded(child: investedCard),
@@ -242,7 +316,6 @@ class FinanceOverview extends StatelessWidget {
             ],
           );
         } else if (maxW >= 680) {
-          // Medium
           return Column(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -258,7 +331,6 @@ class FinanceOverview extends StatelessWidget {
             ],
           );
         } else {
-          // Small
           return Column(
             mainAxisSize: MainAxisSize.min,
             children: [

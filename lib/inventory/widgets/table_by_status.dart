@@ -90,6 +90,14 @@ class _InventoryTableByStatusState extends State<InventoryTableByStatus> {
   String _txt(dynamic v) =>
       (v == null || (v is String && v.trim().isEmpty)) ? '—' : v.toString();
 
+  // ✅ Multi-devise sale_price: on affiche sale_currency si dispo
+  String _saleCurrency(Map<String, dynamic> r) {
+    final sc = (r['sale_currency'] ?? '').toString().trim();
+    if (sc.isNotEmpty) return sc;
+    final c = (r['currency'] ?? '').toString().trim();
+    return c.isNotEmpty ? c : 'USD';
+  }
+
   static const List<String> _allStatuses = [
     'ordered',
     'paid',
@@ -787,15 +795,22 @@ class _InventoryTableByStatusState extends State<InventoryTableByStatus> {
 
     if (widget.showRevenue) {
       final sale = r['sale_price'];
+      final saleCur = _saleCurrency(r); // ✅ multi-devise
+
       cells.add(
         DataCell(
           _EditableTextCell(
             initialText: sale == null ? '' : sale.toString(),
             placeholder: '—',
+            // ✅ affichage "lecture": 123.00 EUR (sans polluer la valeur éditée)
+            displaySuffix: sale == null ? null : ' $saleCur',
+            formatMoney: true,
             onSaved: (t) async => widget.onInlineUpdate(r, 'sale_price', t),
           ),
         ),
       );
+
+      final _ = saleCur;
     }
 
     // Tracking
@@ -852,7 +867,6 @@ class _InventoryTableByStatusState extends State<InventoryTableByStatus> {
                   value: headerCheckValue,
                   onChanged: (_) {
                     if (widget.onToggleSelectAll != null) {
-                      // si tout est déjà sélectionné → on clear ; sinon → select all
                       widget.onToggleSelectAll!.call(!allSelected);
                     }
                   },
@@ -930,14 +944,12 @@ class _InventoryTableByStatusState extends State<InventoryTableByStatus> {
     final columnTitles = _columnTitles();
     final colCount = columnTitles.length;
 
-    // sécurité dev : specs == titres
     assert(_columnSpecs().length == colCount,
         'columnSpecs() and _columnTitles() length mismatch');
 
     final widths = _ensureColumnWidths(colCount);
     final tableWidth = _totalTableWidth(widths);
 
-    // DataRows réutilisant toute la logique existante
     final dataRows = lines.map<DataRow>((r) {
       final selected = widget.groupMode
           ? widget.selection.contains(widget.lineKey(r))
@@ -975,7 +987,7 @@ class _InventoryTableByStatusState extends State<InventoryTableByStatus> {
       );
     }
 
-    Widget buildDataRowWidget(DataRow row) {
+    Widget buildDataRowWidget(DataRow row, Map<String, dynamic> sourceRow) {
       final bg =
           row.color?.resolve(const <MaterialState>{}) ?? Colors.transparent;
       final cells = row.cells;
@@ -991,7 +1003,9 @@ class _InventoryTableByStatusState extends State<InventoryTableByStatus> {
                 width: widths[i],
                 child: Align(
                   alignment: Alignment.centerLeft,
-                  child: _maybeWrapWithTooltip(cells[i].child),
+                  child: _maybeWrapWithTooltip(
+                    cells[i].child,
+                  ),
                 ),
               ),
               if (i < colCount - 1)
@@ -1005,7 +1019,6 @@ class _InventoryTableByStatusState extends State<InventoryTableByStatus> {
       );
     }
 
-    // Tableau central : scroll horizontal + sélection de texte
     final centerTable = SingleChildScrollView(
       scrollDirection: Axis.horizontal,
       child: SizedBox(
@@ -1014,7 +1027,8 @@ class _InventoryTableByStatusState extends State<InventoryTableByStatus> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             buildHeaderRow(),
-            for (final row in dataRows) buildDataRowWidget(row),
+            for (int i = 0; i < dataRows.length; i++)
+              buildDataRowWidget(dataRows[i], lines[i]),
           ],
         ),
       ),
@@ -1030,11 +1044,9 @@ class _InventoryTableByStatusState extends State<InventoryTableByStatus> {
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              fixedLeft, // ✅ / ✏️
-              Expanded(
-                child: centerTable, // ⇦ scroll + colonnes redimensionnables
-              ),
-              fixedRight, // ❌
+              fixedLeft,
+              Expanded(child: centerTable),
+              fixedRight,
             ],
           ),
         ),
@@ -1050,11 +1062,15 @@ class _EditableTextCell extends StatefulWidget {
     required this.initialText,
     required this.onSaved,
     this.placeholder,
+    this.displaySuffix, // ✅ NEW
+    this.formatMoney = false, // ✅ NEW
   });
 
   final String initialText;
   final Future<void> Function(String newValue) onSaved;
   final String? placeholder;
+  final String? displaySuffix; // ✅ NEW
+  final bool formatMoney; // ✅ NEW
 
   @override
   State<_EditableTextCell> createState() => _EditableTextCellState();
@@ -1117,10 +1133,27 @@ class _EditableTextCellState extends State<_EditableTextCell> {
     });
   }
 
+  String _formatMoneyIfPossible(String raw) {
+    final t = raw.trim().replaceAll(',', '.');
+    final n = num.tryParse(t);
+    if (n == null) return raw.trim();
+    return n.toDouble().toStringAsFixed(2);
+  }
+
   @override
   Widget build(BuildContext context) {
     if (!_editing) {
-      final display = (_c.text.isEmpty ? (widget.placeholder ?? '—') : _c.text);
+      final raw = _c.text.trim();
+
+      final base = raw.isEmpty
+          ? (widget.placeholder ?? '—')
+          : (widget.formatMoney ? _formatMoneyIfPossible(raw) : raw);
+
+      final suffix =
+          (raw.isEmpty || base == '—') ? '' : (widget.displaySuffix ?? '');
+
+      final display = '$base$suffix';
+
       return GestureDetector(
         behavior: HitTestBehavior.opaque,
         onDoubleTap: _startEdit,
@@ -1229,7 +1262,6 @@ class _EditableStatusCellState extends State<_EditableStatusCell> {
     if (!_editing && oldWidget.value != widget.value) {
       _value = widget.value;
     }
-    // Si on désactive pendant l'édition -> on ferme proprement
     if (!widget.enabled && _editing) {
       setState(() {
         _value = _original;
@@ -1254,7 +1286,6 @@ class _EditableStatusCellState extends State<_EditableStatusCell> {
     if (!widget.enabled) return;
     _original = _value;
     setState(() => _editing = true);
-    // ⛔️ PAS de listener de perte de focus ici (sinon le menu ferme immédiatement)
   }
 
   @override
@@ -1266,7 +1297,6 @@ class _EditableStatusCellState extends State<_EditableStatusCell> {
     );
 
     if (!widget.enabled) {
-      // lecture seule en mode groupe
       return chip;
     }
 
@@ -1278,28 +1308,24 @@ class _EditableStatusCellState extends State<_EditableStatusCell> {
       );
     }
 
-    // En mode édition : dropdown + boutons Annuler/Enregistrer
     return RawKeyboardListener(
-      focusNode: FocusNode(), // pour Esc
+      focusNode: FocusNode(),
       onKey: (evt) {
         if (evt.isKeyPressed(LogicalKeyboardKey.escape)) {
           setState(() {
-            _value = _original; // annuler
+            _value = _original;
             _editing = false;
           });
         }
       },
       child: Row(
         children: [
-          // on remplit toute la cellule pour capter les clics dans la zone
           Expanded(
             child: DropdownButtonHideUnderline(
               child: DropdownButtonFormField<String>(
                 isExpanded: true,
                 value: _value,
                 icon: const Icon(Icons.arrow_drop_down),
-
-                // 🔴 Chaque ligne du menu a la couleur de son status
                 items: widget.statuses.map((s) {
                   final c = statusColor(context, s);
                   return DropdownMenuItem<String>(
@@ -1338,8 +1364,6 @@ class _EditableStatusCellState extends State<_EditableStatusCell> {
                     ),
                   );
                 }).toList(),
-
-                // Optionnel : affichage stylé de l'item sélectionné
                 selectedItemBuilder: (ctx) {
                   return widget.statuses.map((s) {
                     final c = statusColor(ctx, s);
@@ -1366,15 +1390,11 @@ class _EditableStatusCellState extends State<_EditableStatusCell> {
                     );
                   }).toList();
                 },
-
-                // Couleur de focus du champ selon le status sélectionné
                 focusColor:
                     _value == null ? null : statusColor(context, _value!),
-
                 onChanged: (v) {
                   setState(() => _value = v);
                 },
-                // on N'UTILISE PAS de focusNode ici pour ne pas annuler quand le menu s'ouvre
                 decoration: const InputDecoration(
                   isDense: true,
                   border: OutlineInputBorder(),
@@ -1483,11 +1503,10 @@ class _ColumnResizeHandle extends StatelessWidget {
         child: SizedBox(
           width: _kColumnDividerWidth,
           height: height,
-          child: Center(
+          child: const Center(
             child: SizedBox(
               width: 3,
-              height: height,
-              //color: Theme.of(context).dividerColor.withOpacity(0.6),
+              height: double.infinity,
             ),
           ),
         ),
@@ -1535,7 +1554,6 @@ class _FileCell extends StatelessWidget {
     final showImage = isImagePreferred && _isImage;
 
     if (showImage) {
-      // URL corrigée/encodée
       final imgUrl = () {
         final u = url!;
         try {
@@ -1589,18 +1607,15 @@ class _HoverableImageThumbState extends State<_HoverableImageThumb> {
     if (_overlayEntry != null) return;
 
     final overlay = Overlay.of(context);
-
-    // Position globale de la souris
     final offset = event.position;
 
     _overlayEntry = OverlayEntry(
       builder: (ctx) {
         return Positioned(
-          left: offset.dx + 12, // petit décalage à droite
-          top: offset.dy + 12, // petit décalage en dessous
+          left: offset.dx + 12,
+          top: offset.dy + 12,
           child: IgnorePointer(
-            ignoring:
-                true, // pour ne pas interférer avec les events de la cellule
+            ignoring: true,
             child: Material(
               elevation: 6,
               borderRadius: BorderRadius.circular(8),
@@ -1613,7 +1628,6 @@ class _HoverableImageThumbState extends State<_HoverableImageThumb> {
                 child: Image.network(
                   widget.imgUrl,
                   fit: BoxFit.contain,
-                  // petite optimisation, pas besoin d'une énorme résolution
                   filterQuality: FilterQuality.medium,
                 ),
               ),

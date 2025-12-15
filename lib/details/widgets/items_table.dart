@@ -32,10 +32,22 @@ class ItemsTable extends StatelessWidget {
     return num.tryParse(v.toString());
   }
 
+  String _saleCurrencyOf(Map<String, dynamic> r) {
+    final v = _txt(
+      r['sale_currency'] ?? r['sale_price_currency'] ?? r['sale_currency_code'],
+    );
+    return (v == '—' || v.trim().isEmpty) ? currency : v.trim();
+  }
+
   /// Calcule une marge % à l’affichage si `marge` est null.
+  /// ⚠️ Multi-devise : on ne dérive pas si sale_currency != currency (coûts).
   num? _derivedMarginPct(Map<String, dynamic> r) {
     final num? m = _asNum(r['marge']);
     if (m != null) return m;
+
+    final saleCurrency = _saleCurrencyOf(r);
+    final bool sameCurrencyForMargin = (saleCurrency == currency);
+    if (!sameCurrencyForMargin) return null;
 
     final num? sale = _asNum(r['sale_price']);
     final num cost =
@@ -100,13 +112,17 @@ class ItemsTable extends StatelessWidget {
               final est = (r['estimated_price'] as num?);
               final sale = (r['sale_price'] as num?);
 
-              // ✅ marge affichée = marge DB ou marge dérivée
+              // ✅ devise de vente (multi-devise)
+              final saleCurrency = _saleCurrencyOf(r);
+
+              // ✅ marge affichée = marge DB ou marge dérivée (si mêmes devises)
               final num? margeDisplay = _derivedMarginPct(r);
 
               final s = (r['status'] ?? '').toString();
               final photo = (r['photo_url'] ?? '').toString();
               final doc = (r['document_url'] ?? '').toString();
               final bg = (i % 2 == 0) ? cs.surface : cs.surfaceContainerHighest;
+
               return DataRow(
                 color: MaterialStateProperty.all(bg.withOpacity(.50)),
                 cells: [
@@ -120,7 +136,11 @@ class ItemsTable extends StatelessWidget {
                   DataCell(Text(_txt(r['grading_note']))),
                   DataCell(Text(_txt(r['grading_fees']))),
                   DataCell(Text(est == null ? '—' : '${_m(est)} $currency')),
-                  DataCell(Text(sale == null ? '—' : '${_m(sale)} $currency')),
+
+                  // ✅ sale affiché avec sa devise
+                  DataCell(
+                      Text(sale == null ? '—' : '${_m(sale)} $saleCurrency')),
+
                   if (showMargins)
                     DataCell(MarginChip(marge: margeDisplay))
                   else

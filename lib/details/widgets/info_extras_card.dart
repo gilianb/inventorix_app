@@ -190,13 +190,33 @@ class InfoExtrasCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+
+    // Devise "coût / item"
     final currency = _txt(data['currency']) == '—'
         ? currencyFallback
         : _txt(data['currency']);
 
+    // ✅ MULTI-DEVISE (lié à sale_price)
+    // Si une devise de vente existe, on l'utilise pour afficher sale_price.
+    // Sinon, fallback sur la devise de l'item.
+    final saleCurrencyRaw = _txt(
+      data['sale_currency'] ??
+          data['sale_price_currency'] ??
+          data['sale_currency_code'],
+    );
+    final saleCurrency = (saleCurrencyRaw == '—' || saleCurrencyRaw.isEmpty)
+        ? currency
+        : saleCurrencyRaw;
+
+    // Si la devise de vente diffère, on ne dérive PAS la marge (sinon mélange de devises).
+    final bool sameCurrencyForMargin = (saleCurrency == currency);
+
     // === Margin calculations ===
     final num? pct = _asNum(data['marge']); // % if present
+
+    // ✅ sale_price lu tel quel, mais la marge n'est calculée que si devises identiques
     final num? sale = _asNum(data['sale_price']);
+
     final num cost =
         (_asNum(data['unit_cost']) ?? 0) + (_asNum(data['unit_fees']) ?? 0);
     final num fees = (_asNum(data['shipping_fees']) ?? 0) +
@@ -204,13 +224,17 @@ class InfoExtrasCard extends StatelessWidget {
         (_asNum(data['grading_fees']) ?? 0);
     final num invested = cost + fees;
 
-    final num? valueMargin = showMargins
+    // Valeur de marge : uniquement si même devise (sinon incohérent)
+    final num? valueMargin = (showMargins && sameCurrencyForMargin)
         ? (sale == null ? null : (sale - invested))
-        : null; // absolute value
-    // if % absent but sold and invested > 0, derive it
+        : null;
+
+    // % marge :
+    // - si marge déjà stockée -> OK (c'est un %)
+    // - sinon on dérive seulement si même devise
     final num? pctDerived = (pct != null)
         ? pct
-        : ((sale != null && invested > 0)
+        : ((sameCurrencyForMargin && sale != null && invested > 0)
             ? ((sale - invested) / invested * 100)
             : null);
 
@@ -228,7 +252,6 @@ class InfoExtrasCard extends StatelessWidget {
       _kv(context, 'Grade ID', _txt(data['grade_id'])),
       _kv(context, 'Grading note', _txt(data['grading_note'])),
       _kv(context, 'Grading fees', _money(data['grading_fees'], currency)),
-      // === Margins (left for visibility) ===
       if (showMargins)
         _kvW(context, 'Margin (%)',
             MarginChip(marge: pctDerived, compact: true)),
@@ -239,7 +262,11 @@ class InfoExtrasCard extends StatelessWidget {
       _kv(context, 'Unit fees', _money(data['unit_fees'], currency)),
       _kv(context, 'Estimated price',
           _money(data['estimated_price'], currency)),
-      _kv(context, 'Sale price', _money(data['sale_price'], currency)),
+
+      // ✅ sale_price affiché avec la devise de vente
+      _kv(context, 'Sale price', _money(data['sale_price'], saleCurrency)),
+      _kv(context, 'Sale currency', saleCurrency),
+
       _kv(context, 'Sale date', _date(data['sale_date'])),
       _kv(context, 'Currency', currency),
       _kv(context, 'Created at', _date(data['created_at'])),
@@ -251,9 +278,13 @@ class InfoExtrasCard extends StatelessWidget {
           _money(data['commission_fees'], currency)),
       _kv(context, 'Payment type', _txt(data['payment_type'])),
       _kv(context, 'Buyer info', _txt(data['buyer_infos'])),
+
       if (showMargins)
-        _kvW(context, 'Margin (value per unit)',
-            _marginValueChip(valueMargin, currency, pctDerived)),
+        _kvW(
+          context,
+          'Margin (value per unit)',
+          _marginValueChip(valueMargin, currency, pctDerived),
+        ),
     ];
 
     final notes = (data['notes'] ?? '').toString();
@@ -266,8 +297,7 @@ class InfoExtrasCard extends StatelessWidget {
       child: Container(
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(16),
-          border: Border.all(
-              color: kAccentA.withOpacity(.18), width: 1), // colored border
+          border: Border.all(color: kAccentA.withOpacity(.18), width: 1),
           gradient: LinearGradient(
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,

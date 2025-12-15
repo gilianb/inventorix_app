@@ -1,19 +1,20 @@
-// lib/vault_page.dart
+// lib/vault/vault_page.dart
 // ignore_for_file: deprecated_member_use
 
-import 'dart:async';
+import 'dart:convert'; // ✅ FX JSON
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:http/http.dart' as http; // ✅ FX HTTP
 
-import '../../../inventory/widgets/table_by_status.dart';
-import '../../../inventory/widgets/edit.dart';
-import '../../../inventory/widgets/search_and_filters.dart';
+import 'package:inventorix_app/inventory/widgets/table_by_status.dart';
+import 'package:inventorix_app/inventory/widgets/edit.dart';
+import 'package:inventorix_app/inventory/widgets/search_and_filters.dart';
+import 'package:inventorix_app/inventory/widgets/finance_overview.dart';
+
 import 'package:inventorix_app/details/details_page.dart';
 import 'package:inventorix_app/new_stock/new_stock_page.dart';
 
-// ✅ KPI factorisé (Investi / Estimé / Vendu)
-import '../../../inventory/widgets/finance_overview.dart';
-import '../org/roles.dart';
+import 'package:inventorix_app/org/roles.dart';
 
 //icons
 import 'package:iconify_flutter/iconify_flutter.dart';
@@ -42,9 +43,9 @@ class _vaultPageState extends State<vaultPage> {
   // Filtres/UI (alignés avec la page principale)
   final _searchCtrl = TextEditingController();
   String? _gameFilter; // valeur = game_label
-  String? _languageFilter; // NEW: filtre langue
+  String? _languageFilter; // filtre langue
   String _typeFilter = 'single'; // 'single' | 'sealed'
-  String _priceBand = 'any'; // NEW: 'any' | 'p1' | 'p2' | 'p3' | 'p4'
+  String _priceBand = 'any'; // 'any' | 'p1' | 'p2' | 'p3' | 'p4'
 
   OrgRole _role = OrgRole.viewer; // mutable
   bool _roleLoaded = false; // on attend le chargement
@@ -56,6 +57,12 @@ class _vaultPageState extends State<vaultPage> {
   // Données brutes items pour le KPI factorisé
   List<Map<String, dynamic>> _kpiItems = const [];
 
+  // ✅ FX cache (base USD)
+  static const Duration _fxTtl = Duration(hours: 12);
+  Future<Map<String, double>>? _fxFuture;
+  Map<String, double>? _fxRates;
+  DateTime? _fxLoadedAt;
+
   @override
   void initState() {
     super.initState();
@@ -64,6 +71,7 @@ class _vaultPageState extends State<vaultPage> {
 
   Future<void> _init() async {
     await _loadRole();
+    _ensureFxLoaded(force: true);
     await _refresh();
   }
 
@@ -75,6 +83,101 @@ class _vaultPageState extends State<vaultPage> {
 
   void _snack(String m) =>
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
+
+  // ====================== FX (USD) ======================
+
+  bool _fxIsStale() {
+    final t = _fxLoadedAt;
+    if (t == null) return true;
+    return DateTime.now().difference(t) > _fxTtl;
+  }
+
+  void _ensureFxLoaded({bool force = false}) {
+    if (!_perm.canSeeFinanceOverview) return;
+
+    if (force || _fxRates == null || _fxIsStale()) {
+      _fxFuture = _loadFxRatesUsdBase().then((rates) {
+        _fxRates = rates;
+        _fxLoadedAt = DateTime.now();
+        return rates;
+      });
+    }
+  }
+
+  /// Charge les taux FX en base USD.
+  /// Format: rates["EUR"] = 0.92 => 1 USD = 0.92 EUR
+  Future<Map<String, double>> _loadFxRatesUsdBase() async {
+    try {
+      final uri = Uri.parse('https://api.frankfurter.app/latest?from=USD');
+      final resp = await http.get(uri).timeout(const Duration(seconds: 8));
+      if (resp.statusCode < 200 || resp.statusCode >= 300) {
+        return const {'USD': 1.0};
+      }
+
+      final json = jsonDecode(resp.body) as Map<String, dynamic>;
+      final rates = (json['rates'] as Map<String, dynamic>?);
+
+      final out = <String, double>{'USD': 1.0};
+      if (rates != null) {
+        for (final e in rates.entries) {
+          final k = e.key.toUpperCase();
+          final v = e.value;
+          final d = (v is num) ? v.toDouble() : double.tryParse(v.toString());
+          if (d != null && d > 0) out[k] = d;
+        }
+      }
+      return out;
+    } catch (_) {
+      return const {'USD': 1.0};
+    }
+  }
+
+  /// Convertit amount (dans ccy) -> USD, en utilisant un mapping "1 USD = rate[ccy] ccy"
+  double _toUsd(num amount, String? ccy, Map<String, double> usdBaseRates) {
+    final cur = (ccy ?? '').trim().toUpperCase();
+    final a = amount.toDouble();
+
+    if (cur.isEmpty || cur == 'USD') return a;
+
+    final perUsd = usdBaseRates[cur];
+    if (perUsd == null || perUsd == 0) return a;
+
+    // cur -> USD
+    return a / perUsd;
+  }
+
+  List<Map<String, dynamic>> _convertItemsToUsd(
+    List<Map<String, dynamic>> items,
+    Map<String, double> usdBaseRates,
+  ) {
+    double? conv(dynamic v, String? ccy) {
+      if (v == null) return null;
+      final n = (v is num) ? v : num.tryParse(v.toString());
+      if (n == null) return null;
+      return _toUsd(n, ccy, usdBaseRates);
+    }
+
+    return items.map((it) {
+      final currency = (it['currency'] ?? '').toString().trim();
+      final saleCurrency =
+          (it['sale_currency'] ?? it['currency'] ?? '').toString().trim();
+
+      return {
+        ...it,
+        'unit_cost': conv(it['unit_cost'], currency),
+        'unit_fees': conv(it['unit_fees'], currency),
+        'shipping_fees': conv(it['shipping_fees'], currency),
+        'commission_fees': conv(it['commission_fees'], currency),
+        'grading_fees': conv(it['grading_fees'], currency),
+        'estimated_price': conv(it['estimated_price'], currency),
+        'sale_price': conv(it['sale_price'], saleCurrency),
+        'currency': 'USD',
+        'sale_currency': 'USD',
+      };
+    }).toList(growable: false);
+  }
+
+  // ====================== Filters ======================
 
   /// Limites min/max pour la tranche de prix (estimated_price)
   /// 'any' | 'p1' | 'p2' | 'p3' | 'p4'
@@ -110,6 +213,7 @@ class _vaultPageState extends State<vaultPage> {
     try {
       _groups = await _fetchGroupsFromView();
       _kpiItems = await _fetchvaultItemsForKpis();
+      _ensureFxLoaded(); // ✅ refresh FX si stale
     } catch (e) {
       _snack('Error loading vault: $e');
     } finally {
@@ -117,8 +221,7 @@ class _vaultPageState extends State<vaultPage> {
     }
   }
 
-  /// Rafraîchit _groups et _kpiItems en arrière-plan
-  /// sans toucher à _loading (donc pas de gros loader global).
+  /// Rafraîchit _groups et _kpiItems en arrière-plan (pas de gros loader global).
   Future<void> _refreshSilent() async {
     try {
       final newGroups = await _fetchGroupsFromView();
@@ -129,10 +232,13 @@ class _vaultPageState extends State<vaultPage> {
         _groups = newGroups;
         _kpiItems = newKpiItems;
       });
+      _ensureFxLoaded();
     } catch (_) {
-      // best effort : si ça plante, on garde l'optimistic update local
+      // best effort
     }
   }
+
+  // ====================== RBAC ======================
 
   Future<void> _loadRole() async {
     try {
@@ -144,7 +250,6 @@ class _vaultPageState extends State<vaultPage> {
 
       final oid = (widget.orgId ?? '').toString();
       if (oid.isEmpty) {
-        // Sans orgId on ne peut pas résoudre le rôle ; on reste viewer.
         if (mounted) setState(() => _roleLoaded = true);
         return;
       }
@@ -157,14 +262,11 @@ class _vaultPageState extends State<vaultPage> {
             .eq('org_id', oid)
             .eq('user_id', uid)
             .maybeSingle();
-      } catch (_) {
-        // best effort
-      }
+      } catch (_) {}
 
       String? roleStr = (row?['role'] as String?);
 
       if (roleStr == null) {
-        // fallback : si l’utilisateur est le créateur de l’org, rôle owner
         try {
           final org = await _sb
               .from('organization')
@@ -194,17 +296,19 @@ class _vaultPageState extends State<vaultPage> {
     }
   }
 
-  /// Lit la vue stricte v_item_groups (1 ligne = 1 group_sig) en ne gardant que status='vault'
+  // ====================== DATA: Groups (table) ======================
+
+  /// Lit la vue v_item_groups (1 ligne = 1 group_sig) en ne gardant que status='vault'
   /// + hydratation game_label/game_code depuis la table games
   /// + enrichissement "market" pour le mode Vault.
   Future<List<Map<String, dynamic>>> _fetchGroupsFromView() async {
-    // NOTE: on inclut qty_total car la cellule "Prix / u." l'utilise.
+    // NOTE: on inclut qty_status, etc. + group_sig.
     const cols = '''
       group_sig, org_id, type, status,
       product_id, product_name, game_id, language,
       purchase_date, currency,
       supplier_name, buyer_company, notes,
-      grade_id, grading_note, sale_date, sale_price, tracking, photo_url, document_url,
+      grade_id, grading_note, sale_date, sale_price, sale_currency, tracking, photo_url, document_url,
       estimated_price, item_location, channel_id, payment_type, buyer_infos,
       unit_cost, unit_fees,
       qty_status, total_cost_with_fees,
@@ -240,12 +344,8 @@ class _vaultPageState extends State<vaultPage> {
     final bounds = _priceBounds();
     final minPrice = bounds['min'];
     final maxPrice = bounds['max'];
-    if (minPrice != null) {
-      q = q.gte('estimated_price', minPrice);
-    }
-    if (maxPrice != null) {
-      q = q.lte('estimated_price', maxPrice);
-    }
+    if (minPrice != null) q = q.gte('estimated_price', minPrice);
+    if (maxPrice != null) q = q.lte('estimated_price', maxPrice);
 
     final List<dynamic> raw =
         await q.order('purchase_date', ascending: false).limit(1000);
@@ -310,7 +410,7 @@ class _vaultPageState extends State<vaultPage> {
       rows = rows.where(rowMatches).toList();
     }
 
-    // ===== Enrichissement "market": price per grade + delta % à partir de price_history =====
+    // ===== Enrichissement "market" =====
     rows = await _enrichWithMarket(rows);
 
     return rows;
@@ -327,7 +427,6 @@ class _vaultPageState extends State<vaultPage> {
         .toSet()
         .toList(growable: false);
 
-    // 1) prix actuels depuis product (on n'utilise PAS price_history pour la valeur affichée)
     final List<dynamic> prodRaw = await _sb
         .from('product')
         .select('id, price_raw, price_graded')
@@ -338,7 +437,6 @@ class _vaultPageState extends State<vaultPage> {
         (p['id'] as int): Map<String, dynamic>.from(p as Map)
     };
 
-    // 2) deux derniers points price_history par produit & grade (raw | psa10)
     final List<dynamic> histRaw = await _sb
         .from('price_history')
         .select('product_id, grade, grade_detail, price, fetched_at')
@@ -360,7 +458,7 @@ class _vaultPageState extends State<vaultPage> {
 
       histByProd.putIfAbsent(pid, () => {'raw': [], 'psa10': []});
       final list = histByProd[pid]![bucket]!;
-      if (list.length < 2) list.add(m); // on garde seulement 2 derniers
+      if (list.length < 2) list.add(m);
     }
 
     num? pct(num? last, num? prev) {
@@ -373,13 +471,9 @@ class _vaultPageState extends State<vaultPage> {
     num? prevOf(List<Map<String, dynamic>> xs) =>
         (xs.length >= 2 ? (xs[1]['price'] as num?) : null);
 
-    // 3) attache champs market_* à chaque row
     return rows.map((r) {
       final pid = r['product_id'] as int?;
-      final graded = () {
-        final gn = (r['grading_note'] ?? '').toString().trim();
-        return gn.isNotEmpty;
-      }();
+      final graded = (r['grading_note'] ?? '').toString().trim().isNotEmpty;
 
       final p = (pid != null) ? productById[pid] : null;
       final rawPrice = (p?['price_raw'] as num?);
@@ -400,25 +494,48 @@ class _vaultPageState extends State<vaultPage> {
       return {
         ...r,
         'market_price': marketPrice,
-        'market_kind': kind, // Raw | PSA10
-        'market_change_pct': marketDelta, // peut être null
+        'market_kind': kind,
+        'market_change_pct': marketDelta,
       };
     }).toList(growable: false);
   }
 
+  // ====================== DATA: KPI items ======================
+
   /// Items bruts de la vault (pour KPI FinanceOverview)
+  /// ✅ RBAC: lecture sur item_masked + colonnes conditionnelles
   Future<List<Map<String, dynamic>>> _fetchvaultItemsForKpis() async {
-    var sel = _sb.from('item').select('''
-          id, org_id, game_id, type, status, sale_price,
-          unit_cost, unit_fees, shipping_fees, commission_fees, grading_fees,
-          estimated_price, currency, language
-        ''').eq('status', 'vault').eq('type', _typeFilter);
+    final canSeeCosts = _perm.canSeeUnitCosts;
+    final canSeeRevenue = _perm.canSeeRevenue;
+
+    final cols = <String>[
+      'id',
+      'org_id',
+      'game_id',
+      'type',
+      'status',
+      'currency',
+      'language',
+      'estimated_price',
+      if (canSeeRevenue) 'sale_price',
+      if (canSeeRevenue) 'sale_currency',
+      if (canSeeCosts) 'unit_cost',
+      if (canSeeCosts) 'unit_fees',
+      if (canSeeCosts) 'shipping_fees',
+      if (canSeeCosts) 'commission_fees',
+      if (canSeeCosts) 'grading_fees',
+    ].join(', ');
+
+    var sel = _sb
+        .from('item_masked')
+        .select(cols)
+        .eq('status', 'vault')
+        .eq('type', _typeFilter);
 
     if ((widget.orgId ?? '').isNotEmpty) {
       sel = sel.eq('org_id', widget.orgId as Object);
     }
 
-    // Filtre jeu
     if ((_gameFilter ?? '').isNotEmpty) {
       final gid = await _resolveGameIdByLabel(_gameFilter!);
       if (gid != null) {
@@ -428,21 +545,15 @@ class _vaultPageState extends State<vaultPage> {
       }
     }
 
-    // Filtre langue
     if ((_languageFilter ?? '').isNotEmpty) {
       sel = sel.eq('language', _languageFilter as Object);
     }
 
-    // Filtre tranche de prix sur estimated_price
     final bounds = _priceBounds();
     final minPrice = bounds['min'];
     final maxPrice = bounds['max'];
-    if (minPrice != null) {
-      sel = sel.gte('estimated_price', minPrice);
-    }
-    if (maxPrice != null) {
-      sel = sel.lte('estimated_price', maxPrice);
-    }
+    if (minPrice != null) sel = sel.gte('estimated_price', minPrice);
+    if (maxPrice != null) sel = sel.lte('estimated_price', maxPrice);
 
     final List<dynamic> rows = await sel.limit(50000);
     return rows
@@ -471,9 +582,7 @@ class _vaultPageState extends State<vaultPage> {
       ),
     );
 
-    if (changed == true) {
-      _refresh();
-    }
+    if (changed == true) _refresh();
   }
 
   void _openEdit(Map<String, dynamic> line) async {
@@ -494,9 +603,7 @@ class _vaultPageState extends State<vaultPage> {
       initialSample: line, // ← contient group_sig
     );
 
-    if (changed == true) {
-      _refresh();
-    }
+    if (changed == true) _refresh();
   }
 
   // ======= SUPPRESSION D'UNE LIGNE (vault) =======
@@ -558,14 +665,10 @@ class _vaultPageState extends State<vaultPage> {
           .whereType<int>()
           .toList(growable: false);
 
-      if (ids.isNotEmpty) {
-        // ✅ Cas normal : on a trouvé les items via group_sig
-        return ids;
-      }
-      // ⚠️ Sinon, on continue sur le fallback "par clés" (utile si group_sig a changé)
+      if (ids.isNotEmpty) return ids;
     }
 
-    // 2️⃣ Fallback par clés (comme MainInventory)
+    // 2️⃣ Fallback par clés
     dynamic norm(dynamic v) {
       if (v == null) return null;
       if (v is String && v.trim().isEmpty) return null;
@@ -594,6 +697,7 @@ class _vaultPageState extends State<vaultPage> {
       'grading_fees',
       'sale_date',
       'sale_price',
+      'sale_currency',
       'tracking',
       'estimated_price',
       'item_location',
@@ -607,7 +711,6 @@ class _vaultPageState extends State<vaultPage> {
 
     Future<List<int>> runQuery(Set<String> keys) async {
       var q = _sb.from('item').select('id');
-
       if (orgId != null) q = q.eq('org_id', orgId);
 
       for (final k in keys) {
@@ -631,7 +734,6 @@ class _vaultPageState extends State<vaultPage> {
         }
       }
 
-      // 🔑 on utilise le statut "courant" de la ligne
       q = q.eq('status', status);
 
       final List<dynamic> raw =
@@ -657,8 +759,7 @@ class _vaultPageState extends State<vaultPage> {
       'item_location',
       'tracking',
     };
-    ids = await runQuery(strongKeys);
-    return ids;
+    return await runQuery(strongKeys);
   }
 
   Future<void> _deleteLine(Map<String, dynamic> line) async {
@@ -695,11 +796,11 @@ class _vaultPageState extends State<vaultPage> {
     }
   }
 
-  // ====== LOG inline (old/new) comme Edit ======
+  // ====== LOG inline (old/new) ======
   Future<void> _logBatchEdit({
     required String orgId,
     required List<int> itemIds,
-    required Map<String, Map<String, dynamic>> changes, // {field:{old,new}}
+    required Map<String, Map<String, dynamic>> changes,
     String? reason,
   }) async {
     if (changes.isEmpty) return;
@@ -710,14 +811,11 @@ class _vaultPageState extends State<vaultPage> {
         'p_changes': changes,
         'p_reason': reason,
       });
-    } catch (_) {
-      // best effort
-    }
+    } catch (_) {}
   }
 
   // 👉 helper: trouve l'index de groupe pour patch local
   int? _findGroupIndex(Map<String, dynamic> line) {
-    // priorité group_sig si présent
     final sig = (line['group_sig'] ?? '').toString();
     if (sig.isNotEmpty) {
       final i =
@@ -746,7 +844,6 @@ class _vaultPageState extends State<vaultPage> {
     String field,
     dynamic newValue,
   ) async {
-    // parse côté client
     dynamic parsed;
     switch (field) {
       case 'status':
@@ -758,6 +855,10 @@ class _vaultPageState extends State<vaultPage> {
       case 'unit_cost':
         final t = (newValue ?? '').toString().trim();
         parsed = t.isEmpty ? null : num.tryParse(t);
+        break;
+      case 'sale_currency':
+        final t = (newValue ?? '').toString().trim();
+        parsed = t.isEmpty ? null : t;
         break;
       case 'channel_id':
         final t = (newValue ?? '').toString().trim();
@@ -785,7 +886,6 @@ class _vaultPageState extends State<vaultPage> {
       final idsCsv = '(${ids.join(",")})';
       await _sb.from('item').update({field: parsed}).filter('id', 'in', idsCsv);
 
-      // Log identique à Edit
       await _logBatchEdit(
         orgId: (line['org_id'] ?? widget.orgId ?? '').toString(),
         itemIds: ids,
@@ -795,7 +895,6 @@ class _vaultPageState extends State<vaultPage> {
         reason: 'inline_edit_vault',
       );
 
-      // ✅ Patch local optimiste (groupes + KPI)
       setState(() {
         // Patch KPI items
         if (_kpiItems.isNotEmpty) {
@@ -812,7 +911,7 @@ class _vaultPageState extends State<vaultPage> {
           }
         }
 
-        // Patch ligne de tableau
+        // Patch tableau
         final gi = _findGroupIndex(line);
         if (gi != null) {
           if (field == 'status' && parsed != 'vault') {
@@ -825,6 +924,7 @@ class _vaultPageState extends State<vaultPage> {
           }
         }
       });
+
       _refreshSilent();
       _snack('Modified (${ids.length} item(s)).');
     } on PostgrestException catch (e) {
@@ -834,7 +934,7 @@ class _vaultPageState extends State<vaultPage> {
     }
   }
 
-  // 🔑 clé pour InventoryTableByStatus (même si on n'utilise pas groupMode ici)
+  // 🔑 clé stable (au cas où)
   String _lineKey(Map<String, dynamic> r) {
     final sig = (r['group_sig'] ?? '').toString();
     if (sig.isNotEmpty) return sig;
@@ -911,8 +1011,6 @@ class _vaultPageState extends State<vaultPage> {
                           children: [
                             SearchAndGameFilter(
                               searchCtrl: _searchCtrl,
-
-                              // Jeux
                               games: gamesForFilter,
                               selectedGame: _gameFilter,
                               onGameChanged: (v) {
@@ -920,16 +1018,12 @@ class _vaultPageState extends State<vaultPage> {
                                 _refresh();
                               },
                               onSearch: _refresh,
-
-                              // Langues
                               languages: languagesForFilter,
                               selectedLanguage: _languageFilter,
                               onLanguageChanged: (v) {
                                 setState(() => _languageFilter = v);
                                 _refresh();
                               },
-
-                              // Tranche de prix
                               priceBand: _priceBand,
                               onPriceBandChanged: (band) {
                                 setState(() => _priceBand = band);
@@ -937,7 +1031,6 @@ class _vaultPageState extends State<vaultPage> {
                               },
                             ),
                             const SizedBox(height: 8),
-                            // Même TypeTabs que la main page
                             TypeTabs(
                               typeFilter: _typeFilter,
                               onTypeChanged: (t) {
@@ -957,17 +1050,42 @@ class _vaultPageState extends State<vaultPage> {
                 if (_perm.canSeeFinanceOverview)
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 12),
-                    child: FinanceOverview(
-                      items: _kpiItems,
-                      currency: lines.isNotEmpty
-                          ? (lines.first['currency']?.toString() ?? 'USD')
-                          : 'USD',
-                      titleInvested: 'Invested (vault)',
-                      titleEstimated: 'Estimated value',
-                      titleSold: 'Total sold',
-                      subtitleInvested: 'Σ costs (unsold items)',
-                      subtitleEstimated: 'Σ estimated_price (unsold items)',
-                      subtitleSold: 'Σ sale_price (sold items)',
+                    child: FutureBuilder<Map<String, double>>(
+                      future: _fxFuture ??= _loadFxRatesUsdBase().then((r) {
+                        _fxRates = r;
+                        _fxLoadedAt = DateTime.now();
+                        return r;
+                      }),
+                      builder: (ctx, snap) {
+                        final rates = snap.data ?? _fxRates;
+
+                        final itemsForKpi = (rates == null)
+                            ? _kpiItems
+                            : _convertItemsToUsd(_kpiItems, rates);
+
+                        final showCurrency = (rates == null)
+                            ? (lines.isNotEmpty
+                                ? (lines.first['currency']?.toString() ?? 'USD')
+                                : 'USD')
+                            : 'USD';
+
+                        return FinanceOverview(
+                          items: itemsForKpi,
+                          currency: showCurrency,
+                          titleInvested: (rates == null)
+                              ? 'Invested (vault)'
+                              : 'Invested (USD)',
+                          titleEstimated: (rates == null)
+                              ? 'Estimated value'
+                              : 'Estimated value (USD)',
+                          titleSold: (rates == null)
+                              ? 'Total sold'
+                              : 'Total sold (USD)',
+                          subtitleInvested: 'Σ costs (unsold items)',
+                          subtitleEstimated: 'Σ estimated_price (unsold items)',
+                          subtitleSold: 'Σ sale_price (sold items)',
+                        );
+                      },
                     ),
                   ),
 
@@ -975,31 +1093,34 @@ class _vaultPageState extends State<vaultPage> {
 
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 12),
-                  child: Text('The vault — Items (${lines.length})',
-                      style: Theme.of(context)
-                          .textTheme
-                          .titleMedium
-                          ?.copyWith(fontWeight: FontWeight.w700)),
+                  child: Text(
+                    'The vault — Items (${lines.length})',
+                    style: Theme.of(context)
+                        .textTheme
+                        .titleMedium
+                        ?.copyWith(fontWeight: FontWeight.w700),
+                  ),
                 ),
                 const SizedBox(height: 4),
 
                 InventoryTableByStatus(
-                  mode:
-                      InventoryTableMode.vault, // 👈 colonnes spécifiques vault
+                  mode: InventoryTableMode.vault,
                   lines: lines,
                   onOpen: _openDetails,
                   onEdit: _perm.canEditItems ? _openEdit : null,
                   onDelete: _perm.canDeleteLines ? _deleteLine : null,
                   showDelete: _perm.canDeleteLines,
-                  showUnitCosts: _perm.canSeeUnitCosts, // aligné RBAC
-                  showRevenue: false, // hidden in vault
-                  showEstimated: false, // hidden in vault
-                  onInlineUpdate: _applyInlineUpdate, // 👈 inline + log + patch
+                  showUnitCosts: _perm.canSeeUnitCosts,
+                  showRevenue: false,
+                  showEstimated: false,
+                  onInlineUpdate: _applyInlineUpdate,
 
-                  // 🔧 pas d’édition de groupe dans la vault
+                  // pas de group-edit dans la vault
                   groupMode: false,
                   selection: const <String>{},
                   lineKey: _lineKey,
+                  onToggleSelect: (_, __) {},
+                  onToggleSelectAll: (_) {},
                 ),
 
                 const SizedBox(height: 48),

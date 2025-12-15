@@ -70,12 +70,14 @@ class EditItemsDialog extends StatefulWidget {
 class _EditItemsDialogState extends State<EditItemsDialog> {
   final _sb = Supabase.instance.client;
 
-  // RBAC
+  // RBAC (non bloquant ici)
   final OrgRole _role = OrgRole.viewer;
   bool _roleLoaded = false;
   RolePermissions get _perm => kRoleMatrix[_role]!;
+
   // combien d'items modifier dans ce groupe
   late int _countToEdit;
+  late final TextEditingController _countCtrl;
 
   // appliquer sur les items les plus anciens (id ASC) ou récents (id DESC)
   bool _oldestFirst = true;
@@ -107,6 +109,19 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
   final _commissionFeesCtrl = TextEditingController();
   final _paymentTypeCtrl = TextEditingController();
   final _buyerInfosCtrl = TextEditingController();
+
+  // ✅ Devise UNIQUEMENT pour sale_price
+  String _saleCurrency = 'USD';
+  static const saleCurrencies = [
+    'USD',
+    'EUR',
+    'GBP',
+    'JPY',
+    'ILS',
+    'CHF',
+    'CAD',
+    'AED',
+  ];
 
   // Jeux pour dropdown
   List<Map<String, dynamic>> _games = const [];
@@ -140,6 +155,7 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
   void initState() {
     super.initState();
     _countToEdit = widget.availableQty.clamp(1, 999999);
+    _countCtrl = TextEditingController(text: _countToEdit.toString());
     _init();
   }
 
@@ -173,6 +189,11 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
     _commissionFeesCtrl.text = _numToText(s['commission_fees']);
     _paymentTypeCtrl.text = (s['payment_type'] ?? '').toString();
     _buyerInfosCtrl.text = (s['buyer_infos'] ?? '').toString();
+
+    // ✅ sale_currency (prioritaire), fallback legacy sur currency
+    final preSaleCur =
+        (s['sale_currency'] ?? s['currency'] ?? 'USD').toString();
+    _saleCurrency = _coerceString(preSaleCur, saleCurrencies, 'USD');
 
     // 2) Rôle (non bloquant ici)
     await _loadRole();
@@ -322,12 +343,15 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
             : null;
 
     // Champs qu’on souhaite hydrater depuis 'item'
+    // (✅ on ajoute sale_currency ; on garde currency pour fallback legacy)
     const itemCols = <String>[
       'grade_id',
       'grading_note',
       'grading_fees',
       'estimated_price',
       'sale_price',
+      'sale_currency',
+      'currency',
       'sale_date',
       'item_location',
       'tracking',
@@ -345,7 +369,6 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
       'type',
       'language',
       'game_id',
-      'currency',
     ];
 
     List<Map<String, dynamic>> rows = const [];
@@ -386,7 +409,6 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
             .eq('status', widget.status);
         if (orgId != null) q = q.eq('org_id', orgId);
 
-        // Appliquer seulement les clés présentes dans l’échantillon
         for (final k in strongKeys) {
           if (sample.containsKey(k) &&
               (sample[k] != null) &&
@@ -414,7 +436,6 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
       rows = const [];
     }
 
-    // Helper pour trouver la 1ère valeur non nulle pour une clé
     dynamic firstNonNull(String key) {
       for (final r in rows) {
         final v = r[key];
@@ -423,7 +444,6 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
       return null;
     }
 
-    // Remplir les contrôleurs qui sont vides
     void fillIfEmpty(TextEditingController c, dynamic value,
         {bool intCast = false}) {
       if (c.text.trim().isEmpty && value != null) {
@@ -454,7 +474,6 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
     fillIfEmpty(_paymentTypeCtrl, firstNonNull('payment_type'));
     fillIfEmpty(_buyerInfosCtrl, firstNonNull('buyer_infos'));
 
-    // Champs simples hors contrôleurs (type/lang/game/date)
     final maybeType = firstNonNull('type')?.toString();
     if (maybeType != null && maybeType.isNotEmpty) {
       _newType = _coerceString(maybeType, itemTypes, _newType);
@@ -476,6 +495,16 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
       _saleDate = _parseDate(maybeSaleDate);
     }
 
+    // ✅ sale_currency : priorité ; fallback legacy sur currency
+    final maybeSaleCurrency = firstNonNull('sale_currency')?.toString();
+    final maybeLegacyCurrency = firstNonNull('currency')?.toString();
+    final resolved = (maybeSaleCurrency != null && maybeSaleCurrency.isNotEmpty)
+        ? maybeSaleCurrency
+        : (maybeLegacyCurrency != null && maybeLegacyCurrency.isNotEmpty
+            ? maybeLegacyCurrency
+            : _saleCurrency);
+    _saleCurrency = _coerceString(resolved, saleCurrencies, _saleCurrency);
+
     // 🔎 Produit : si product_name vide, essayer depuis 'product'
     if (_productNameCtrl.text.trim().isEmpty) {
       try {
@@ -496,6 +525,8 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
 
   @override
   void dispose() {
+    _countCtrl.dispose();
+
     _gradeIdCtrl.dispose();
     _gradingNoteCtrl.dispose();
     _gradingFeesCtrl.dispose();
@@ -609,6 +640,13 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
     if (_changedSimple('language', _language)) m['language'] = _language;
     if (_changedSimple('game_id', _gameId)) m['game_id'] = _gameId;
 
+    // ✅ sale_currency UNIQUEMENT (ne touche plus "currency")
+    final oldSaleCur =
+        (_sample['sale_currency'] ?? _sample['currency'] ?? 'USD').toString();
+    if (oldSaleCur != _saleCurrency) {
+      m['sale_currency'] = _saleCurrency;
+    }
+
     // Frais totaux (répartis plus tard)
     if (_changedNum('shipping_fees', _shippingFeesCtrl.text)) {
       m['shipping_fees'] = _tryNum(_shippingFeesCtrl.text);
@@ -668,16 +706,13 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
   ) {
     final changes = <String, dynamic>{};
 
-    // Items fields
     baseUpdates.forEach((code, newV) {
       final oldV = _sample[code];
-      // on stringify légèrement pour éviter 1.0 vs 1
       if ((oldV?.toString() ?? '') != (newV?.toString() ?? '')) {
         changes[code] = {'old': oldV, 'new': newV};
       }
     });
 
-    // Product fields mappés
     if (productUpdates.containsKey('name')) {
       changes['product_name'] = {
         'old': _sample['product_name'],
@@ -688,12 +723,18 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
       changes['type'] = {'old': _sample['type'], 'new': productUpdates['type']};
     }
 
-    // language / game_id si modifiés
     if (_changedSimple('language', _language)) {
       changes['language'] = {'old': _sample['language'], 'new': _language};
     }
     if (_changedSimple('game_id', _gameId)) {
       changes['game_id'] = {'old': _sample['game_id'], 'new': _gameId};
+    }
+
+    // ✅ sale_currency (log)
+    final oldSaleCur =
+        (_sample['sale_currency'] ?? _sample['currency'] ?? 'USD').toString();
+    if (oldSaleCur != _saleCurrency) {
+      changes['sale_currency'] = {'old': oldSaleCur, 'new': _saleCurrency};
     }
 
     return changes;
@@ -712,7 +753,7 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
       'p_org_id': orgId,
       'p_item_ids': itemIds,
       'p_changes': changes,
-      'p_reason': null, // éventuellement un champ "motif" UI plus tard
+      'p_reason': null,
     });
   }
 
@@ -731,7 +772,6 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
             ? sample['group_sig'].toString()
             : null;
 
-    // 1) Chemin strict par group_sig si dispo
     if (groupSig != null) {
       var q = _sb
           .from('item')
@@ -747,7 +787,6 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
           .toList(growable: false);
     }
 
-    // 2) Fallback existant (si on arrive ici sans group_sig)
     dynamic norm(dynamic v) {
       if (v == null) return null;
       if (v is String && v.trim().isEmpty) return null;
@@ -799,7 +838,6 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
       'language',
       'channel_id',
       'purchase_date',
-      'currency',
       'supplier_name',
       'buyer_company',
       'item_location',
@@ -837,12 +875,10 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
       final sample = Map<String, dynamic>.from(_sample)
         ..putIfAbsent('product_id', () => widget.productId);
 
-      // 🚩 org_id pour le RPC
       final String? orgId = (sample['org_id']?.toString().isNotEmpty ?? false)
           ? sample['org_id'].toString()
           : null;
 
-      // 1) IDs à mettre à jour
       final ids = await _collectIdsForEdit(
         sample: sample,
         status: widget.status,
@@ -855,7 +891,7 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
         return;
       }
 
-      // 2) Division des frais totaux en "par unité" (pour l'UPDATE uniquement)
+      // Division des frais totaux en "par unité" (pour l'UPDATE uniquement)
       final updates = Map<String, dynamic>.from(baseUpdates);
       final n = ids.length;
       if (n > 0) {
@@ -869,7 +905,6 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
         }
       }
 
-      // 3) Apply DB
       final idsCsv = '(${ids.join(",")})';
       if (updates.isNotEmpty) {
         await _sb.from('item').update(updates).filter('id', 'in', idsCsv);
@@ -881,12 +916,11 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
             .eq('id', widget.productId);
       }
 
-      // 4) ✅ LOG ÉDITION GROUPÉE (1 seul event qui contient TOUTES les modifs)
       if (orgId != null) {
         await _logBatchEditRPC(
           orgId: orgId,
           itemIds: ids,
-          baseUpdates: baseUpdates, // ← total saisi conservé dans l’historique
+          baseUpdates: baseUpdates,
           productUpdates: productUpdates,
         );
       }
@@ -953,6 +987,29 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
       );
     }
 
+    // ==== Responsive helper (évite overflow) ====
+    Widget wrapFields(BoxConstraints cons, List<Widget> children) {
+      final w = cons.maxWidth;
+
+      // largeur "cellule" : 1 colonne sur petit écran, 2 sur moyen, 3-4 sur large
+      double cellW;
+      if (w >= 980) {
+        cellW = (w - 12 * 3) / 4;
+      } else if (w >= 720) {
+        cellW = (w - 12) / 2;
+      } else {
+        cellW = w;
+      }
+
+      return Wrap(
+        spacing: 12,
+        runSpacing: 12,
+        children: [
+          for (final c in children) SizedBox(width: cellW, child: c),
+        ],
+      );
+    }
+
     final header = Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       child: Row(
@@ -974,398 +1031,374 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
       ),
     );
 
-    final countController =
-        TextEditingController(text: _countToEdit.toString());
-
     final general = Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16),
-      child: Column(
-        children: [
-          Row(children: [
-            Expanded(
-              child: InputDecorator(
-                decoration: const InputDecoration(
-                  labelText: 'Number of items to edit',
-                ),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Slider(
-                        min: 1,
-                        max: widget.availableQty.toDouble(),
-                        divisions: widget.availableQty - 1 <= 0
-                            ? 1
-                            : widget.availableQty - 1,
-                        value: _countToEdit.toDouble(),
-                        label: '$_countToEdit',
-                        onChanged: (v) => setState(
-                          () => _countToEdit =
-                              v.round().clamp(1, widget.availableQty),
-                        ),
+      child: LayoutBuilder(
+        builder: (ctx, cons) {
+          return Column(
+            children: [
+              // ====== TOP: count + oldest/newest ======
+              Wrap(
+                spacing: 12,
+                runSpacing: 12,
+                children: [
+                  SizedBox(
+                    width: cons.maxWidth >= 720
+                        ? (cons.maxWidth - 12) / 2
+                        : cons.maxWidth,
+                    child: InputDecorator(
+                      decoration: const InputDecoration(
+                        labelText: 'Number of items to edit',
+                      ),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Slider(
+                              min: 1,
+                              max: widget.availableQty.toDouble(),
+                              divisions: widget.availableQty - 1 <= 0
+                                  ? 1
+                                  : widget.availableQty - 1,
+                              value: _countToEdit.toDouble(),
+                              label: '$_countToEdit',
+                              onChanged: (v) => setState(() {
+                                _countToEdit =
+                                    v.round().clamp(1, widget.availableQty);
+                                _countCtrl.text = _countToEdit.toString();
+                              }),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          SizedBox(
+                            width: 64,
+                            child: TextField(
+                              controller: _countCtrl,
+                              onChanged: (t) {
+                                final n = int.tryParse(t) ?? _countToEdit;
+                                setState(() => _countToEdit =
+                                    n.clamp(1, widget.availableQty));
+                              },
+                              decoration: const InputDecoration(isDense: true),
+                              keyboardType: TextInputType.number,
+                            ),
+                          ),
+                        ],
                       ),
                     ),
-                    const SizedBox(width: 8),
-                    SizedBox(
-                      width: 64,
-                      child: TextField(
-                        controller: countController,
-                        onChanged: (t) {
-                          final n = int.tryParse(t) ?? _countToEdit;
-                          setState(() =>
-                              _countToEdit = n.clamp(1, widget.availableQty));
-                        },
-                        decoration: const InputDecoration(isDense: true),
-                        keyboardType: TextInputType.number,
-                      ),
+                  ),
+                  SizedBox(
+                    width: cons.maxWidth >= 720
+                        ? (cons.maxWidth - 12) / 2
+                        : cons.maxWidth,
+                    child: SwitchListTile(
+                      value: _oldestFirst,
+                      onChanged: (v) => setState(() => _oldestFirst = v),
+                      title: const Text('Selection: oldest first'),
+                      subtitle: const Text('Disable to choose newest first'),
                     ),
-                  ],
-                ),
+                  ),
+                ],
               ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: SwitchListTile(
-                value: _oldestFirst,
-                onChanged: (v) => setState(() => _oldestFirst = v),
-                title: const Text('Selection: oldest first'),
-                subtitle: const Text('Disable to choose newest first'),
-              ),
-            ),
-          ]),
-          const SizedBox(height: 8),
+              const SizedBox(height: 12),
 
-          // ====== PRODUIT / ITEM DE TÊTE ======
-          Row(children: [
-            Expanded(
-              child: labelWithField(
-                'Product name',
-                TextField(
-                  controller: _productNameCtrl,
-                  decoration: const InputDecoration(hintText: 'Product name'),
+              // ====== PRODUIT / ITEM DE TÊTE ======
+              wrapFields(cons, [
+                labelWithField(
+                  'Product name',
+                  TextField(
+                    controller: _productNameCtrl,
+                    decoration: const InputDecoration(hintText: 'Product name'),
+                  ),
                 ),
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: labelWithField(
-                'Type',
+                labelWithField(
+                  'Type',
+                  DropdownButtonFormField<String>(
+                    value: _newType,
+                    items: _stringItems(itemTypes, extra: _newType),
+                    onChanged: (v) => setState(() => _newType = v ?? 'single'),
+                    decoration: const InputDecoration(hintText: 'Type'),
+                  ),
+                ),
+                labelWithField(
+                  'Language',
+                  DropdownButtonFormField<String>(
+                    value: _language,
+                    items: _stringItems(langs, extra: _language),
+                    onChanged: (v) => setState(() => _language = v ?? 'EN'),
+                    decoration: const InputDecoration(hintText: 'Language'),
+                  ),
+                ),
+                labelWithField(
+                  'Game',
+                  DropdownButtonFormField<int>(
+                    value: _gameId,
+                    items: _games
+                        .map((g) => DropdownMenuItem<int>(
+                              value: g['id'] as int,
+                              child: Text(g['label'] as String),
+                            ))
+                        .toList(),
+                    onChanged: (v) => setState(() => _gameId = v),
+                    decoration: const InputDecoration(hintText: 'Game'),
+                  ),
+                ),
+                // ✅ sale_currency only
+                labelWithField(
+                  'Sale currency',
+                  DropdownButtonFormField<String>(
+                    value: _saleCurrency,
+                    items: saleCurrencies
+                        .map((c) => DropdownMenuItem(value: c, child: Text(c)))
+                        .toList(),
+                    onChanged: (v) =>
+                        setState(() => _saleCurrency = v ?? _saleCurrency),
+                    decoration:
+                        const InputDecoration(hintText: 'Sale currency'),
+                  ),
+                ),
+              ]),
+              const SizedBox(height: 12),
+
+              // ====== STATUS ======
+              labelWithField(
+                'Status',
                 DropdownButtonFormField<String>(
-                  value: _newType,
-                  items: _stringItems(itemTypes, extra: _newType),
-                  onChanged: (v) => setState(() => _newType = v ?? 'single'),
-                  decoration: const InputDecoration(hintText: 'Type'),
-                ),
-              ),
-            ),
-          ]),
-          const SizedBox(height: 8),
-
-          Row(children: [
-            Expanded(
-              child: labelWithField(
-                'Language',
-                DropdownButtonFormField<String>(
-                  value: _language,
-                  items: _stringItems(langs, extra: _language),
-                  onChanged: (v) => setState(() => _language = v ?? 'EN'),
-                  decoration: const InputDecoration(hintText: 'Language'),
-                ),
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: labelWithField(
-                'Game',
-                DropdownButtonFormField<int>(
-                  value: _gameId,
-                  items: _games
-                      .map((g) => DropdownMenuItem<int>(
-                            value: g['id'] as int,
-                            child: Text(g['label'] as String),
-                          ))
-                      .toList(),
-                  onChanged: (v) => setState(() => _gameId = v),
-                  decoration: const InputDecoration(hintText: 'Game'),
-                ),
-              ),
-            ),
-          ]),
-          const SizedBox(height: 8),
-
-          // ====== STATUS ======
-          labelWithField(
-            'Status',
-            DropdownButtonFormField<String>(
-              value: (_newStatus.isNotEmpty ? _newStatus : widget.status),
-              items: _stringItems(kAllStatuses,
-                  extra: _newStatus.isNotEmpty ? _newStatus : widget.status),
-              onChanged: (v) => setState(() => _newStatus = v ?? widget.status),
-              decoration: const InputDecoration(hintText: 'Choose a status'),
-            ),
-          ),
-          const SizedBox(height: 8),
-
-          // ====== LIGNE 1 ======
-          Row(children: [
-            Expanded(
-              child: labelWithField(
-                'Grade ID',
-                TextField(
-                  controller: _gradeIdCtrl,
-                  decoration: const InputDecoration(
-                      hintText: 'PSA serial number, etc.'),
-                ),
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: labelWithField(
-                'Grading Note',
-                TextField(
-                  controller: _gradingNoteCtrl,
+                  value: (_newStatus.isNotEmpty ? _newStatus : widget.status),
+                  items: _stringItems(
+                    kAllStatuses,
+                    extra: _newStatus.isNotEmpty ? _newStatus : widget.status,
+                  ),
+                  onChanged: (v) =>
+                      setState(() => _newStatus = v ?? widget.status),
                   decoration:
-                      const InputDecoration(hintText: 'e.g.: Excellent'),
+                      const InputDecoration(hintText: 'Choose a status'),
                 ),
               ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: labelWithField(
-                'Grading Fees (USD)',
-                numberField(_gradingFeesCtrl, 'e.g.: 25.00', decimal: true),
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: labelWithField(
-                'Item Location',
-                TextField(
-                  controller: _itemLocationCtrl,
-                  decoration:
-                      const InputDecoration(hintText: 'e.g.: Paris / Dubai'),
+              const SizedBox(height: 12),
+
+              // ====== LIGNE 1 ======
+              wrapFields(cons, [
+                labelWithField(
+                  'Grade ID',
+                  TextField(
+                    controller: _gradeIdCtrl,
+                    decoration: const InputDecoration(
+                        hintText: 'PSA serial number, etc.'),
+                  ),
                 ),
-              ),
-            ),
-          ]),
-          const SizedBox(height: 8),
+                labelWithField(
+                  'Grading Note',
+                  TextField(
+                    controller: _gradingNoteCtrl,
+                    decoration:
+                        const InputDecoration(hintText: 'e.g.: Excellent'),
+                  ),
+                ),
+                // ✅ USD only
+                labelWithField(
+                  'Grading Fees (USD)',
+                  numberField(_gradingFeesCtrl, 'e.g.: 25.00', decimal: true),
+                ),
+                labelWithField(
+                  'Item Location',
+                  TextField(
+                    controller: _itemLocationCtrl,
+                    decoration:
+                        const InputDecoration(hintText: 'e.g.: Paris / Dubai'),
+                  ),
+                ),
+              ]),
+              const SizedBox(height: 12),
 
-          // ====== LIGNE 2 ======
-          Row(children: [
-            Expanded(
-              child: labelWithField(
-                'Unit cost (USD)',
-                _perm.canSeeUnitCosts
-                    ? numberField(_unitCostCtrl, 'e.g.: 95.00', decimal: true)
-                    : const InputDecorator(
-                        decoration: InputDecoration(),
-                        child: Padding(
-                          padding: EdgeInsets.symmetric(vertical: 8),
-                          child: Text('—'),
-                        ),
-                      ),
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: labelWithField(
-                'Estimated price per unit (USD)',
-                numberField(_estimatedPriceCtrl, 'e.g.: 125.00', decimal: true),
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: labelWithField(
-                'Sale price',
-                numberField(_salePriceCtrl, 'e.g.: 145.00', decimal: true),
-              ),
-            ),
-          ]),
-          const SizedBox(height: 8),
-
-          // ====== LIGNE 3 ======
-          Row(children: [
-            Expanded(
-              child: labelWithField(
-                'Sale date',
-                Row(
-                  children: [
-                    Expanded(
-                      child: InkWell(
-                        onTap: _pickSaleDate,
-                        child: InputDecorator(
-                          decoration:
-                              const InputDecoration(hintText: 'YYYY-MM-DD'),
+              // ====== LIGNE 2 ======
+              wrapFields(cons, [
+                // ✅ USD only
+                labelWithField(
+                  'Unit cost (USD)',
+                  _perm.canSeeUnitCosts
+                      ? numberField(_unitCostCtrl, 'e.g.: 95.00', decimal: true)
+                      : const InputDecorator(
+                          decoration: InputDecoration(),
                           child: Padding(
-                            padding: const EdgeInsets.symmetric(vertical: 10),
-                            child: Text(
-                              _saleDate == null
-                                  ? '—'
-                                  : _saleDate!
-                                      .toIso8601String()
-                                      .substring(0, 10),
+                            padding: EdgeInsets.symmetric(vertical: 8),
+                            child: Text('—'),
+                          ),
+                        ),
+                ),
+                // ✅ USD only
+                labelWithField(
+                  'Estimated price per unit (USD)',
+                  numberField(_estimatedPriceCtrl, 'e.g.: 125.00',
+                      decimal: true),
+                ),
+                // ✅ sale currency only
+                labelWithField(
+                  'Sale price ($_saleCurrency)',
+                  numberField(_salePriceCtrl, 'e.g.: 145.00', decimal: true),
+                ),
+              ]),
+              const SizedBox(height: 12),
+
+              // ====== LIGNE 3 ======
+              wrapFields(cons, [
+                labelWithField(
+                  'Sale date',
+                  Row(
+                    children: [
+                      Expanded(
+                        child: InkWell(
+                          onTap: _pickSaleDate,
+                          child: InputDecorator(
+                            decoration:
+                                const InputDecoration(hintText: 'YYYY-MM-DD'),
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(vertical: 10),
+                              child: Text(
+                                _saleDate == null
+                                    ? '—'
+                                    : _saleDate!
+                                        .toIso8601String()
+                                        .substring(0, 10),
+                              ),
                             ),
                           ),
                         ),
                       ),
+                      IconButton(
+                        tooltip: 'Clear date',
+                        onPressed: () => setState(() => _saleDate = null),
+                        icon: const Iconify(Mdi.close),
+                      ),
+                    ],
+                  ),
+                ),
+                labelWithField(
+                  'Tracking',
+                  TextField(
+                    controller: _trackingCtrl,
+                    decoration: const InputDecoration(
+                      hintText: 'e.g.: UPS 1Z... / DHL *****...',
                     ),
-                    IconButton(
-                      tooltip: 'Clear date',
-                      onPressed: () => setState(() => _saleDate = null),
-                      icon: const Iconify(Mdi.close),
-                    ),
-                  ],
+                  ),
                 ),
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: labelWithField(
-                'Tracking',
-                TextField(
-                  controller: _trackingCtrl,
-                  decoration: const InputDecoration(
-                      hintText: 'e.g.: UPS 1Z... / DHL *****...'),
-                ),
-              ),
-            ),
-          ]),
-          const SizedBox(height: 8),
+              ]),
+              const SizedBox(height: 12),
 
-          // ====== LIGNE 4 ======
-          Row(children: [
-            Expanded(
-              child: labelWithField(
-                'Sale location (Channel ID)',
-                TextField(
-                  controller: _channelIdCtrl,
-                  keyboardType:
-                      const TextInputType.numberWithOptions(decimal: false),
-                  decoration: const InputDecoration(hintText: 'e.g.: 12'),
+              // ====== LIGNE 4 ======
+              wrapFields(cons, [
+                labelWithField(
+                  'Sale location (Channel ID)',
+                  TextField(
+                    controller: _channelIdCtrl,
+                    keyboardType:
+                        const TextInputType.numberWithOptions(decimal: false),
+                    decoration: const InputDecoration(hintText: 'e.g.: 12'),
+                  ),
                 ),
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: labelWithField(
-                'Buyer company',
-                TextField(
-                  controller: _buyerCompanyCtrl,
-                  decoration: const InputDecoration(hintText: 'Buyer company'),
+                labelWithField(
+                  'Buyer company',
+                  TextField(
+                    controller: _buyerCompanyCtrl,
+                    decoration:
+                        const InputDecoration(hintText: 'Buyer company'),
+                  ),
                 ),
-              ),
-            ),
-          ]),
-          const SizedBox(height: 8),
+              ]),
+              const SizedBox(height: 12),
 
-          // ====== LIGNE 5 ======
-          Row(children: [
-            Expanded(
-              child: labelWithField(
-                'Supplier name',
-                TextField(
-                  controller: _supplierNameCtrl,
-                  decoration: const InputDecoration(hintText: 'Supplier'),
+              // ====== LIGNE 5 ======
+              wrapFields(cons, [
+                labelWithField(
+                  'Supplier name',
+                  TextField(
+                    controller: _supplierNameCtrl,
+                    decoration: const InputDecoration(hintText: 'Supplier'),
+                  ),
                 ),
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: labelWithField(
-                'Notes',
-                TextField(
-                  controller: _notesCtrl,
-                  minLines: 1,
-                  maxLines: 3,
-                  decoration: const InputDecoration(hintText: 'Notes'),
+                labelWithField(
+                  'Notes',
+                  TextField(
+                    controller: _notesCtrl,
+                    minLines: 1,
+                    maxLines: 3,
+                    decoration: const InputDecoration(hintText: 'Notes'),
+                  ),
                 ),
-              ),
-            ),
-          ]),
-          const SizedBox(height: 8),
+              ]),
+              const SizedBox(height: 12),
 
-          // ====== LIGNE 6 (frais & paiements) ======
-          Row(children: [
-            Expanded(
-              child: labelWithField(
-                'Shipping fees (USD)',
-                numberField(_shippingFeesCtrl, 'e.g.: 12.50', decimal: true),
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: labelWithField(
-                'Commission fees (USD)',
-                numberField(_commissionFeesCtrl, 'e.g.: 5.90', decimal: true),
-              ),
-            ),
-          ]),
-          const SizedBox(height: 8),
+              // ====== LIGNE 6 (frais & paiements) ======
+              wrapFields(cons, [
+                // ✅ USD only
+                labelWithField(
+                  'Shipping fees (USD)',
+                  numberField(_shippingFeesCtrl, 'e.g.: 12.50', decimal: true),
+                ),
+                // ✅ USD only
+                labelWithField(
+                  'Commission fees (USD)',
+                  numberField(_commissionFeesCtrl, 'e.g.: 5.90', decimal: true),
+                ),
+              ]),
+              const SizedBox(height: 12),
 
-          Row(children: [
-            Expanded(
-              child: labelWithField(
-                'Payment type',
-                TextField(
-                  controller: _paymentTypeCtrl,
-                  decoration: const InputDecoration(
-                      hintText: 'e.g. PayPal / Bank / ...'),
+              wrapFields(cons, [
+                labelWithField(
+                  'Payment type',
+                  TextField(
+                    controller: _paymentTypeCtrl,
+                    decoration: const InputDecoration(
+                        hintText: 'e.g. PayPal / Bank / ...'),
+                  ),
                 ),
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: labelWithField(
-                'Buyer infos',
-                TextField(
-                  controller: _buyerInfosCtrl,
-                  minLines: 1,
-                  maxLines: 3,
-                  decoration: const InputDecoration(
-                      hintText: 'Name / Address / Order ref...'),
+                labelWithField(
+                  'Buyer infos',
+                  TextField(
+                    controller: _buyerInfosCtrl,
+                    minLines: 1,
+                    maxLines: 3,
+                    decoration: const InputDecoration(
+                        hintText: 'Name / Address / Order ref...'),
+                  ),
                 ),
-              ),
-            ),
-          ]),
-          const SizedBox(height: 8),
+              ]),
+              const SizedBox(height: 12),
 
-          // ====== LIGNE 7 : Fichiers ======
-          Row(children: [
-            Expanded(
-              child: labelWithField(
-                'Photo',
-                StorageUploadTile(
-                  label: 'Upload / View photo',
-                  bucket: 'item-photos',
-                  objectPrefix: 'items/${widget.productId}',
-                  initialUrl:
-                      _photoUrlCtrl.text.isEmpty ? null : _photoUrlCtrl.text,
-                  onUrlChanged: (u) =>
-                      setState(() => _photoUrlCtrl.text = u ?? ''),
-                  acceptImagesOnly: true,
-                  onError: (err) => _showUploadError(err),
+              // ====== LIGNE 7 : Fichiers ======
+              wrapFields(cons, [
+                labelWithField(
+                  'Photo',
+                  StorageUploadTile(
+                    label: 'Upload / View photo',
+                    bucket: 'item-photos',
+                    objectPrefix: 'items/${widget.productId}',
+                    initialUrl:
+                        _photoUrlCtrl.text.isEmpty ? null : _photoUrlCtrl.text,
+                    onUrlChanged: (u) =>
+                        setState(() => _photoUrlCtrl.text = u ?? ''),
+                    acceptImagesOnly: true,
+                    onError: (err) => _showUploadError(err),
+                  ),
                 ),
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: labelWithField(
-                'Document',
-                StorageUploadTile(
-                  label: 'Upload / Open document',
-                  bucket: 'item-docs',
-                  objectPrefix: 'items/${widget.productId}',
-                  initialUrl: _documentUrlCtrl.text.isEmpty
-                      ? null
-                      : _documentUrlCtrl.text,
-                  onUrlChanged: (u) =>
-                      setState(() => _documentUrlCtrl.text = u ?? ''),
-                  acceptDocsOnly: true,
-                  onError: (err) => _showUploadError(err),
+                labelWithField(
+                  'Document',
+                  StorageUploadTile(
+                    label: 'Upload / Open document',
+                    bucket: 'item-docs',
+                    objectPrefix: 'items/${widget.productId}',
+                    initialUrl: _documentUrlCtrl.text.isEmpty
+                        ? null
+                        : _documentUrlCtrl.text,
+                    onUrlChanged: (u) =>
+                        setState(() => _documentUrlCtrl.text = u ?? ''),
+                    acceptDocsOnly: true,
+                    onError: (err) => _showUploadError(err),
+                  ),
                 ),
-              ),
-            ),
-          ]),
-        ],
+              ]),
+            ],
+          );
+        },
       ),
     );
 
@@ -1384,7 +1417,8 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
                 ? const SizedBox(
                     width: 18,
                     height: 18,
-                    child: CircularProgressIndicator(strokeWidth: 2))
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
                 : const Iconify(Mdi.content_save),
             label: const Text('Apply'),
           ),
@@ -1417,8 +1451,9 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
         ),
         actions: [
           TextButton(
-              onPressed: () => Navigator.of(ctx).pop(),
-              child: const Text('OK')),
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('OK'),
+          ),
         ],
       ),
     );

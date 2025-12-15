@@ -120,6 +120,7 @@ class DetailsService {
       'grading_fees',
       'sale_date',
       'sale_price',
+      'sale_currency',
       'tracking',
       'photo_url',
       'document_url',

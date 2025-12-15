@@ -1,4 +1,3 @@
-// new_stock_page.dart (extrait complet du fichier, modifications dans _save() uniquement)
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -18,7 +17,7 @@ import 'package:iconify_flutter/icons/mdi.dart';
 
 class NewStockPage extends StatefulWidget {
   const NewStockPage({super.key, required this.orgId});
-  final String orgId; // ← AJOUT : org_id courant
+  final String orgId; // ← org_id courant
 
   @override
   State<NewStockPage> createState() => _NewStockPageState();
@@ -33,6 +32,14 @@ class _NewStockPageState extends State<NewStockPage> {
   final _nameCtrl = TextEditingController();
   String _lang = 'EN';
 
+  // ✅ Devise (prix par devise)
+  String _currency = 'USD';
+  static const currencies = ['USD', 'EUR', 'GBP', 'JPY', 'ILS', 'CHF', 'CAD'];
+
+  // ✅ NEW: devise de vente (sale_currency) indépendante de currency (legacy)
+  // Par défaut on la synchronise sur _currency.
+  final _saleCurrencyCtrl = TextEditingController(text: 'USD');
+
   // Sélection catalogue (externe)
   Map<String, dynamic>? _selectedCatalogCard; // blueprint complet
   int? _selectedBlueprintId; // blueprints.id (externe)
@@ -42,9 +49,11 @@ class _NewStockPageState extends State<NewStockPage> {
   final _supplierNameCtrl = TextEditingController(); // optionnel
   final _buyerCompanyCtrl = TextEditingController(); // optionnel
   DateTime _purchaseDate = DateTime.now();
-  final _totalCostCtrl = TextEditingController(); // USD (total)
+  final _totalCostCtrl =
+      TextEditingController(); // total (dans la devise choisie)
   final _qtyCtrl = TextEditingController(text: '1');
-  final _feesCtrl = TextEditingController(text: '0'); // USD
+  final _feesCtrl =
+      TextEditingController(text: '0'); // total (dans la devise choisie)
   final _estimatedPriceCtrl = TextEditingController(); // optionnel
   String _initStatus = 'paid';
 
@@ -103,6 +112,7 @@ class _NewStockPageState extends State<NewStockPage> {
   @override
   void initState() {
     super.initState();
+    _saleCurrencyCtrl.text = _currency; // sync par défaut
     _loadGames();
   }
 
@@ -128,6 +138,7 @@ class _NewStockPageState extends State<NewStockPage> {
     _buyerInfosCtrl.dispose();
     _gradingNoteCtrl.dispose();
     _gradingFeesCtrl.dispose();
+    _saleCurrencyCtrl.dispose(); // ✅ NEW
     super.dispose();
   }
 
@@ -165,6 +176,11 @@ class _NewStockPageState extends State<NewStockPage> {
     return double.tryParse(s);
   }
 
+  String? _saleCurrencyValueOrNull() {
+    final t = _saleCurrencyCtrl.text.trim().toUpperCase();
+    return t.isEmpty ? null : t;
+  }
+
   Future<void> _save() async {
     if (!_formKey.currentState!.validate()) return;
 
@@ -200,6 +216,13 @@ class _NewStockPageState extends State<NewStockPage> {
       return;
     }
 
+    final salePrice = _salePriceCtrl.text.trim().isEmpty
+        ? null
+        : double.tryParse(_salePriceCtrl.text.trim().replaceAll(',', '.'));
+
+    // ✅ NEW: sale_currency (si vide -> null, fallback legacy côté affichage/compute)
+    final saleCurrency = _saleCurrencyValueOrNull();
+
     setState(() => _saving = true);
     try {
       if (_selectedBlueprintId != null && _selectedCatalogCard != null) {
@@ -213,7 +236,10 @@ class _NewStockPageState extends State<NewStockPage> {
           lang: _lang,
           initStatus: _initStatus,
           purchaseDate: _purchaseDate,
-          currency: 'USD',
+
+          // ✅ devise legacy (coûts)
+          currency: _currency,
+
           supplierName: _supplierNameCtrl.text.trim().isEmpty
               ? null
               : _supplierNameCtrl.text.trim(),
@@ -230,10 +256,11 @@ class _NewStockPageState extends State<NewStockPage> {
           gradingNote: _gradingNoteCtrl.text.trim().isEmpty
               ? null
               : _gradingNoteCtrl.text.trim(),
-          salePrice: _salePriceCtrl.text.trim().isEmpty
-              ? null
-              : double.tryParse(
-                  _salePriceCtrl.text.trim().replaceAll(',', '.')),
+
+          // ✅ NEW: sale_currency + sale_price
+          salePrice: salePrice,
+          saleCurrency: saleCurrency,
+
           tracking: _trackingCtrl.text.trim().isEmpty
               ? null
               : _trackingCtrl.text.trim(),
@@ -246,6 +273,7 @@ class _NewStockPageState extends State<NewStockPage> {
           itemLocation: _itemLocationCtrl.text.trim().isEmpty
               ? null
               : _itemLocationCtrl.text.trim(),
+
           // ⬇️ on passe la valeur PAR UNITÉ
           shippingFees: shippingPerUnit,
           commissionFees: commissionPerUnit,
@@ -273,6 +301,10 @@ class _NewStockPageState extends State<NewStockPage> {
           totalCost: totalCost,
           fees: _num(_feesCtrl) ?? 0,
           initStatus: _initStatus,
+
+          // ✅ devise legacy (coûts)
+          currency: _currency,
+
           tracking: _trackingCtrl.text.trim(),
           photoUrl: _photoUrlCtrl.text.trim(),
           documentUrl: _docUrlCtrl.text.trim(),
@@ -282,15 +314,16 @@ class _NewStockPageState extends State<NewStockPage> {
           gradingNote: _gradingNoteCtrl.text.trim(),
           gradingFees: _num(_gradingFeesCtrl),
           itemLocation: _itemLocationCtrl.text.trim(),
+
           // ⬇️ on passe la valeur PAR UNITÉ
           shippingFees: shippingPerUnit,
           commissionFees: commissionPerUnit,
           paymentType: _paymentTypeCtrl.text.trim(),
           buyerInfos: _buyerInfosCtrl.text.trim(),
-          salePrice: _salePriceCtrl.text.trim().isEmpty
-              ? null
-              : double.tryParse(
-                  _salePriceCtrl.text.trim().replaceAll(',', '.')),
+
+          // ✅ NEW: sale_currency + sale_price
+          salePrice: salePrice,
+          saleCurrency: saleCurrency,
         );
       } else {
         // Cas C : ni blueprint ni nom → on informe l’utilisateur
@@ -381,6 +414,29 @@ class _NewStockPageState extends State<NewStockPage> {
                 ),
                 const SizedBox(height: 12),
 
+                // ✅ Devise (prix par devise) - UI simple
+                DropdownButtonFormField<String>(
+                  value: _currency,
+                  items: currencies
+                      .map((c) => DropdownMenuItem(value: c, child: Text(c)))
+                      .toList(),
+                  onChanged: (v) {
+                    final newCur = (v ?? 'USD').toUpperCase();
+                    final prevCur = _currency.toUpperCase();
+                    setState(() => _currency = newCur);
+
+                    // ✅ Si l’utilisateur n’a pas “décorrélé” la devise de vente,
+                    // on suit la devise legacy.
+                    final saleCurNow =
+                        _saleCurrencyCtrl.text.trim().toUpperCase();
+                    final shouldSync =
+                        saleCurNow.isEmpty || saleCurNow == prevCur;
+                    if (shouldSync) _saleCurrencyCtrl.text = newCur;
+                  },
+                  decoration: const InputDecoration(labelText: 'Currency *'),
+                ),
+                const SizedBox(height: 12),
+
                 // ——— Achat ———
                 PurchaseSection(
                   supplierField: LookupAutocompleteField(
@@ -424,6 +480,7 @@ class _NewStockPageState extends State<NewStockPage> {
 
                 if (_showMore)
                   OptionsSection(
+                    currency: _currency, // ✅ labels dynamiques (coûts)
                     gradeIdCtrl: _gradeIdCtrl,
                     gradingNoteCtrl: _gradingNoteCtrl,
                     gradingFeesCtrl: _gradingFeesCtrl,
@@ -459,6 +516,10 @@ class _NewStockPageState extends State<NewStockPage> {
                     shippingFeesCtrl: _shippingFeesCtrl,
                     commissionFeesCtrl: _commissionFeesCtrl,
                     salePriceCtrl: _salePriceCtrl,
+
+                    // ✅ NEW: champ sale_currency
+                    saleCurrencyCtrl: _saleCurrencyCtrl,
+
                     paymentTypeCtrl: _paymentTypeCtrl,
                     buyerInfosCtrl: _buyerInfosCtrl,
                   ),
