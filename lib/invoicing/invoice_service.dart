@@ -1,5 +1,4 @@
 // lib/invoicing/invoiceService.dart
-
 // ignore_for_file: unnecessary_cast
 
 import 'dart:typed_data';
@@ -35,6 +34,23 @@ class InvoiceService {
   final SupabaseClient client;
 
   InvoiceService(this.client);
+
+  // -------------------- Helpers --------------------
+
+  /// Devise de vente: priorité sale_currency, fallback currency, fallback fallbackCurrency, sinon USD.
+  String _saleCurrencyOfRow(Map<String, dynamic> r,
+      {String? fallbackCurrency}) {
+    final sc = (r['sale_currency'] ?? '').toString().trim();
+    if (sc.isNotEmpty) return sc.toUpperCase();
+
+    final c = (r['currency'] ?? '').toString().trim();
+    if (c.isNotEmpty) return c.toUpperCase();
+
+    final fb = (fallbackCurrency ?? '').trim();
+    if (fb.isNotEmpty) return fb.toUpperCase();
+
+    return 'USD';
+  }
 
   // ---------------------------------------------------------------------------
   // Folders
@@ -221,13 +237,13 @@ class InvoiceService {
 
   /// Create a SALES invoice for a specific item (use-case: "Create invoice" button)
   ///
-  /// All seller / buyer fields can be overridden from the UI.
+  /// ✅ Currency is derived from item.sale_currency (fallback item.currency).
   /// Buyer = end customer from `buyer_infos` (NOT buyer_company).
   Future<Invoice> createInvoiceForItem({
     required String orgId,
     required int itemId,
     required String invoiceNumber,
-    required String currency,
+    required String currency, // kept for backward-compat; used only as fallback
     int? folderId,
     double taxRate = 0.0,
     DateTime? dueDate,
@@ -253,15 +269,21 @@ class InvoiceService {
     String? paymentTerms,
     String? notes,
   }) async {
-    // 1. Fetch the item and product name
+    // 1. Fetch the item and product name (+ sale_currency)
     final itemRow = await client
         .from('item')
-        .select('*, product:product(name)')
+        .select(
+            '*, sale_currency, currency, buyer_infos, sale_price, unit_cost, product:product(name)')
         .eq('id', itemId)
         .single();
 
     final productName =
         (itemRow['product'] as Map)['name']?.toString() ?? 'Item';
+
+    // ✅ Invoice currency = sale_currency (fallback currency, fallback param)
+    final String invoiceCurrency = _saleCurrencyOfRow(
+        Map<String, dynamic>.from(itemRow as Map),
+        fallbackCurrency: currency);
 
     // ---------- LOGIQUE PRIX / TVA ----------
     // sale_price = TTC quand taxRate > 0
@@ -294,8 +316,7 @@ class InvoiceService {
     // ---------- FIN LOGIQUE PRIX / TVA ----------
 
     // Default buyer name from item: use buyer_infos ONLY (end customer)
-    final itemBuyerInfos =
-        (itemRow['buyer_infos'] as String?)?.trim(); // end customer
+    final itemBuyerInfos = (itemRow['buyer_infos'] as String?)?.trim();
     final computedBuyerName =
         (itemBuyerInfos != null && itemBuyerInfos.isNotEmpty)
             ? itemBuyerInfos
@@ -316,7 +337,7 @@ class InvoiceService {
       invoiceNumber: invoiceNumber,
       issueDate: DateTime.now(),
       dueDate: dueDate,
-      currency: currency,
+      currency: invoiceCurrency,
 
       // Seller
       sellerName: sellerName?.trim().isNotEmpty == true
@@ -382,15 +403,14 @@ class InvoiceService {
 
   /// Create a SALES invoice for multiple items.
   ///
-  /// - All items must share the same currency.
-  /// - Buyer = end customer from `buyer_infos` (NOT buyer_company).
-  /// - Lines are **grouped**: same product name & same unit TTC price
-  ///   => one line with quantity xN.
+  /// ✅ All items must share the same SALE currency (sale_currency fallback currency).
+  /// Buyer = end customer from `buyer_infos`.
+  /// Lines are grouped by product name & unit TTC price.
   Future<Invoice> createInvoiceForItems({
     required String orgId,
     required List<int> itemIds,
     required String invoiceNumber,
-    required String currency,
+    required String currency, // kept for backward-compat; used only as fallback
     int? folderId,
     double taxRate = 0.0,
     DateTime? dueDate,
@@ -420,11 +440,11 @@ class InvoiceService {
       throw ArgumentError('itemIds cannot be empty for multi-item invoice.');
     }
 
-    // 1. Fetch all items + product names
+    // 1. Fetch all items + product names (+ sale_currency)
     final rows = await client
         .from('item')
         .select(
-          'id, sale_price, unit_cost, currency, buyer_infos, product:product(name)',
+          'id, sale_price, sale_currency, unit_cost, currency, buyer_infos, product:product(name)',
         )
         .inFilter('id', itemIds);
 
@@ -453,15 +473,15 @@ class InvoiceService {
             ? buyerNameOverride.trim()
             : defaultBuyerName;
 
-    // Consistency checks: currency
-    final String firstCurrency =
-        (firstItem['currency'] ?? currency).toString().toUpperCase();
+    // ✅ Consistency check: SALE currency (sale_currency fallback currency)
+    final String firstSaleCurrency =
+        _saleCurrencyOfRow(firstItem, fallbackCurrency: currency);
 
     for (final r in items) {
-      final cur = (r['currency'] ?? firstCurrency).toString().toUpperCase();
-      if (cur != firstCurrency) {
+      final cur = _saleCurrencyOfRow(r, fallbackCurrency: currency);
+      if (cur != firstSaleCurrency) {
         throw Exception(
-          'All selected items must share the same currency. Found both $firstCurrency and $cur.',
+          'All selected items must share the same SALE currency. Found both $firstSaleCurrency and $cur.',
         );
       }
     }
@@ -476,7 +496,7 @@ class InvoiceService {
       invoiceNumber: invoiceNumber,
       issueDate: DateTime.now(),
       dueDate: dueDate,
-      currency: firstCurrency,
+      currency: firstSaleCurrency,
 
       // Seller
       sellerName: sellerName?.trim().isNotEmpty == true
@@ -506,7 +526,6 @@ class InvoiceService {
       paymentTerms:
           paymentTerms ?? 'Payment due within 7 days by bank transfer.',
       documentUrl: null,
-      // Multi-items => on ne lie pas à un seul item
       relatedItemId: null,
       relatedOrderId: null,
       createdAt: DateTime.now(),
@@ -549,7 +568,7 @@ class InvoiceService {
       }
       // ---------- FIN LOGIQUE PRIX / TVA ----------
 
-      // Clé de regroupement = produit + PRIX TTC (ce que tu vois en sale_price)
+      // Clé de regroupement = produit + PRIX TTC
       final key = '$productName|$unitPriceIncl';
 
       grouped
@@ -585,7 +604,7 @@ class InvoiceService {
       final line = InvoiceLine(
         id: 0,
         invoiceId: createdInvoice.id,
-        itemId: g.itemIdRepresentative, // un item représentatif du groupe
+        itemId: g.itemIdRepresentative,
         description: g.description,
         quantity: quantity,
         unitPrice: unitPriceExcl, // HT sur la ligne
@@ -620,12 +639,11 @@ class InvoiceService {
   // ---------------------------------------------------------------------------
 
   /// Create a PURCHASE invoice for an item, using an **external** document URL.
-  ///
   Future<Invoice> createPurchaseInvoiceForItem({
     required String orgId,
     required int itemId,
     required String supplierName,
-    required String invoiceNumber, // supplier invoice ref
+    required String invoiceNumber,
     required String currency,
     required String documentUrl,
     int? folderId,
@@ -651,7 +669,7 @@ class InvoiceService {
     final totalExcl =
         (unitCost + unitFees + shippingFees + commissionFees + gradingFees)
             .toDouble();
-    final totalTax = 0.0; // no tax breakdown handled for purchase invoices now
+    final totalTax = 0.0;
     final totalIncl = totalExcl;
 
     // Issue date: use item.purchase_date if available
@@ -660,9 +678,7 @@ class InvoiceService {
     if (purchaseDateRaw != null) {
       try {
         effectiveIssueDate = DateTime.parse(purchaseDateRaw.toString());
-      } catch (_) {
-        // ignore, keep now()
-      }
+      } catch (_) {}
     }
 
     // Buyer = organization name
@@ -678,16 +694,14 @@ class InvoiceService {
           orgRow['name'].toString().trim().isNotEmpty) {
         buyerName = orgRow['name'].toString().trim();
       }
-    } catch (_) {
-      // ignore, keep default
-    }
+    } catch (_) {}
 
     final invoice = Invoice(
       id: 0,
       orgId: orgId,
       folderId: folderId,
       type: InvoiceType.purchase,
-      status: InvoiceStatus.paid, // archived supplier invoice
+      status: InvoiceStatus.paid,
       invoiceNumber: invoiceNumber,
       issueDate: issueDate ?? effectiveIssueDate,
       dueDate: null,
@@ -731,7 +745,7 @@ class InvoiceService {
     final data =
         await client.from('invoice').insert(insertMap).select().single();
 
-    // ⚠ On reflète aussi sur l'item pour que la page details voie "un document disponible"
+    // ⚠ On reflète aussi sur l'item
     await client
         .from('item')
         .update({'document_url': documentUrl}).eq('id', itemId);
@@ -744,8 +758,6 @@ class InvoiceService {
   // ---------------------------------------------------------------------------
 
   /// Upload the PDF to Supabase Storage and link it to invoice + ONE item.
-  ///
-  /// Typically used for SALES invoices generated by the app (single item).
   Future<void> uploadInvoicePdfAndLink({
     required String orgId,
     required Invoice invoice,
@@ -763,12 +775,10 @@ class InvoiceService {
 
     final documentPath = 'invoices/$path';
 
-    // Update invoice
     await client
         .from('invoice')
         .update({'document_url': documentPath}).eq('id', invoice.id);
 
-    // Update related item (use same document_url)
     if (relatedItemId != null) {
       await client
           .from('item')
@@ -777,8 +787,6 @@ class InvoiceService {
   }
 
   /// Upload the PDF to Supabase Storage and link it to invoice + MULTIPLE items.
-  ///
-  /// Used for SALES invoices generated by the app (multi-items).
   Future<void> uploadInvoicePdfAndLinkToItems({
     required String orgId,
     required Invoice invoice,
@@ -796,12 +804,10 @@ class InvoiceService {
 
     final documentPath = 'invoices/$path';
 
-    // Update invoice
     await client
         .from('invoice')
         .update({'document_url': documentPath}).eq('id', invoice.id);
 
-    // Update all related items (use same document_url)
     if (relatedItemIds.isNotEmpty) {
       await client.from('item').update({'document_url': documentPath}).inFilter(
           'id', relatedItemIds);
@@ -813,19 +819,15 @@ class InvoiceService {
     Invoice invoice, {
     bool deletePdf = true,
   }) async {
-    // Delete lines
     await client.from('invoice_line').delete().eq('invoice_id', invoice.id);
 
-    // Clear item.document_url for all items pointing to this invoice PDF
     if (invoice.documentUrl != null) {
       await client.from('item').update({'document_url': null}).eq(
           'document_url', invoice.documentUrl as Object);
     }
 
-    // Delete invoice row
     await client.from('invoice').delete().eq('id', invoice.id);
 
-    // Delete PDF from storage (requires DELETE policy on `invoices` bucket)
     if (deletePdf && invoice.documentUrl != null) {
       final pathInBucket = invoice.documentUrl!.replaceFirst('invoices/', '');
       await client.storage.from('invoices').remove([pathInBucket]);

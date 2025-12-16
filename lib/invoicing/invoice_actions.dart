@@ -1,5 +1,4 @@
 // lib/invoicing/invoiceActions.dart
-
 // ignore_for_file: unintended_html_in_doc_comment
 
 import 'dart:typed_data';
@@ -35,17 +34,17 @@ class InvoiceActions {
 
   /// High-level helper (SALES invoice for ONE item):
   /// 1. Generate a new invoice number (server-side, monotonic)
-  /// 2. Create invoice & line in DB for a given item, using provided form values
+  /// 2. Create invoice & line in DB for a given item
+  ///    ✅ Invoice currency is derived from item.sale_currency (fallback item.currency)
   /// 3. Generate PDF
   /// 4. Upload to Supabase Storage
   /// 5. Link invoice + item.document_url
-  // ignore: duplicate_ignore
-  // ignore: unintended_html_in_doc_comment
   /// 6. Auto-assign folder: "<Seller>/sells/<Buyer>"
   Future<Invoice> createBillForItemAndGeneratePdf({
     required String orgId,
     required int itemId,
-    required String currency,
+    required String
+        currency, // kept for compat; service uses it only as fallback
     double taxRate = 0.0,
     DateTime? dueDate,
 
@@ -73,12 +72,12 @@ class InvoiceActions {
     // 1. Get next invoice number from backend
     final invoiceNumber = await invoiceService.getNextInvoiceNumber(orgId);
 
-    // 2. Create invoice + line with overrides (folderId = null for now)
+    // 2. Create invoice + line
     final invoice = await invoiceService.createInvoiceForItem(
       orgId: orgId,
       itemId: itemId,
       invoiceNumber: invoiceNumber,
-      currency: currency,
+      currency: currency, // fallback only
       folderId: null,
       taxRate: taxRate,
       dueDate: dueDate,
@@ -131,7 +130,7 @@ class InvoiceActions {
         folderId: folder.id,
       );
     } catch (_) {
-      // best-effort: folder assignment failure should not break invoice creation
+      // best-effort
     }
 
     return invoice;
@@ -144,13 +143,15 @@ class InvoiceActions {
   /// High-level helper (SALES invoice for MULTIPLE items):
   /// 1. Generate new invoice number
   /// 2. Create invoice & grouped lines in DB for the given items
+  ///    ✅ Invoice currency is derived from items.sale_currency (must be consistent)
   /// 3. Generate PDF
   /// 4. Upload to Storage & attach to ALL items
   /// 5. Auto-folder "<Seller>/sells/<Buyer>"
   Future<Invoice> createBillForItemsAndGeneratePdf({
     required String orgId,
     required List<int> itemIds,
-    required String currency,
+    required String
+        currency, // kept for compat; service uses it only as fallback
     double taxRate = 0.0,
     DateTime? dueDate,
 
@@ -182,12 +183,12 @@ class InvoiceActions {
     // 1. Get next invoice number
     final invoiceNumber = await invoiceService.getNextInvoiceNumber(orgId);
 
-    // 2. Create invoice + all lines (grouped by product/price)
+    // 2. Create invoice + all lines
     final invoice = await invoiceService.createInvoiceForItems(
       orgId: orgId,
       itemIds: itemIds,
       invoiceNumber: invoiceNumber,
-      currency: currency,
+      currency: currency, // fallback only
       folderId: null,
       taxRate: taxRate,
       dueDate: dueDate,
@@ -291,9 +292,9 @@ class InvoiceActions {
 
     final documentUrl = 'invoices/$path';
 
-    // (Optional) try to infer platform / source if not provided (kept for future use)
+    // (Optional) try to infer platform / source if not provided
     String source = purchaseSource?.trim() ?? '';
-    String? buyerCompany; // ⚠ internal company (CardShouker / Mister8 / ...)
+    String? buyerCompany;
 
     if (source.isEmpty) {
       try {
@@ -336,8 +337,6 @@ class InvoiceActions {
 
     // 3. Auto-folder: "<BuyerCompany>/purchase/<Supplier>"
     try {
-      // parent folder = buyer_company (CardShouker / Mister8 / YK / ...).
-      // si vide -> CardShouker
       String buyerRoot = (buyerCompany ?? '').trim();
       if (buyerRoot.isEmpty) {
         buyerRoot = 'CardShouker';

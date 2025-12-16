@@ -8,7 +8,10 @@ import 'invoice_create_dialog.dart';
 
 class MultiInvoiceSelectionResult {
   final List<int> itemIds;
+
+  /// ✅ Devise de la facture (SALE currency) = sale_currency (fallback currency)
   final String currency;
+
   final double taxRate;
   final DateTime? dueDate;
 
@@ -80,7 +83,14 @@ class _GroupedItem {
 
   String get type => (sample['type'] ?? '').toString();
 
-  String get currency => (sample['currency'] ?? 'USD').toString();
+  /// ✅ Devise affichée = sale_currency (fallback currency, fallback USD)
+  String get currency {
+    final sc = (sample['sale_currency'] ?? '').toString().trim();
+    if (sc.isNotEmpty) return sc.toUpperCase();
+    final c = (sample['currency'] ?? '').toString().trim();
+    if (c.isNotEmpty) return c.toUpperCase();
+    return 'USD';
+  }
 
   num get unitPriceRaw =>
       (sample['sale_price'] ?? sample['unit_cost'] ?? 0) as num;
@@ -158,6 +168,14 @@ class _InvoiceSelectItemsDialogState extends State<InvoiceSelectItemsDialog> {
     super.dispose();
   }
 
+  String _saleCurrencyOfRow(Map<String, dynamic> r) {
+    final sc = (r['sale_currency'] ?? '').toString().trim();
+    if (sc.isNotEmpty) return sc.toUpperCase();
+    final c = (r['currency'] ?? '').toString().trim();
+    if (c.isNotEmpty) return c.toUpperCase();
+    return 'USD';
+  }
+
   Future<void> _loadEligibleItems() async {
     setState(() {
       _loading = true;
@@ -165,17 +183,17 @@ class _InvoiceSelectItemsDialogState extends State<InvoiceSelectItemsDialog> {
     });
 
     try {
-      // Items finalisés (single ou sealed ou autre type, on ne filtre que sur status)
+      // Items finalisés (on filtre seulement sur status)
       final rows = await _sb
           .from('item')
           .select(
-            'id, product:product(name), type, status, currency, '
+            'id, product:product(name), type, status, currency, sale_currency, '
             'sale_price, unit_cost, buyer_company, buyer_infos, sale_date',
           )
           .eq('org_id', widget.orgId)
           .eq('status', 'finalized')
           .order('sale_date', ascending: false)
-          .limit(500); // sécurité
+          .limit(500);
 
       _itemsRaw = List<Map<String, dynamic>>.from(
         (rows as List).map((e) => Map<String, dynamic>.from(e as Map)),
@@ -210,18 +228,21 @@ class _InvoiceSelectItemsDialogState extends State<InvoiceSelectItemsDialog> {
     final productName =
         (r['product']?['name'] ?? '').toString().trim().toLowerCase();
     final type = (r['type'] ?? '').toString().trim().toLowerCase();
-    final currency = (r['currency'] ?? '').toString().trim().toUpperCase();
+
+    // ✅ group by SALE currency (sale_currency fallback currency)
+    final currency = _saleCurrencyOfRow(r).toUpperCase();
+
     final price = (r['sale_price'] ?? r['unit_cost'] ?? '').toString();
 
     final buyerCompany =
         (r['buyer_company'] ?? '').toString().trim().toLowerCase();
     final buyerInfos = (r['buyer_infos'] ?? '').toString().trim().toLowerCase();
 
-    // On groupe aussi par date de vente (jour) pour coller à la logique
+    // On groupe aussi par date de vente (jour)
     final rawDate = r['sale_date']?.toString() ?? '';
     final saleDate = rawDate.length >= 10 ? rawDate.substring(0, 10) : rawDate;
 
-    // => même product, même type, même date, même prix, même currency,
+    // => même product, même type, même date, même prix, même SALE currency,
     //    même client final (buyer_infos) et même société interne (buyer_company)
     return [
       productName,
@@ -272,8 +293,9 @@ class _InvoiceSelectItemsDialogState extends State<InvoiceSelectItemsDialog> {
     }
 
     final first = selectedRows.first;
-    final String currency =
-        (first['currency'] ?? 'USD').toString().toUpperCase();
+
+    // ✅ Currency de la facture = SALE currency (sale_currency fallback currency)
+    final String currency = _saleCurrencyOfRow(first);
 
     // Buyer = client final (buyer_infos)
     String buyer(Map<String, dynamic> r) {
@@ -283,24 +305,16 @@ class _InvoiceSelectItemsDialogState extends State<InvoiceSelectItemsDialog> {
 
     final firstBuyer = buyer(first);
 
-    // Vérification cohérence currency + buyer_infos sur tous les rows
+    // ✅ Vérification cohérence SALE currency
     for (final r in selectedRows) {
-      final cur = (r['currency'] ?? currency).toString().toUpperCase();
+      final cur = _saleCurrencyOfRow(r);
       if (cur != currency) {
         setState(() {
           _error =
-              'All selected items must share the same currency. Found both $currency and $cur.';
+              'All selected items must share the same SALE currency. Found both $currency and $cur.';
         });
         return;
       }
-      final b = buyer(r);
-      /*if (b != firstBuyer) {
-        setState(() {
-          _error =
-              'All selected items must share the same buyer. Found "$firstBuyer" and "$b".';
-        });
-        return;
-      }*/
     }
 
     // IDs des items
@@ -314,13 +328,6 @@ class _InvoiceSelectItemsDialogState extends State<InvoiceSelectItemsDialog> {
       final bc = (r['buyer_company'] as String?)?.trim();
       if (bc != null && bc.isNotEmpty) {
         internalCompany ??= bc;
-        /*else if (internalCompany != bc) {
-          setState(() {
-            _error =
-                'All selected items must share the same internal company (buyer_company). Found "$internalCompany" and "$bc".';
-          });
-          return;
-        }*/
       }
     }
 
@@ -348,26 +355,22 @@ class _InvoiceSelectItemsDialogState extends State<InvoiceSelectItemsDialog> {
             ? internalCompany
             : orgName;
 
-    // Ouvre le formulaire de facture (même que pour la création unitaire)
+    // Ouvre le formulaire de facture
     final formResult = await InvoiceCreateDialog.show(
       context,
       currency: currency,
-      //sellerName: sellerNameDefault,
+      // sellerName: sellerNameDefault,
       sellerName: 'cardshouker',
       buyerName: firstBuyer,
     );
 
-    // L’utilisateur a fermé le formulaire -> on ne ferme pas ce dialog
-    if (formResult == null) {
-      return;
-    }
+    if (formResult == null) return;
 
-    // On construit le résultat complet pour InvoiceManagementPage
+    // Résultat complet
     final result = MultiInvoiceSelectionResult(
       itemIds: ids,
       currency: currency,
-      taxRate: formResult.taxRate, // gère TVA 0% ou 5% par ex.
-      // si tu ajoutes dueDate dans InvoiceCreateDialog, remplace null par formResult.dueDate
+      taxRate: formResult.taxRate,
       dueDate: null,
 
       // Seller
@@ -450,7 +453,6 @@ class _InvoiceSelectItemsDialogState extends State<InvoiceSelectItemsDialog> {
                         ),
                       ),
                       const SizedBox(height: 8),
-                      // Barre de recherche
                       TextField(
                         controller: _searchCtrl,
                         decoration: const InputDecoration(
@@ -481,6 +483,8 @@ class _InvoiceSelectItemsDialogState extends State<InvoiceSelectItemsDialog> {
 
                                   final name = g.productName;
                                   final type = g.type;
+
+                                  // ✅ affichage en SALE currency
                                   final currency = g.currency;
 
                                   final priceRaw = g.unitPriceRaw;
@@ -488,7 +492,6 @@ class _InvoiceSelectItemsDialogState extends State<InvoiceSelectItemsDialog> {
 
                                   final saleDate =
                                       _formatSaleDate(g.saleDateRaw);
-
                                   final buyerLabel = g.buyerLabel;
 
                                   final qtyPart =
