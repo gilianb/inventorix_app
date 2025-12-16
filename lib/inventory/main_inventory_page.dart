@@ -11,6 +11,9 @@ import '../../inventory/utils/status_utils.dart';
 import '../../inventory/widgets/edit.dart';
 import '../../inventory/widgets/finance_overview.dart';
 
+// ✅ NEW: Grouped products view (C)
+import '../../inventory/widgets/products_grouped_view.dart';
+
 // ✅ FX constants (sale_price multi-devise -> USD)
 import '../../inventory/utils/fx_to_usd.dart';
 
@@ -37,6 +40,9 @@ const kAccentA = Color(0xFF6C5CE7); // violet
 const kAccentB = Color(0xFF00D1B2); // menthe
 const kAccentC = Color(0xFFFFB545); // amber
 const kAccentG = Color(0xFF22C55E); // green
+
+/// ✅ NEW: View mode (Products vs Lines)
+enum InventoryListViewMode { products, lines }
 
 /// Mapping des groupes logiques -> liste de statuts inclus
 const Map<String, List<String>> kGroupToStatuses = {
@@ -121,9 +127,70 @@ class _MainInventoryPageState extends State<MainInventoryPage>
   final TextEditingController _groupCommentCtrl = TextEditingController();
   bool _applyingGroup = false;
 
+  // ======== A + C (pagination + grouped view) ========
+  static const int _kChunk = 50;
+  InventoryListViewMode _viewMode = InventoryListViewMode.products;
+
+  final Map<String, int> _visibleLineLimitByView = {};
+  final Map<String, int> _visibleProductLimitByView = {};
+  final Map<String, String?> _expandedProductKeyByView = {};
+
+  final ScrollController _invScrollCtrl = ScrollController();
+  final ScrollController _finalizedScrollCtrl = ScrollController();
+  DateTime? _lastAutoLoadMoreAt;
+
+  String _viewKey(String? forceStatus) => forceStatus ?? '__main__';
+
+  void _ensureViewState(String? forceStatus) {
+    final k = _viewKey(forceStatus);
+    _visibleLineLimitByView.putIfAbsent(k, () => _kChunk);
+    _visibleProductLimitByView.putIfAbsent(k, () => _kChunk);
+    _expandedProductKeyByView.putIfAbsent(k, () => null);
+  }
+
+  void _resetViewState(String? forceStatus) {
+    final k = _viewKey(forceStatus);
+    _visibleLineLimitByView[k] = _kChunk;
+    _visibleProductLimitByView[k] = _kChunk;
+    _expandedProductKeyByView[k] = null;
+  }
+
+  void _handleScrollNearBottom(String? forceStatus) {
+    final ctrl =
+        (forceStatus == 'finalized') ? _finalizedScrollCtrl : _invScrollCtrl;
+
+    if (!ctrl.hasClients) return;
+    final pos = ctrl.position;
+    if (!pos.hasContentDimensions) return;
+
+    // Trigger when within 400px of bottom
+    if (pos.pixels < pos.maxScrollExtent - 400) return;
+
+    // Throttle (avoid spamming setState)
+    final now = DateTime.now();
+    final last = _lastAutoLoadMoreAt;
+    if (last != null && now.difference(last).inMilliseconds < 350) return;
+    _lastAutoLoadMoreAt = now;
+
+    final k = _viewKey(forceStatus);
+
+    setState(() {
+      if (_viewMode == InventoryListViewMode.lines) {
+        _visibleLineLimitByView[k] =
+            (_visibleLineLimitByView[k] ?? _kChunk) + _kChunk;
+      } else {
+        _visibleProductLimitByView[k] =
+            (_visibleProductLimitByView[k] ?? _kChunk) + _kChunk;
+      }
+    });
+  }
+
   @override
   void initState() {
     super.initState();
+    _invScrollCtrl.addListener(() => _handleScrollNearBottom(null));
+    _finalizedScrollCtrl
+        .addListener(() => _handleScrollNearBottom('finalized'));
     _init();
   }
 
@@ -132,6 +199,8 @@ class _MainInventoryPageState extends State<MainInventoryPage>
     _tabCtrl?.dispose();
     _searchCtrl.dispose();
     _groupCommentCtrl.dispose();
+    _invScrollCtrl.dispose();
+    _finalizedScrollCtrl.dispose();
     super.dispose();
   }
 
@@ -316,6 +385,11 @@ class _MainInventoryPageState extends State<MainInventoryPage>
 
   Future<void> _refresh() async {
     setState(() => _loading = true);
+
+    // ✅ reset pagination + expansion
+    _resetViewState(null);
+    _resetViewState('finalized');
+
     try {
       _groups = await _fetchGroupedFromView();
       _kpiItems = await _fetchItemsForKpis();
@@ -681,23 +755,43 @@ class _MainInventoryPageState extends State<MainInventoryPage>
             .where((e) => (e['status']?.toString() ?? '') == forceStatus)
             .toList();
 
-    // Lignes (groupes explosés par statut)
-    final lines = _explodeLines(overrideFilter: forceStatus);
-
     if (_loading) {
       return const Center(child: CircularProgressIndicator());
     }
+
+    _ensureViewState(forceStatus);
 
     // -- Contexte d'affichage de l'overview
     final bool isFinalizedView = (forceStatus == 'finalized');
     final bool showFinanceOverview =
         isFinalizedView || _perm.canSeeFinanceOverview;
 
+    // ✅ All lines
+    final allLines = _explodeLines(overrideFilter: forceStatus);
+
+    // Pagination limits
+    final k = _viewKey(forceStatus);
+    final visibleLineLimit = _visibleLineLimitByView[k] ?? _kChunk;
+    final visibleProductLimit = _visibleProductLimitByView[k] ?? _kChunk;
+
+    final visibleLines =
+        allLines.take(visibleLineLimit).toList(growable: false);
+
+    // ✅ Grouped products summaries (C)
+    final allProducts = buildProductSummaries(
+      lines: allLines,
+      canSeeUnitCosts: _perm.canSeeUnitCosts,
+      showEstimated: showFinanceOverview, // show estimated chips if overview ok
+    );
+
+    final visibleProducts =
+        allProducts.take(visibleProductLimit).toList(growable: false);
+
     // Statuts disponibles pour l'édition groupée
     final List<String> allStatuses =
         kStatusOrder.where((s) => s != 'vault').toList();
 
-    // ======== Application de l'édition de groupe (corrigée: plus de "mixed") ========
+    // ======== Application de l'édition de groupe ========
     Future<void> applyGroupStatusToSelection() async {
       if (_groupNewStatus == null || _groupNewStatus!.isEmpty) {
         _snack('Pick a status to apply.');
@@ -712,8 +806,8 @@ class _MainInventoryPageState extends State<MainInventoryPage>
 
       setState(() => _applyingGroup = true);
       try {
-        // Lignes sélectionnées visibles
-        final selectedLines = lines
+        // Lignes sélectionnées (sur l'ensemble des lignes, pas juste la page visible)
+        final selectedLines = allLines
             .where((r) => _selectedKeys.contains(_lineKey(r)))
             .toList(growable: false);
 
@@ -759,7 +853,7 @@ class _MainInventoryPageState extends State<MainInventoryPage>
             itemIds: itemIds,
             changes: {
               'status': {
-                'old': oldStatus, // ✅ vrai ancien statut
+                'old': oldStatus,
                 'new': newStatus,
               },
             },
@@ -774,11 +868,10 @@ class _MainInventoryPageState extends State<MainInventoryPage>
             if (gi != null) {
               final g = Map<String, dynamic>.from(_groups[gi]);
               final oldS = (line['status'] ?? '').toString();
-              final newS = newStatus;
               final qty = (line['qty_status'] as int?) ?? 0;
 
               final oldKey = 'qty_$oldS';
-              final newKey = 'qty_$newS';
+              final newKey = 'qty_$newStatus';
 
               g[oldKey] = ((g[oldKey] as int? ?? 0) - qty).clamp(0, 1 << 31);
               g[newKey] = (g[newKey] as int? ?? 0) + qty;
@@ -806,6 +899,7 @@ class _MainInventoryPageState extends State<MainInventoryPage>
     return RefreshIndicator(
       onRefresh: _refresh,
       child: ListView(
+        controller: isFinalizedView ? _finalizedScrollCtrl : _invScrollCtrl,
         padding: const EdgeInsets.only(bottom: 24),
         children: [
           // Recherche & Filtres
@@ -930,6 +1024,40 @@ class _MainInventoryPageState extends State<MainInventoryPage>
                               _refresh();
                             },
                           ),
+
+                          // ✅ NEW: Products / Lines toggle
+                          SegmentedButton<InventoryListViewMode>(
+                            segments: const [
+                              ButtonSegment(
+                                value: InventoryListViewMode.products,
+                                label: Text('Products'),
+                                icon: Icon(Icons.grid_view, size: 16),
+                              ),
+                              ButtonSegment(
+                                value: InventoryListViewMode.lines,
+                                label: Text('Lines'),
+                                icon: Icon(Icons.table_rows, size: 16),
+                              ),
+                            ],
+                            selected: {_viewMode},
+                            onSelectionChanged: (s) {
+                              final newMode = s.first;
+                              setState(() {
+                                _viewMode = newMode;
+
+                                // reset pagination + collapse expansions for this view
+                                _resetViewState(forceStatus);
+
+                                // leaving group edit if we switch away from Lines
+                                if (_viewMode != InventoryListViewMode.lines) {
+                                  _groupMode = false;
+                                  _selectedKeys.clear();
+                                  _groupNewStatus = null;
+                                  _groupCommentCtrl.clear();
+                                }
+                              });
+                            },
+                          ),
                         ],
                       ),
                     ],
@@ -948,8 +1076,8 @@ class _MainInventoryPageState extends State<MainInventoryPage>
                 padding: const EdgeInsets.symmetric(horizontal: 12),
                 child: FinanceOverview(
                   items: effectiveKpiItems,
-                  currency: lines.isNotEmpty
-                      ? (lines.first['currency']?.toString() ?? 'USD')
+                  currency: allLines.isNotEmpty
+                      ? (allLines.first['currency']?.toString() ?? 'USD')
                       : 'USD',
 
                   // ✅ FX constants injectées (sale_price multi-devise -> USD)
@@ -1007,7 +1135,7 @@ class _MainInventoryPageState extends State<MainInventoryPage>
             if (forceStatus == null)
               ActiveStatusFilterBar(
                 statusFilter: _statusFilter,
-                linesCount: lines.length,
+                linesCount: allLines.length,
                 onClear: () {
                   setState(() => _statusFilter = null);
                   _refresh();
@@ -1016,8 +1144,28 @@ class _MainInventoryPageState extends State<MainInventoryPage>
             if (forceStatus == null) const SizedBox(height: 12),
           ],
 
-          // ======== Barre "Edit group" + panneau d'action ========
-          if (!_loading && _groups.isNotEmpty && _perm.canEditItems)
+          // ✅ Showing X / total
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            child: Text(
+              _viewMode == InventoryListViewMode.lines
+                  ? 'Showing ${visibleLines.length} / ${allLines.length} lines'
+                  : 'Showing ${visibleProducts.length} / ${allProducts.length} products',
+              style: Theme.of(context)
+                  .textTheme
+                  .bodySmall
+                  ?.copyWith(color: Colors.black54),
+            ),
+          ),
+
+          const SizedBox(height: 8),
+
+          // ======== Barre "Edit group" + panneau d'action (LINES ONLY) ========
+          if (!isFinalizedView &&
+              _viewMode == InventoryListViewMode.lines &&
+              !_loading &&
+              _groups.isNotEmpty &&
+              _perm.canEditItems)
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 0),
               child: Column(
@@ -1028,9 +1176,8 @@ class _MainInventoryPageState extends State<MainInventoryPage>
                     runSpacing: 8,
                     crossAxisAlignment: WrapCrossAlignment.center,
                     children: [
-                      // 👇 compteur de lignes remis ici
                       Text(
-                        'Lines (${lines.length})',
+                        'Lines (${allLines.length})',
                         style: Theme.of(context)
                             .textTheme
                             .bodyMedium
@@ -1199,41 +1346,63 @@ class _MainInventoryPageState extends State<MainInventoryPage>
 
           const SizedBox(height: 8),
 
-          // ======== Tableau ========
-          InventoryTableByStatus(
-            lines: lines,
-            onOpen: _openDetails,
-            onEdit: _perm.canEditItems ? _openEdit : null,
-            onDelete: _perm.canDeleteLines ? _deleteLine : null,
-            showDelete: _perm.canDeleteLines,
-            showUnitCosts: _perm.canSeeUnitCosts,
-            showRevenue: _perm.canSeeRevenue,
-            onInlineUpdate: _applyInlineUpdate, // 👈 important
+          // ======== Content (Lines OR Products) ========
+          if (_viewMode == InventoryListViewMode.lines)
+            InventoryTableByStatus(
+              lines: visibleLines,
+              onOpen: _openDetails,
+              onEdit: _perm.canEditItems ? _openEdit : null,
+              onDelete: _perm.canDeleteLines ? _deleteLine : null,
+              showDelete: _perm.canDeleteLines,
+              showUnitCosts: _perm.canSeeUnitCosts,
+              showRevenue: _perm.canSeeRevenue,
+              showEstimated: showFinanceOverview,
+              onInlineUpdate: _applyInlineUpdate,
 
-            // ⭐️ Group-edit wiring
-            groupMode: _groupMode && !isFinalizedView,
-            selection: _selectedKeys,
-            lineKey: _lineKey,
-            onToggleSelect: (line, selected) {
-              final k = _lineKey(line);
-              setState(() {
-                if (selected) {
-                  _selectedKeys.add(k);
-                } else {
-                  _selectedKeys.remove(k);
-                }
-              });
-            },
-            onToggleSelectAll: (selectAll) {
-              setState(() {
-                if (selectAll) {
-                  _selectedKeys.addAll(lines.map(_lineKey));
-                } else {
-                  _selectedKeys.clear();
-                }
-              });
-            },
-          ),
+              // ⭐️ Group-edit wiring (Lines mode only)
+              groupMode: _groupMode && !isFinalizedView,
+              selection: _selectedKeys,
+              lineKey: _lineKey,
+              onToggleSelect: (line, selected) {
+                final kk = _lineKey(line);
+                setState(() {
+                  if (selected) {
+                    _selectedKeys.add(kk);
+                  } else {
+                    _selectedKeys.remove(kk);
+                  }
+                });
+              },
+              onToggleSelectAll: (selectAll) {
+                setState(() {
+                  if (selectAll) {
+                    _selectedKeys.addAll(visibleLines.map(_lineKey));
+                  } else {
+                    _selectedKeys.clear();
+                  }
+                });
+              },
+            )
+          else
+            InventoryProductsGroupedList(
+              summaries: visibleProducts,
+              allLines: allLines,
+              expandedKey: _expandedProductKeyByView[_viewKey(forceStatus)],
+              onExpandedChanged: (newKey) {
+                setState(() {
+                  _expandedProductKeyByView[_viewKey(forceStatus)] = newKey;
+                });
+              },
+              lineKey: _lineKey,
+              onOpen: _openDetails,
+              onEdit: _perm.canEditItems ? _openEdit : null,
+              onDelete: _perm.canDeleteLines ? _deleteLine : null,
+              showDelete: _perm.canDeleteLines,
+              showUnitCosts: _perm.canSeeUnitCosts,
+              showRevenue: _perm.canSeeRevenue,
+              showEstimated: showFinanceOverview,
+              onInlineUpdate: _applyInlineUpdate,
+            ),
 
           const SizedBox(height: 48),
         ],
@@ -1360,7 +1529,6 @@ class _MainInventoryPageState extends State<MainInventoryPage>
           .toList(growable: false);
 
       if (ids.isNotEmpty) {
-        // ✅ Cas normal: on a trouvé les items avec le group_sig courant
         return ids;
       }
     }
