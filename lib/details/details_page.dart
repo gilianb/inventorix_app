@@ -299,7 +299,7 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
     return s.isNotEmpty ? s : null;
   }
 
-  // ---------- Helpers marge dérivée (même logique qu'InfoExtras) ----------
+  // ---------- Helpers marge dérivée (fallback) ----------
 
   num? _asNum(dynamic v) {
     if (v == null) return null;
@@ -307,12 +307,40 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
     return num.tryParse(v.toString());
   }
 
-  /// calcule la marge % à partir des champs si `marge` est null
+  String _normCur(dynamic v, {String fallback = ''}) {
+    final s = (v ?? fallback).toString().trim().toUpperCase();
+    return s;
+  }
+
+  /// ✅ IMPORTANT (PATCH FX)
+  /// - Si la DB a calculé `marge`, on la prend (source of truth).
+  /// - Si `marge` est null ET que purchase currency != sale currency,
+  ///   on NE calcule PAS côté Flutter (sinon résultat faux sans conversion FX).
+  /// - On garde un fallback Flutter uniquement quand les devises sont identiques
+  ///   (utile pour anciens rows / cas simples).
   num? _derivedMarginPct(Map<String, dynamic> r) {
     final num? m = _asNum(r['marge']);
     if (m != null) return m;
 
+    final status = (r['status'] ?? '').toString().toLowerCase();
+    if (!['sold', 'shipped', 'finalized'].contains(status)) return null;
+
     final num? sale = _asNum(r['sale_price']);
+    if (sale == null || sale == 0) return null;
+
+    final purchaseCur = _normCur(r['currency']);
+    final saleCur = _normCur(
+      r['sale_currency'] ?? r['sale_price_currency'] ?? r['sale_currency_code'],
+      fallback: purchaseCur,
+    );
+
+    // 🔒 Si devises différentes -> marge doit venir de la DB (avec FX), sinon null.
+    if (purchaseCur.isNotEmpty &&
+        saleCur.isNotEmpty &&
+        purchaseCur != saleCur) {
+      return null;
+    }
+
     final num cost =
         (_asNum(r['unit_cost']) ?? 0) + (_asNum(r['unit_fees']) ?? 0);
     final num fees = (_asNum(r['shipping_fees']) ?? 0) +
@@ -320,10 +348,9 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
         (_asNum(r['grading_fees']) ?? 0);
     final num invested = cost + fees;
 
-    if (sale != null && invested > 0) {
-      return ((sale - invested) / invested) * 100;
-    }
-    return null;
+    if (invested <= 0) return null;
+
+    return ((sale - invested) / invested) * 100;
   }
 
   Future<void> _loadAll() async {
@@ -405,7 +432,7 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
           'grading_fees',
           'sale_date',
           'sale_price',
-          'sale_currency', // ✅ NEW: devise liée à sale_price
+          'sale_currency', // ✅ devise liée à sale_price
           'tracking',
           'photo_url',
           'document_url',
@@ -945,7 +972,7 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
     final formResult = await InvoiceCreateDialog.show(
       context,
       currency: currency,
-      //sellerName: sellerNameDefault,
+      // sellerName: sellerNameDefault,
       sellerName: 'cardshouker',
       buyerName: buyerNameDefault,
     );

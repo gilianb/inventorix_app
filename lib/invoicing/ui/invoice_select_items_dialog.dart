@@ -141,9 +141,6 @@ class _InvoiceSelectItemsDialogState extends State<InvoiceSelectItemsDialog> {
 
   bool _loading = true;
 
-  // Données brutes
-  List<Map<String, dynamic>> _itemsRaw = [];
-
   // Données regroupées pour l’UI (x3 etc.)
   List<_GroupedItem> _groups = [];
 
@@ -176,6 +173,75 @@ class _InvoiceSelectItemsDialogState extends State<InvoiceSelectItemsDialog> {
     return 'USD';
   }
 
+  /// ✅ Récupère les item_id qui ont déjà une invoice (via invoice_line.item_id)
+  /// et aussi via invoice.related_item_id (si tu utilises ce champ dans certains flows).
+  Future<Set<int>> _fetchInvoicedItemIds() async {
+    final ids = <int>{};
+
+    // 1) invoice.related_item_id
+    try {
+      final invRows = await _sb
+          .from('invoice')
+          .select('related_item_id')
+          .eq('org_id', widget.orgId)
+          .not('related_item_id', 'is', null)
+          .limit(5000);
+
+      for (final r in (invRows as List)) {
+        final v = r['related_item_id'];
+        if (v != null) ids.add((v as num).toInt());
+      }
+    } catch (_) {
+      // best-effort
+    }
+
+    // 2) invoice_line.item_id (join invoice via invoice_id)
+    try {
+      final lineRows = await _sb
+          .from('invoice_line')
+          .select('item_id, invoice:invoice_id(org_id)')
+          .not('item_id', 'is', null)
+          .eq('invoice.org_id', widget.orgId)
+          .limit(20000);
+
+      for (final r in (lineRows as List)) {
+        final v = r['item_id'];
+        if (v != null) ids.add((v as num).toInt());
+      }
+    } catch (_) {
+      // Fallback si filtre relationnel "invoice.org_id" non supporté
+      try {
+        final invoices = await _sb
+            .from('invoice')
+            .select('id')
+            .eq('org_id', widget.orgId)
+            .limit(10000);
+
+        final invoiceIds = (invoices as List)
+            .map((e) => (e['id'] as num).toInt())
+            .toList(growable: false);
+
+        if (invoiceIds.isNotEmpty) {
+          final lineRows = await _sb
+              .from('invoice_line')
+              .select('item_id, invoice_id')
+              .not('item_id', 'is', null)
+              .inFilter('invoice_id', invoiceIds)
+              .limit(20000);
+
+          for (final r in (lineRows as List)) {
+            final v = r['item_id'];
+            if (v != null) ids.add((v as num).toInt());
+          }
+        }
+      } catch (_) {
+        // best-effort
+      }
+    }
+
+    return ids;
+  }
+
   Future<void> _loadEligibleItems() async {
     setState(() {
       _loading = true;
@@ -195,11 +261,33 @@ class _InvoiceSelectItemsDialogState extends State<InvoiceSelectItemsDialog> {
           .order('sale_date', ascending: false)
           .limit(500);
 
-      _itemsRaw = List<Map<String, dynamic>>.from(
+      final items = List<Map<String, dynamic>>.from(
         (rows as List).map((e) => Map<String, dynamic>.from(e as Map)),
       );
 
-      _groups = _buildGroups(_itemsRaw);
+      // ✅ NOUVEAU: filtrage AU NIVEAU DU GROUPE:
+      // si 1 item du groupe a déjà une invoice → on retire tout le groupe.
+      final invoicedIds = await _fetchInvoicedItemIds();
+
+      final allGroups = _buildGroups(items);
+
+      final filteredGroups = invoicedIds.isEmpty
+          ? allGroups
+          : allGroups.where((g) {
+              final hasAnyInvoiced = g.rows.any((r) {
+                final id = (r['id'] as num).toInt();
+                return invoicedIds.contains(id);
+              });
+              return !hasAnyInvoiced;
+            }).toList(growable: false);
+
+      // Remet _itemsRaw cohérent avec les groupes visibles (utile pour confirm etc.)
+      final allowedIds = filteredGroups
+          .expand((g) => g.rows)
+          .map<int>((r) => (r['id'] as num).toInt())
+          .toSet();
+
+      _groups = filteredGroups;
     } catch (e) {
       _error = 'Error while loading items: $e';
     } finally {
@@ -441,14 +529,14 @@ class _InvoiceSelectItemsDialogState extends State<InvoiceSelectItemsDialog> {
             ? const Center(child: CircularProgressIndicator())
             : _groups.isEmpty
                 ? const Center(
-                    child: Text('No finalized items available.'),
+                    child: Text('No finalized non-invoiced items available.'),
                   )
                 : Column(
                     children: [
                       const Align(
                         alignment: Alignment.centerLeft,
                         child: Text(
-                          'Only items with status "finalized" are shown. Items of the same sale are grouped (quantity xN).',
+                          'Only items with status "finalized" and without an existing invoice are shown. If any item in a sale-group is already invoiced, the whole group is hidden.',
                           style: TextStyle(fontSize: 12),
                         ),
                       ),

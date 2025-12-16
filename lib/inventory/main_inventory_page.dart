@@ -521,7 +521,7 @@ class _MainInventoryPageState extends State<MainInventoryPage>
           (r['game_label'] ?? '').toString(),
           (r['supplier_name'] ?? '').toString(),
           (r['buyer_company'] ?? '').toString(),
-          (r['tracking'] ?? '').toString(),
+          (r['buyer_infos'] ?? '').toString(),
         ].map((s) => s.toLowerCase()).toList();
 
         return tokens.every((t) => fields.any((f) => f.contains(t)));
@@ -666,7 +666,7 @@ class _MainInventoryPageState extends State<MainInventoryPage>
       pick('supplier_name'),
       pick('buyer_company'),
       pick('item_location'),
-      pick('tracking'),
+      pick('buyer_infos'),
       pick('currency'),
       pick('status'), // important
     ];
@@ -1456,7 +1456,7 @@ class _MainInventoryPageState extends State<MainInventoryPage>
       'supplier_name',
       'buyer_company',
       'item_location',
-      'tracking',
+      'buyer_infos',
     };
     ids = await runQuery(strongKeys);
     return ids;

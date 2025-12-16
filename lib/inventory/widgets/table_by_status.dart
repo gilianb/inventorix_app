@@ -336,7 +336,7 @@ class _InventoryTableByStatusState extends State<InventoryTableByStatus> {
     specs.addAll([
       _ColumnSortSpec(
         _SortKind.text,
-        (r) => (r['tracking'] ?? '').toString().toLowerCase(),
+        (r) => (r['buyer_infos'] ?? '').toString().toLowerCase(),
       ),
       _ColumnSortSpec(
         _SortKind.text,
@@ -382,7 +382,7 @@ class _InventoryTableByStatusState extends State<InventoryTableByStatus> {
       'Grade ID',
       'Sale date',
       if (widget.showRevenue) 'Sale price',
-      'Tracking',
+      'buyer infos',
       'Doc',
     ];
     return titles;
@@ -818,8 +818,8 @@ class _InventoryTableByStatusState extends State<InventoryTableByStatus> {
       DataCell(
         _EditableTextCell(
           initialText:
-              _txt(r['tracking']) == '—' ? '' : r['tracking'].toString(),
-          onSaved: (t) async => widget.onInlineUpdate(r, 'tracking', t),
+              _txt(r['buyer_infos']) == '—' ? '' : r['buyer_infos'].toString(),
+          onSaved: (t) async => widget.onInlineUpdate(r, 'buyer_infos', t),
         ),
       ),
     );
