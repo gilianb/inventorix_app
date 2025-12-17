@@ -184,34 +184,50 @@ class InventoryProductsGroupedList extends StatelessWidget {
           _ProductSummaryCard(
             summary: s,
             expanded: expandedKey == s.key,
-            onToggle: () {
-              onExpandedChanged(expandedKey == s.key ? null : s.key);
-            },
+            onToggle: () =>
+                onExpandedChanged(expandedKey == s.key ? null : s.key),
             showUnitCosts: showUnitCosts,
             showEstimated: showEstimated,
           ),
-          if (expandedKey == s.key)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 12),
-              child: InventoryTableByStatus(
-                lines: allLines
-                    .where((r) => _productKeyFromLine(r) == s.key)
-                    .toList(growable: false),
-                onOpen: onOpen,
-                onEdit: onEdit,
-                onDelete: onDelete,
-                showDelete: showDelete,
-                showUnitCosts: showUnitCosts,
-                showRevenue: showRevenue,
-                showEstimated: showEstimated,
-                onInlineUpdate: onInlineUpdate,
+          AnimatedSwitcher(
+            duration: const Duration(milliseconds: 180),
+            switchInCurve: Curves.easeOut,
+            switchOutCurve: Curves.easeIn,
+            transitionBuilder: (child, anim) {
+              return FadeTransition(
+                opacity: anim,
+                child: SizeTransition(
+                  sizeFactor: anim,
+                  axisAlignment: -1,
+                  child: child,
+                ),
+              );
+            },
+            child: (expandedKey == s.key)
+                ? Padding(
+                    key: ValueKey('exp-${s.key}'),
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: InventoryTableByStatus(
+                      lines: allLines
+                          .where((r) => _productKeyFromLine(r) == s.key)
+                          .toList(growable: false),
+                      onOpen: onOpen,
+                      onEdit: onEdit,
+                      onDelete: onDelete,
+                      showDelete: showDelete,
+                      showUnitCosts: showUnitCosts,
+                      showRevenue: showRevenue,
+                      showEstimated: showEstimated,
+                      onInlineUpdate: onInlineUpdate,
 
-                // Keep it simple: disable group edit inside grouped view
-                groupMode: false,
-                selection: const <String>{},
-                lineKey: lineKey,
-              ),
-            ),
+                      // Keep it simple: disable group edit inside grouped view
+                      groupMode: false,
+                      selection: const <String>{},
+                      lineKey: lineKey,
+                    ),
+                  )
+                : const SizedBox.shrink(key: ValueKey('collapsed')),
+          ),
         ],
       ],
     );
@@ -235,93 +251,145 @@ class _ProductSummaryCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+
     final subtitleParts = <String>[
       if ((summary.gameLabel ?? '').trim().isNotEmpty)
         summary.gameLabel!.trim(),
       if ((summary.language ?? '').trim().isNotEmpty) summary.language!.trim(),
       summary.type,
+      if (summary.currencyDisplay.trim().isNotEmpty) summary.currencyDisplay,
     ];
     final subtitle = subtitleParts.join(' • ');
 
     final chips = _buildStatusChips(context, summary.qtyByStatus);
 
+    final border = Border.all(
+      color: expanded
+          ? cs.primary.withOpacity(.35)
+          : cs.outlineVariant.withOpacity(.55),
+      width: expanded ? 1.2 : 0.8,
+    );
+
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-      child: Card(
-        elevation: 1,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(14),
-          onTap: onToggle,
-          child: Padding(
-            padding: const EdgeInsets.all(12),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _Thumb(url: summary.photoUrl),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Expanded(
-                            child: Text(
-                              summary.productName,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: Theme.of(context)
-                                  .textTheme
-                                  .titleMedium
-                                  ?.copyWith(fontWeight: FontWeight.w700),
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          Chip(
-                            label: Text('Qty ${summary.totalQty}'),
-                            visualDensity: VisualDensity.compact,
-                          ),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        curve: Curves.easeOut,
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(16),
+          boxShadow: [
+            if (expanded)
+              BoxShadow(
+                blurRadius: 18,
+                spreadRadius: 0,
+                offset: const Offset(0, 8),
+                color: cs.primary.withOpacity(.12),
+              ),
+          ],
+        ),
+        child: Material(
+          color: cs.surface,
+          borderRadius: BorderRadius.circular(16),
+          child: InkWell(
+            borderRadius: BorderRadius.circular(16),
+            hoverColor: cs.primary.withOpacity(.06),
+            splashColor: cs.primary.withOpacity(.10),
+            onTap: onToggle,
+            child: Container(
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(16),
+                border: border,
+                gradient: expanded
+                    ? LinearGradient(
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                        colors: [
+                          cs.primary.withOpacity(.06),
+                          cs.surface,
                         ],
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        subtitle.isEmpty ? '—' : subtitle,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: Theme.of(context)
-                            .textTheme
-                            .bodySmall
-                            ?.copyWith(color: Colors.black54),
-                      ),
-                      const SizedBox(height: 8),
-                      Wrap(
-                        spacing: 6,
-                        runSpacing: 6,
-                        children: [
-                          ...chips,
-                          if (showUnitCosts && summary.avgBuyUnit != null)
-                            Chip(
-                              label: Text(
-                                'Avg buy ${money(summary.avgBuyUnit)} ${summary.currencyDisplay}',
-                              ),
-                              visualDensity: VisualDensity.compact,
-                            ),
-                          if (showEstimated && summary.avgEstimatedUnit != null)
-                            Chip(
-                              label: Text(
-                                'Avg est ${money(summary.avgEstimatedUnit)} ${summary.currencyDisplay}',
-                              ),
-                              visualDensity: VisualDensity.compact,
-                            ),
-                        ],
-                      ),
-                    ],
+                      )
+                    : null,
+              ),
+              padding: const EdgeInsets.all(12),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _Thumb(
+                    url: summary.photoUrl,
+                    badgeText: 'Qty ${summary.totalQty}',
+                    expanded: expanded,
                   ),
-                ),
-                const SizedBox(width: 8),
-                Icon(expanded ? Icons.expand_less : Icons.expand_more),
-              ],
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        // Title row
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                summary.productName,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: Theme.of(context)
+                                    .textTheme
+                                    .titleMedium
+                                    ?.copyWith(fontWeight: FontWeight.w800),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            AnimatedRotation(
+                              turns: expanded ? 0.5 : 0.0,
+                              duration: const Duration(milliseconds: 180),
+                              child: Icon(
+                                Icons.expand_more,
+                                color: cs.onSurfaceVariant,
+                              ),
+                            ),
+                          ],
+                        ),
+
+                        const SizedBox(height: 2),
+                        Text(
+                          subtitle.isEmpty ? '—' : subtitle,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context)
+                              .textTheme
+                              .bodySmall
+                              ?.copyWith(color: cs.onSurfaceVariant),
+                        ),
+
+                        const SizedBox(height: 10),
+
+                        // Status chips + metrics
+                        Wrap(
+                          spacing: 6,
+                          runSpacing: 6,
+                          children: [
+                            ...chips,
+                            if (showUnitCosts && summary.avgBuyUnit != null)
+                              _MetricChip(
+                                icon: Icons.shopping_cart_outlined,
+                                label:
+                                    'Avg buy ${money(summary.avgBuyUnit)} ${summary.currencyDisplay}',
+                              ),
+                            if (showEstimated &&
+                                summary.avgEstimatedUnit != null)
+                              _MetricChip(
+                                icon: Icons.insights_outlined,
+                                label:
+                                    'Avg est ${money(summary.avgEstimatedUnit)} ${summary.currencyDisplay}',
+                              ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
         ),
@@ -354,28 +422,107 @@ class _ProductSummaryCard extends StatelessWidget {
   }
 }
 
-class _Thumb extends StatelessWidget {
-  const _Thumb({this.url});
-  final String? url;
+class _MetricChip extends StatelessWidget {
+  const _MetricChip({required this.icon, required this.label});
+
+  final IconData icon;
+  final String label;
 
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Chip(
+      visualDensity: VisualDensity.compact,
+      avatar: Icon(icon, size: 16, color: cs.onSurfaceVariant),
+      label: Text(label),
+    );
+  }
+}
+
+class _Thumb extends StatelessWidget {
+  const _Thumb({
+    this.url,
+    required this.badgeText,
+    required this.expanded,
+  });
+
+  final String? url;
+  final String badgeText;
+  final bool expanded;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
     final u = (url ?? '').trim();
+
     return ClipRRect(
-      borderRadius: BorderRadius.circular(8),
+      borderRadius: BorderRadius.circular(14),
       child: Container(
-        height: 100,
-        width: 80,
-        color: Theme.of(context).colorScheme.surfaceVariant.withOpacity(0.35),
-        child: u.isEmpty
-            ? const Icon(Icons.photo, size: 36, color: Colors.black38)
-            : Image.network(
+        height: 104,
+        width: 84,
+        decoration: BoxDecoration(
+          color: cs.surfaceVariant.withOpacity(0.35),
+          border: Border.all(
+            color: expanded
+                ? cs.primary.withOpacity(.35)
+                : cs.outlineVariant.withOpacity(.55),
+            width: expanded ? 1.2 : 0.8,
+          ),
+          borderRadius: BorderRadius.circular(14),
+        ),
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            if (u.isEmpty)
+              const Center(
+                child: Icon(Icons.photo, size: 34, color: Colors.black38),
+              )
+            else
+              Image.network(
                 u,
                 fit: BoxFit.cover,
                 gaplessPlayback: true,
+                filterQuality: FilterQuality.low,
+                loadingBuilder: (ctx, child, progress) {
+                  if (progress == null) return child;
+                  return const Center(
+                    child: SizedBox(
+                      height: 18,
+                      width: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ),
+                  );
+                },
                 errorBuilder: (_, __, ___) =>
-                    const Icon(Icons.broken_image, size: 36),
+                    const Center(child: Icon(Icons.broken_image, size: 26)),
               ),
+
+            // Bottom badge
+            Positioned(
+              left: 6,
+              right: 6,
+              bottom: 6,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: Colors.black.withOpacity(.55),
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: Text(
+                  badgeText,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

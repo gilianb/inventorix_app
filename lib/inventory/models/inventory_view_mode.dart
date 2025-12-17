@@ -1,0 +1,1 @@
+enum InventoryListViewMode { products, lines }

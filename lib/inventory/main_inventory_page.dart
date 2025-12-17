@@ -4,7 +4,6 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-import '../../inventory/widgets/search_and_filters.dart';
 import '../../inventory/widgets/status_breakdown_panel.dart';
 import '../../inventory/widgets/table_by_status.dart';
 import '../../inventory/utils/status_utils.dart';
@@ -16,6 +15,12 @@ import '../../inventory/widgets/products_grouped_view.dart';
 
 // ✅ FX constants (sale_price multi-devise -> USD)
 import '../../inventory/utils/fx_to_usd.dart';
+
+// ✅ NEW: UI-only “short main file”
+import '../../inventory/models/inventory_view_mode.dart';
+import '../../inventory/widgets/inventory_controls_card.dart';
+import '../../inventory/widgets/inventory_list_meta_bar.dart';
+import '../../inventory/widgets/inventory_group_edit_panel.dart';
 
 import 'package:inventorix_app/new_stock/new_stock_page.dart';
 import 'package:inventorix_app/details/details_page.dart';
@@ -32,17 +37,16 @@ import 'package:inventorix_app/org/roles.dart';
 import 'package:iconify_flutter/iconify_flutter.dart';
 import 'package:iconify_flutter/icons/mdi.dart';
 
-//invoice
+// invoice
 import 'package:inventorix_app/invoicing/ui/invoice_management_page.dart';
+
+import 'widgets/search_and_filters.dart';
 
 /// Accents (UI only)
 const kAccentA = Color(0xFF6C5CE7); // violet
 const kAccentB = Color(0xFF00D1B2); // menthe
 const kAccentC = Color(0xFFFFB545); // amber
 const kAccentG = Color(0xFF22C55E); // green
-
-/// ✅ NEW: View mode (Products vs Lines)
-enum InventoryListViewMode { products, lines }
 
 /// Mapping des groupes logiques -> liste de statuts inclus
 const Map<String, List<String>> kGroupToStatuses = {
@@ -114,7 +118,6 @@ class _MainInventoryPageState extends State<MainInventoryPage>
   OrgRole _role = OrgRole.viewer; // par défaut prudent
   bool _roleLoaded = false; // tant que false, on affiche un loader
   RolePermissions get _perm => kRoleMatrix[_role]!;
-
   bool get _isOwner => _role == OrgRole.owner;
 
   // ✅ Total investi exact pour l’onglet Finalized (calculé côté serveur via RPC)
@@ -173,7 +176,6 @@ class _MainInventoryPageState extends State<MainInventoryPage>
     _lastAutoLoadMoreAt = now;
 
     final k = _viewKey(forceStatus);
-
     setState(() {
       if (_viewMode == InventoryListViewMode.lines) {
         _visibleLineLimitByView[k] =
@@ -244,7 +246,7 @@ class _MainInventoryPageState extends State<MainInventoryPage>
               });
             },
           ),
-        if (_isOwner) vaultPage(orgId: widget.orgId), // ← on passe l’orgId
+        if (_isOwner) vaultPage(orgId: widget.orgId),
         _buildInventoryBody(forceStatus: 'finalized'),
       ];
 
@@ -253,7 +255,6 @@ class _MainInventoryPageState extends State<MainInventoryPage>
     final newLen = _tabs().length;
     final prevIndex = _tabCtrl?.index ?? 0;
 
-    // Dispose AVANT de créer le nouveau (évite 2 tickers actifs en même temps)
     _tabCtrl?.dispose();
     _tabCtrl = TabController(
       length: newLen,
@@ -261,7 +262,6 @@ class _MainInventoryPageState extends State<MainInventoryPage>
       initialIndex: prevIndex.clamp(0, newLen - 1),
     );
 
-    // Forcer rebuild après assignation
     setState(() {});
   }
 
@@ -281,9 +281,7 @@ class _MainInventoryPageState extends State<MainInventoryPage>
             .eq('org_id', widget.orgId)
             .eq('user_id', uid)
             .maybeSingle();
-      } catch (_) {
-        // RLS/erreur — on tombe sur fallback owner si created_by == uid
-      }
+      } catch (_) {}
 
       String? roleStr = (row?['role'] as String?);
 
@@ -342,7 +340,6 @@ class _MainInventoryPageState extends State<MainInventoryPage>
     }
   }
 
-  /// Date de début pour la plage (week / month)
   DateTime? _dateRangeStart() {
     final now = DateTime.now();
     switch (_dateRange) {
@@ -351,28 +348,27 @@ class _MainInventoryPageState extends State<MainInventoryPage>
       case 'month':
         return now.subtract(const Duration(days: 30));
       default:
-        return null; // all time
+        return null;
     }
   }
 
-  /// NEW: limites min/max pour la tranche de prix (estimated_price)
   Map<String, double?> _priceBounds() {
     double? minPrice;
     double? maxPrice;
 
     switch (_priceBand) {
-      case 'p1': // < 50
+      case 'p1':
         maxPrice = 50;
         break;
-      case 'p2': // 50 - 200
+      case 'p2':
         minPrice = 50;
         maxPrice = 200;
         break;
-      case 'p3': // 200 - 1000
+      case 'p3':
         minPrice = 200;
         maxPrice = 1000;
         break;
-      case 'p4': // > 1000
+      case 'p4':
         minPrice = 1000;
         break;
       case 'any':
@@ -386,15 +382,12 @@ class _MainInventoryPageState extends State<MainInventoryPage>
   Future<void> _refresh() async {
     setState(() => _loading = true);
 
-    // ✅ reset pagination + expansion
     _resetViewState(null);
     _resetViewState('finalized');
 
     try {
       _groups = await _fetchGroupedFromView();
       _kpiItems = await _fetchItemsForKpis();
-
-      // 🔢 récupère le total investi exact pour l’onglet Finalized
       _finalizedInvestOverride = await _fetchFinalizedInvestAggregate();
     } catch (e) {
       _snack('Loading error: $e');
@@ -403,8 +396,6 @@ class _MainInventoryPageState extends State<MainInventoryPage>
     }
   }
 
-  /// Rafraîchit _groups / _kpiItems / _finalizedInvestOverride
-  /// sans toucher au flag _loading (pas de gros spinner global).
   Future<void> _refreshSilent() async {
     try {
       final newGroups = await _fetchGroupedFromView();
@@ -417,12 +408,9 @@ class _MainInventoryPageState extends State<MainInventoryPage>
         _kpiItems = newKpiItems;
         _finalizedInvestOverride = newFinalizedInvest;
       });
-    } catch (_) {
-      // best-effort : en cas d'erreur on garde l'optimistic update local
-    }
+    } catch (_) {}
   }
 
-  /// RPC côté serveur : total investi pour FINALIZED, avec filtres alignés à l’UI
   Future<num> _fetchFinalizedInvestAggregate() async {
     try {
       final after = _dateRangeStart();
@@ -440,16 +428,16 @@ class _MainInventoryPageState extends State<MainInventoryPage>
 
       final res = await _sb.rpc('app_sum_invested_finalized', params: {
         'p_org_id': widget.orgId,
-        'p_type': _typeFilter, // 'single' | 'sealed'
-        'p_game_id': gameId, // null si pas de filtre jeu
-        'p_date_from': dateFrom, // null si "All time"
+        'p_type': _typeFilter,
+        'p_game_id': gameId,
+        'p_date_from': dateFrom,
       });
 
       if (res == null) return 0;
       if (res is num) return res;
       return num.tryParse(res.toString()) ?? 0;
     } catch (_) {
-      return 0; // fallback silencieux
+      return 0;
     }
   }
 
@@ -471,8 +459,7 @@ class _MainInventoryPageState extends State<MainInventoryPage>
       'grading_note',
       'sale_date',
       'sale_price',
-      // ✅ MULTI-DEVISE (sale_price)
-      'sale_currency',
+      'sale_currency', // ✅ MULTI-DEVISE
       'tracking',
       'photo_url',
       'document_url',
@@ -502,7 +489,7 @@ class _MainInventoryPageState extends State<MainInventoryPage>
       'sum_commission_fees',
       'sum_grading_fees',
       'org_id',
-      'group_sig', // 👈 important : on récupère group_sig depuis la vue
+      'group_sig',
     ];
 
     final costCols = <String>[
@@ -523,7 +510,6 @@ class _MainInventoryPageState extends State<MainInventoryPage>
         .eq('type', _typeFilter)
         .eq('org_id', widget.orgId);
 
-    // Date (purchase_date ou sale_date selon _dateBase)
     final after = _dateRangeStart();
     late final String orderColumn;
 
@@ -532,21 +518,16 @@ class _MainInventoryPageState extends State<MainInventoryPage>
         final afterStr = after.toIso8601String().split('T').first;
         query = query.gte('purchase_date', afterStr);
       }
-      // Tri par date d'achat décroissante
       orderColumn = 'purchase_date';
     } else {
-      // Mode "Sale" : ne garder que les lignes avec une sale_date
       query = query.not('sale_date', 'is', null);
-
       if (after != null) {
         final afterStr = after.toIso8601String().split('T').first;
         query = query.gte('sale_date', afterStr);
       }
-      // Tri par date de vente décroissante
       orderColumn = 'sale_date';
     }
 
-    // NEW: filtre jeu (via game_id)
     if ((_gameFilter ?? '').isNotEmpty) {
       final row = await _sb
           .from('games')
@@ -554,26 +535,18 @@ class _MainInventoryPageState extends State<MainInventoryPage>
           .eq('label', _gameFilter!)
           .maybeSingle();
       final gid = (row?['id'] as int?);
-      if (gid != null) {
-        query = query.eq('game_id', gid);
-      }
+      if (gid != null) query = query.eq('game_id', gid);
     }
 
-    // NEW: filtre langue
     if ((_languageFilter ?? '').isNotEmpty) {
       query = query.eq('language', _languageFilter as Object);
     }
 
-    // NEW: filtre tranche de prix sur estimated_price
     final bounds = _priceBounds();
     final minPrice = bounds['min'];
     final maxPrice = bounds['max'];
-    if (minPrice != null) {
-      query = query.gte('estimated_price', minPrice);
-    }
-    if (maxPrice != null) {
-      query = query.lte('estimated_price', maxPrice);
-    }
+    if (minPrice != null) query = query.gte('estimated_price', minPrice);
+    if (maxPrice != null) query = query.lte('estimated_price', maxPrice);
 
     final List<dynamic> raw =
         await query.order(orderColumn, ascending: false).limit(500);
@@ -582,7 +555,6 @@ class _MainInventoryPageState extends State<MainInventoryPage>
         .map<Map<String, dynamic>>((e) => Map<String, dynamic>.from(e as Map))
         .toList();
 
-    // Search texte (client-side, comme avant)
     final rawQ = _searchCtrl.text.trim().toLowerCase();
     if (rawQ.isNotEmpty) {
       final tokens =
@@ -603,6 +575,7 @@ class _MainInventoryPageState extends State<MainInventoryPage>
 
       rows = rows.where(rowMatches).toList();
     }
+
     return rows;
   }
 
@@ -611,11 +584,7 @@ class _MainInventoryPageState extends State<MainInventoryPage>
     if ((_statusFilter ?? '').isNotEmpty) {
       final f = _statusFilter!;
       final grouped = kGroupToStatuses[f];
-      if (grouped != null) {
-        statuses = grouped.where((s) => s != 'vault').toList();
-      } else {
-        statuses = [f];
-      }
+      statuses = (grouped ?? <String>[f]).where((s) => s != 'vault').toList();
     } else {
       statuses = kStatusOrder.where((s) => s != 'vault').toList();
     }
@@ -629,14 +598,14 @@ class _MainInventoryPageState extends State<MainInventoryPage>
       if (canSeeCosts) 'grading_fees',
       'estimated_price',
       if (_perm.canSeeRevenue) 'sale_price',
-      // ✅ MULTI-DEVISE (sale_price)
-      if (_perm.canSeeRevenue) 'sale_currency',
+      if (_perm.canSeeRevenue) 'sale_currency', // ✅ MULTI-DEVISE
       'game_id',
       'org_id',
       'type',
       'status',
       'purchase_date',
       'language',
+      'sale_date',
     ].join(', ');
 
     var q = _sb
@@ -653,7 +622,6 @@ class _MainInventoryPageState extends State<MainInventoryPage>
         q = q.gte('purchase_date', d);
       }
     } else {
-      // Mode "Sale" : uniquement les items avec sale_date
       q = q.not('sale_date', 'is', null);
       if (after != null) {
         final d = after.toIso8601String().split('T').first;
@@ -661,7 +629,6 @@ class _MainInventoryPageState extends State<MainInventoryPage>
       }
     }
 
-    // NEW: filtre jeu
     if ((_gameFilter ?? '').isNotEmpty) {
       final row = await _sb
           .from('games')
@@ -672,21 +639,15 @@ class _MainInventoryPageState extends State<MainInventoryPage>
       if (gid != null) q = q.eq('game_id', gid);
     }
 
-    // NEW: filtre langue
     if ((_languageFilter ?? '').isNotEmpty) {
       q = q.eq('language', _languageFilter as Object);
     }
 
-    // NEW: filtre tranche de prix sur estimated_price
     final bounds = _priceBounds();
     final minPrice = bounds['min'];
     final maxPrice = bounds['max'];
-    if (minPrice != null) {
-      q = q.gte('estimated_price', minPrice);
-    }
-    if (maxPrice != null) {
-      q = q.lte('estimated_price', maxPrice);
-    }
+    if (minPrice != null) q = q.gte('estimated_price', minPrice);
+    if (maxPrice != null) q = q.lte('estimated_price', maxPrice);
 
     final List<dynamic> raw = await q.limit(50000);
     return raw
@@ -700,29 +661,24 @@ class _MainInventoryPageState extends State<MainInventoryPage>
       for (final s in kStatusOrder) {
         if (s == 'vault') continue;
         final q = (r['qty_$s'] as int?) ?? 0;
-        if (q > 0) {
-          out.add({...r, 'status': s, 'qty_status': q});
-        }
+        if (q > 0) out.add({...r, 'status': s, 'qty_status': q});
       }
     }
 
     final effectiveFilter = (overrideFilter ?? _statusFilter)?.toString() ?? '';
-
     if (effectiveFilter.isNotEmpty) {
       final grouped = kGroupToStatuses[effectiveFilter];
       if (grouped != null) {
         return out
             .where((e) => grouped.contains(e['status'] as String))
             .toList();
-      } else {
-        return out.where((e) => e['status'] == effectiveFilter).toList();
       }
+      return out.where((e) => e['status'] == effectiveFilter).toList();
     }
 
     return out.where((e) => e['status'] != 'finalized').toList();
   }
 
-  // 🔑 clé stable “ligne” pour la sélection groupée (alignée avec nos requêtes)
   String _lineKey(Map<String, dynamic> r) {
     String pick(String k) =>
         (r[k] == null || (r[k] is String && r[k].toString().trim().isEmpty))
@@ -730,7 +686,7 @@ class _MainInventoryPageState extends State<MainInventoryPage>
             : r[k].toString();
     final parts = <String>[
       pick('org_id'),
-      pick('group_sig'), // 👈 on inclut group_sig pour être bien unique
+      pick('group_sig'),
       pick('product_id'),
       pick('game_id'),
       pick('type'),
@@ -742,34 +698,28 @@ class _MainInventoryPageState extends State<MainInventoryPage>
       pick('item_location'),
       pick('buyer_infos'),
       pick('currency'),
-      pick('status'), // important
+      pick('status'),
     ];
     return parts.join('|');
   }
 
   Widget _buildInventoryBody({String? forceStatus}) {
-    // Items bruts pour KPI (filtrés si forceStatus != null)
     final effectiveKpiItems = (forceStatus == null)
         ? _kpiItems
         : _kpiItems
             .where((e) => (e['status']?.toString() ?? '') == forceStatus)
             .toList();
 
-    if (_loading) {
-      return const Center(child: CircularProgressIndicator());
-    }
+    if (_loading) return const Center(child: CircularProgressIndicator());
 
     _ensureViewState(forceStatus);
 
-    // -- Contexte d'affichage de l'overview
     final bool isFinalizedView = (forceStatus == 'finalized');
     final bool showFinanceOverview =
         isFinalizedView || _perm.canSeeFinanceOverview;
 
-    // ✅ All lines
     final allLines = _explodeLines(overrideFilter: forceStatus);
 
-    // Pagination limits
     final k = _viewKey(forceStatus);
     final visibleLineLimit = _visibleLineLimitByView[k] ?? _kChunk;
     final visibleProductLimit = _visibleProductLimitByView[k] ?? _kChunk;
@@ -777,21 +727,17 @@ class _MainInventoryPageState extends State<MainInventoryPage>
     final visibleLines =
         allLines.take(visibleLineLimit).toList(growable: false);
 
-    // ✅ Grouped products summaries (C)
     final allProducts = buildProductSummaries(
       lines: allLines,
       canSeeUnitCosts: _perm.canSeeUnitCosts,
-      showEstimated: showFinanceOverview, // show estimated chips if overview ok
+      showEstimated: showFinanceOverview,
     );
-
     final visibleProducts =
         allProducts.take(visibleProductLimit).toList(growable: false);
 
-    // Statuts disponibles pour l'édition groupée
     final List<String> allStatuses =
         kStatusOrder.where((s) => s != 'vault').toList();
 
-    // ======== Application de l'édition de groupe ========
     Future<void> applyGroupStatusToSelection() async {
       if (_groupNewStatus == null || _groupNewStatus!.isEmpty) {
         _snack('Pick a status to apply.');
@@ -803,15 +749,13 @@ class _MainInventoryPageState extends State<MainInventoryPage>
       }
 
       final String newStatus = _groupNewStatus!;
-
       setState(() => _applyingGroup = true);
+
       try {
-        // Lignes sélectionnées (sur l'ensemble des lignes, pas juste la page visible)
         final selectedLines = allLines
             .where((r) => _selectedKeys.contains(_lineKey(r)))
             .toList(growable: false);
 
-        // Regroupement des item_ids par ancien status
         final Map<String, List<int>> idsByOldStatus = {};
         final List<int> allIds = [];
 
@@ -833,12 +777,12 @@ class _MainInventoryPageState extends State<MainInventoryPage>
 
         final idsCsv = '(${allIds.join(",")})';
 
-        // ⚙️ MAJ statut en masse
-        await _sb
-            .from('item')
-            .update({'status': newStatus}).filter('id', 'in', idsCsv);
+        await _sb.from('item').update({'status': newStatus}).filter(
+          'id',
+          'in',
+          idsCsv,
+        );
 
-        // 📝 LOG : une entrée par ancien status (plus de "mixed")
         final comment = _groupCommentCtrl.text.trim();
         final String reason =
             comment.isEmpty ? 'group_status' : 'group_status: $comment';
@@ -852,16 +796,12 @@ class _MainInventoryPageState extends State<MainInventoryPage>
             orgId: widget.orgId,
             itemIds: itemIds,
             changes: {
-              'status': {
-                'old': oldStatus,
-                'new': newStatus,
-              },
+              'status': {'old': oldStatus, 'new': newStatus},
             },
             reason: reason,
           );
         }
 
-        // ✅ optimistic patch local des groupes
         setState(() {
           for (final line in selectedLines) {
             final gi = _findGroupIndexForLine(line);
@@ -875,7 +815,6 @@ class _MainInventoryPageState extends State<MainInventoryPage>
 
               g[oldKey] = ((g[oldKey] as int? ?? 0) - qty).clamp(0, 1 << 31);
               g[newKey] = (g[newKey] as int? ?? 0) + qty;
-
               _groups[gi] = g;
             }
           }
@@ -902,168 +841,69 @@ class _MainInventoryPageState extends State<MainInventoryPage>
         controller: isFinalizedView ? _finalizedScrollCtrl : _invScrollCtrl,
         padding: const EdgeInsets.only(bottom: 24),
         children: [
-          // Recherche & Filtres
+          // ✅ SHORT: one widget instead of huge inline UI
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
-            child: Card(
-              elevation: 1,
-              shadowColor: kAccentA.withOpacity(.18),
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(16)),
-              child: Container(
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(16),
-                  gradient: LinearGradient(
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                    colors: [
-                      kAccentA.withOpacity(.06),
-                      kAccentB.withOpacity(.05)
-                    ],
-                  ),
-                  border:
-                      Border.all(color: kAccentA.withOpacity(.15), width: 0.8),
-                ),
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
-                  child: Column(
-                    children: [
-                      SearchAndGameFilter(
-                        searchCtrl: _searchCtrl,
+            child: InventoryControlsCard(
+              searchCtrl: _searchCtrl,
+              games: _groups
+                  .map((r) => (r['game_label'] ?? '') as String)
+                  .where((s) => s.isNotEmpty)
+                  .toSet()
+                  .toList()
+                ..sort(),
+              selectedGame: _gameFilter,
+              onGameChanged: (v) {
+                setState(() => _gameFilter = v);
+                _refresh();
+              },
+              onSearch: _refresh,
+              languages: _groups
+                  .map((r) => (r['language'] ?? '') as String)
+                  .where((s) => s.isNotEmpty)
+                  .toSet()
+                  .toList()
+                ..sort(),
+              selectedLanguage: _languageFilter,
+              onLanguageChanged: (v) {
+                setState(() => _languageFilter = v);
+                _refresh();
+              },
+              priceBand: _priceBand,
+              onPriceBandChanged: (band) {
+                setState(() => _priceBand = band);
+                _refresh();
+              },
+              typeFilter: _typeFilter,
+              onTypeChanged: (t) {
+                setState(() => _typeFilter = t);
+                _refresh();
+              },
+              dateBase: _dateBase,
+              onDateBaseChanged: (v) {
+                setState(() => _dateBase = v);
+                _refresh();
+              },
+              dateRange: _dateRange,
+              onDateRangeChanged: (v) {
+                setState(() => _dateRange = v);
+                _refresh();
+              },
+              viewMode: _viewMode,
+              onViewModeChanged: (newMode) {
+                setState(() {
+                  _viewMode = newMode;
 
-                        // Jeux
-                        games: _groups
-                            .map((r) => (r['game_label'] ?? '') as String)
-                            .where((s) => s.isNotEmpty)
-                            .toSet()
-                            .toList()
-                          ..sort(),
-                        selectedGame: _gameFilter,
-                        onGameChanged: (v) {
-                          setState(() => _gameFilter = v);
-                          _refresh();
-                        },
-                        onSearch: _refresh,
+                  _resetViewState(forceStatus);
 
-                        // NEW: langues
-                        languages: _groups
-                            .map((r) => (r['language'] ?? '') as String)
-                            .where((s) => s.isNotEmpty)
-                            .toSet()
-                            .toList()
-                          ..sort(),
-                        selectedLanguage: _languageFilter,
-                        onLanguageChanged: (v) {
-                          setState(() => _languageFilter = v);
-                          _refresh();
-                        },
-
-                        // NEW: tranche de prix
-                        priceBand: _priceBand,
-                        onPriceBandChanged: (band) {
-                          setState(() => _priceBand = band);
-                          _refresh();
-                        },
-                      ),
-                      const SizedBox(height: 8),
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 8,
-                        crossAxisAlignment: WrapCrossAlignment.center,
-                        children: [
-                          // Type de produit (Single / Sealed)
-                          TypeTabs(
-                            typeFilter: _typeFilter,
-                            onTypeChanged: (t) {
-                              setState(() => _typeFilter = t);
-                              _refresh();
-                            },
-                          ),
-
-                          // Onglets : base de date (Purchase vs Sale)
-                          SegmentedButton<String>(
-                            segments: const [
-                              ButtonSegment(
-                                value: 'purchase',
-                                label: Text('Purchase'),
-                                icon:
-                                    Icon(Icons.shopping_bag_outlined, size: 16),
-                              ),
-                              ButtonSegment(
-                                value: 'sale',
-                                label: Text('Sale'),
-                                icon: Icon(Icons.sell_outlined, size: 16),
-                              ),
-                            ],
-                            selected: {_dateBase},
-                            onSelectionChanged: (s) {
-                              setState(() => _dateBase = s.first);
-                              _refresh();
-                            },
-                          ),
-
-                          // Onglets : période (All time / Last month / Last week)
-                          SegmentedButton<String>(
-                            segments: const [
-                              ButtonSegment(
-                                value: 'all',
-                                label: Text('All time'),
-                              ),
-                              ButtonSegment(
-                                value: 'month',
-                                label: Text('Last month'),
-                              ),
-                              ButtonSegment(
-                                value: 'week',
-                                label: Text('Last week'),
-                              ),
-                            ],
-                            selected: {_dateRange},
-                            onSelectionChanged: (s) {
-                              setState(() => _dateRange = s.first);
-                              _refresh();
-                            },
-                          ),
-
-                          // ✅ NEW: Products / Lines toggle
-                          SegmentedButton<InventoryListViewMode>(
-                            segments: const [
-                              ButtonSegment(
-                                value: InventoryListViewMode.products,
-                                label: Text('Products'),
-                                icon: Icon(Icons.grid_view, size: 16),
-                              ),
-                              ButtonSegment(
-                                value: InventoryListViewMode.lines,
-                                label: Text('Lines'),
-                                icon: Icon(Icons.table_rows, size: 16),
-                              ),
-                            ],
-                            selected: {_viewMode},
-                            onSelectionChanged: (s) {
-                              final newMode = s.first;
-                              setState(() {
-                                _viewMode = newMode;
-
-                                // reset pagination + collapse expansions for this view
-                                _resetViewState(forceStatus);
-
-                                // leaving group edit if we switch away from Lines
-                                if (_viewMode != InventoryListViewMode.lines) {
-                                  _groupMode = false;
-                                  _selectedKeys.clear();
-                                  _groupNewStatus = null;
-                                  _groupCommentCtrl.clear();
-                                }
-                              });
-                            },
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-              ),
+                  if (_viewMode != InventoryListViewMode.lines) {
+                    _groupMode = false;
+                    _selectedKeys.clear();
+                    _groupNewStatus = null;
+                    _groupCommentCtrl.clear();
+                  }
+                });
+              },
             ),
           ),
 
@@ -1079,24 +919,16 @@ class _MainInventoryPageState extends State<MainInventoryPage>
                   currency: allLines.isNotEmpty
                       ? (allLines.first['currency']?.toString() ?? 'USD')
                       : 'USD',
-
-                  // ✅ FX constants injectées (sale_price multi-devise -> USD)
                   baseCurrency: 'USD',
                   fxToUsd: kFxToUsd,
-
-                  // 👇 Mode Finalized + override investi (total sécurisé côté serveur)
                   finalizedMode: isFinalizedView,
                   overrideInvested:
                       isFinalizedView ? _finalizedInvestOverride : null,
-
-                  // 👇 Libellés adaptés
                   titleInvested:
                       isFinalizedView ? 'Invested' : 'Invested (view)',
                   titleEstimated:
                       isFinalizedView ? 'Actual margin' : 'Potential revenue',
                   titleSold: 'Actual revenue',
-
-                  // 👇 Sous-titres explicites
                   subtitleInvested: isFinalizedView
                       ? 'Σ costs (finalized)'
                       : 'Σ costs (unsold)',
@@ -1144,209 +976,48 @@ class _MainInventoryPageState extends State<MainInventoryPage>
             if (forceStatus == null) const SizedBox(height: 12),
           ],
 
-          // ✅ Showing X / total
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            child: Text(
-              _viewMode == InventoryListViewMode.lines
-                  ? 'Showing ${visibleLines.length} / ${allLines.length} lines'
-                  : 'Showing ${visibleProducts.length} / ${allProducts.length} products',
-              style: Theme.of(context)
-                  .textTheme
-                  .bodySmall
-                  ?.copyWith(color: Colors.black54),
-            ),
+          // ✅ SHORT: meta bar widget
+          InventoryListMetaBar(
+            viewMode: _viewMode,
+            visibleLines: visibleLines.length,
+            totalLines: allLines.length,
+            visibleProducts: visibleProducts.length,
+            totalProducts: allProducts.length,
           ),
 
           const SizedBox(height: 8),
 
-          // ======== Barre "Edit group" + panneau d'action (LINES ONLY) ========
-          if (!isFinalizedView &&
-              _viewMode == InventoryListViewMode.lines &&
-              !_loading &&
-              _groups.isNotEmpty &&
-              _perm.canEditItems)
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 0),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    crossAxisAlignment: WrapCrossAlignment.center,
-                    children: [
-                      Text(
-                        'Lines (${allLines.length})',
-                        style: Theme.of(context)
-                            .textTheme
-                            .bodyMedium
-                            ?.copyWith(fontWeight: FontWeight.w600),
-                      ),
-                      OutlinedButton.icon(
-                        icon: Icon(
-                          _groupMode ? Icons.group_off : Icons.group,
-                        ),
-                        label:
-                            Text(_groupMode ? 'Exit group edit' : 'Edit group'),
-                        onPressed: () {
-                          setState(() {
-                            _groupMode = !_groupMode;
-                            if (!_groupMode) {
-                              _selectedKeys.clear();
-                              _groupNewStatus = null;
-                              _groupCommentCtrl.clear();
-                            }
-                          });
-                        },
-                      ),
-                      if (_groupMode)
-                        Text(
-                          '${_selectedKeys.length} selected',
-                          style:
-                              Theme.of(context).textTheme.bodyMedium?.copyWith(
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                        ),
-                      if (_groupMode && _selectedKeys.isNotEmpty)
-                        TextButton(
-                          onPressed: () =>
-                              setState(() => _selectedKeys.clear()),
-                          child: const Text('Clear selection'),
-                        ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  AnimatedSwitcher(
-                    duration: const Duration(milliseconds: 180),
-                    child: _groupMode
-                        ? Card(
-                            key: const ValueKey('group-panel'),
-                            elevation: 1,
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            child: Padding(
-                              padding: const EdgeInsets.all(12),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Wrap(
-                                    spacing: 12,
-                                    runSpacing: 12,
-                                    crossAxisAlignment:
-                                        WrapCrossAlignment.center,
-                                    children: [
-                                      SizedBox(
-                                        width: 260,
-                                        child: DropdownButtonFormField<String>(
-                                          isExpanded: true,
-                                          value: _groupNewStatus,
-                                          items: allStatuses.map((s) {
-                                            final c = statusColor(context, s);
-                                            return DropdownMenuItem<String>(
-                                              value: s,
-                                              child: Container(
-                                                padding:
-                                                    const EdgeInsets.symmetric(
-                                                        vertical: 4,
-                                                        horizontal: 6),
-                                                decoration: BoxDecoration(
-                                                  color: c.withOpacity(0.16),
-                                                  borderRadius:
-                                                      BorderRadius.circular(6),
-                                                  border: Border.all(
-                                                      color:
-                                                          c.withOpacity(0.7)),
-                                                ),
-                                                child: Row(
-                                                  children: [
-                                                    Container(
-                                                      width: 10,
-                                                      height: 10,
-                                                      decoration: BoxDecoration(
-                                                        color: c,
-                                                        shape: BoxShape.circle,
-                                                      ),
-                                                    ),
-                                                    const SizedBox(width: 8),
-                                                    Text(
-                                                      s.toUpperCase(),
-                                                      style: TextStyle(
-                                                        fontWeight:
-                                                            FontWeight.w600,
-                                                        color: c,
-                                                      ),
-                                                    ),
-                                                  ],
-                                                ),
-                                              ),
-                                            );
-                                          }).toList(),
-                                          onChanged: (v) => setState(
-                                              () => _groupNewStatus = v),
-                                          decoration: const InputDecoration(
-                                            labelText: 'New status',
-                                            border: OutlineInputBorder(),
-                                            isDense: true,
-                                          ),
-                                        ),
-                                      ),
-                                      SizedBox(
-                                        width: 360,
-                                        child: TextField(
-                                          controller: _groupCommentCtrl,
-                                          decoration: const InputDecoration(
-                                            labelText:
-                                                'Status comment (optional)',
-                                            hintText:
-                                                'Reason, tracking, batch ref, etc.',
-                                            border: OutlineInputBorder(),
-                                            isDense: true,
-                                          ),
-                                        ),
-                                      ),
-                                      FilledButton.icon(
-                                        onPressed: (_groupNewStatus != null &&
-                                                _selectedKeys.isNotEmpty &&
-                                                !_applyingGroup)
-                                            ? applyGroupStatusToSelection
-                                            : null,
-                                        icon: _applyingGroup
-                                            ? const SizedBox(
-                                                height: 16,
-                                                width: 16,
-                                                child:
-                                                    CircularProgressIndicator(
-                                                        strokeWidth: 2),
-                                              )
-                                            : const Icon(Icons.done_all),
-                                        label: Text(
-                                            'Apply to ${_selectedKeys.length} line(s)'),
-                                      ),
-                                    ],
-                                  ),
-                                  const SizedBox(height: 6),
-                                  Text(
-                                    'Only the status is modified. A log entry is saved for all affected items.',
-                                    style: Theme.of(context)
-                                        .textTheme
-                                        .bodySmall
-                                        ?.copyWith(color: Colors.black54),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          )
-                        : const SizedBox.shrink(),
-                  ),
-                ],
-              ),
-            ),
+          // ✅ SHORT: group edit widget
+          InventoryGroupEditPanel(
+            enabled: !isFinalizedView &&
+                _viewMode == InventoryListViewMode.lines &&
+                !_loading &&
+                _groups.isNotEmpty &&
+                _perm.canEditItems,
+            totalLines: allLines.length,
+            groupMode: _groupMode && !isFinalizedView,
+            selectedCount: _selectedKeys.length,
+            onToggleGroupMode: () {
+              setState(() {
+                _groupMode = !_groupMode;
+                if (!_groupMode) {
+                  _selectedKeys.clear();
+                  _groupNewStatus = null;
+                  _groupCommentCtrl.clear();
+                }
+              });
+            },
+            onClearSelection: () => setState(() => _selectedKeys.clear()),
+            statuses: allStatuses,
+            newStatus: _groupNewStatus,
+            onNewStatusChanged: (v) => setState(() => _groupNewStatus = v),
+            commentCtrl: _groupCommentCtrl,
+            applying: _applyingGroup,
+            onApply: applyGroupStatusToSelection,
+          ),
 
           const SizedBox(height: 8),
 
-          // ======== Content (Lines OR Products) ========
           if (_viewMode == InventoryListViewMode.lines)
             InventoryTableByStatus(
               lines: visibleLines,
@@ -1358,8 +1029,6 @@ class _MainInventoryPageState extends State<MainInventoryPage>
               showRevenue: _perm.canSeeRevenue,
               showEstimated: showFinanceOverview,
               onInlineUpdate: _applyInlineUpdate,
-
-              // ⭐️ Group-edit wiring (Lines mode only)
               groupMode: _groupMode && !isFinalizedView,
               selection: _selectedKeys,
               lineKey: _lineKey,
@@ -1410,7 +1079,6 @@ class _MainInventoryPageState extends State<MainInventoryPage>
     );
   }
 
-  // 👉 Version simple & robuste : utilise directement group_sig + status
   void _openDetails(Map<String, dynamic> line) async {
     final String orgId = widget.orgId;
     final String status = (line['status'] ?? '').toString();
@@ -1427,7 +1095,6 @@ class _MainInventoryPageState extends State<MainInventoryPage>
       'group_sig': groupSig,
     };
 
-    // Optionnel : on essaie de choper un item d’ancrage pour cette ligne
     try {
       final anchor = await _sb
           .from('item')
@@ -1439,12 +1106,8 @@ class _MainInventoryPageState extends State<MainInventoryPage>
           .limit(1)
           .maybeSingle();
 
-      if (anchor != null && anchor['id'] != null) {
-        payload['id'] = anchor['id'];
-      }
-    } catch (_) {
-      // soft fail, on laisse GroupDetails se débrouiller avec group_sig
-    }
+      if (anchor != null && anchor['id'] != null) payload['id'] = anchor['id'];
+    } catch (_) {}
 
     final changed = await Navigator.of(context).push<bool>(
       MaterialPageRoute(
@@ -1452,9 +1115,7 @@ class _MainInventoryPageState extends State<MainInventoryPage>
             GroupDetailsPage(group: Map<String, dynamic>.from(payload)),
       ),
     );
-    if (changed == true) {
-      _refresh();
-    }
+    if (changed == true) _refresh();
   }
 
   void _openEdit(Map<String, dynamic> line) async {
@@ -1474,9 +1135,7 @@ class _MainInventoryPageState extends State<MainInventoryPage>
       availableQty: qty,
       initialSample: line,
     );
-    if (changed == true) {
-      _refresh();
-    }
+    if (changed == true) _refresh();
   }
 
   Future<bool> _confirmDeleteDialog(Map<String, dynamic> line) async {
@@ -1493,13 +1152,15 @@ class _MainInventoryPageState extends State<MainInventoryPage>
             ),
             actions: [
               TextButton(
-                  onPressed: () => Navigator.pop(ctx, false),
-                  child: const Text('Cancel')),
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('Cancel'),
+              ),
               FilledButton(
                 onPressed: () => Navigator.pop(ctx, true),
                 style: FilledButton.styleFrom(
-                    backgroundColor: Colors.redAccent,
-                    foregroundColor: Colors.white),
+                  backgroundColor: Colors.redAccent,
+                  foregroundColor: Colors.white,
+                ),
                 child: const Text('Delete'),
               ),
             ],
@@ -1512,7 +1173,6 @@ class _MainInventoryPageState extends State<MainInventoryPage>
     final String? groupSig = line['group_sig']?.toString();
     final String status = (line['status'] ?? '').toString();
 
-    // 1️⃣ Tentative "idéal": group_sig + status
     if (groupSig != null && groupSig.isNotEmpty && status.isNotEmpty) {
       final raw = await _sb
           .from('item')
@@ -1528,12 +1188,9 @@ class _MainInventoryPageState extends State<MainInventoryPage>
           .whereType<int>()
           .toList(growable: false);
 
-      if (ids.isNotEmpty) {
-        return ids;
-      }
+      if (ids.isNotEmpty) return ids;
     }
 
-    // 2️⃣ Fallback : ancienne logique (sans dépendre de group_sig)
     dynamic norm(dynamic v) {
       if (v == null) return null;
       if (v is String && v.trim().isEmpty) return null;
@@ -1562,8 +1219,7 @@ class _MainInventoryPageState extends State<MainInventoryPage>
       'grading_fees',
       'sale_date',
       'sale_price',
-      // ✅ MULTI-DEVISE (sale_price)
-      'sale_currency',
+      'sale_currency', // ✅ MULTI-DEVISE
       'tracking',
       'estimated_price',
       'item_location',
@@ -1580,9 +1236,8 @@ class _MainInventoryPageState extends State<MainInventoryPage>
 
       for (final k in keys) {
         if (!line.containsKey(k)) continue;
-        var v = line[k];
+        var v = norm(line[k]);
 
-        v = norm(v);
         if (v == null) {
           q = q.filter(k, 'is', null);
           continue;
@@ -1662,11 +1317,10 @@ class _MainInventoryPageState extends State<MainInventoryPage>
     }
   }
 
-  // ====== LOG: inline == edit (old/new) ======
   Future<void> _logBatchEdit({
     required String orgId,
     required List<int> itemIds,
-    required Map<String, Map<String, dynamic>> changes, // {field: {old,new}}
+    required Map<String, Map<String, dynamic>> changes,
     String? reason,
   }) async {
     if (changes.isEmpty) return;
@@ -1677,12 +1331,9 @@ class _MainInventoryPageState extends State<MainInventoryPage>
         'p_changes': changes,
         'p_reason': reason,
       });
-    } catch (_) {
-      // best-effort
-    }
+    } catch (_) {}
   }
 
-  // 👇 helper: trouve l'index du groupe correspondant à la "ligne"
   int? _findGroupIndexForLine(Map<String, dynamic> line) {
     final String? lineGroupSig = line['group_sig']?.toString();
     if (lineGroupSig != null && lineGroupSig.isNotEmpty) {
@@ -1690,9 +1341,7 @@ class _MainInventoryPageState extends State<MainInventoryPage>
         final g = _groups[i];
         final gSig = g['group_sig']?.toString() ?? '';
         final gOrg = g['org_id']?.toString() ?? '';
-        if (gSig == lineGroupSig && gOrg == widget.orgId) {
-          return i;
-        }
+        if (gSig == lineGroupSig && gOrg == widget.orgId) return i;
       }
     }
 
@@ -1712,13 +1361,11 @@ class _MainInventoryPageState extends State<MainInventoryPage>
     return null;
   }
 
-  // ====== Sauvegarde inline + patch local immédiat + log ======
   Future<void> _applyInlineUpdate(
     Map<String, dynamic> line,
     String field,
     dynamic newValue,
   ) async {
-    // 1) parse côté client
     dynamic parsed;
     switch (field) {
       case 'status':
@@ -1733,8 +1380,7 @@ class _MainInventoryPageState extends State<MainInventoryPage>
         parsed = t.isEmpty ? null : num.tryParse(t);
         break;
 
-      // ✅ MULTI-DEVISE (sale_price)
-      case 'sale_currency':
+      case 'sale_currency': // ✅ MULTI-DEVISE
         final t = (newValue ?? '').toString().trim();
         parsed = t.isEmpty ? null : t;
         break;
@@ -1754,34 +1400,28 @@ class _MainInventoryPageState extends State<MainInventoryPage>
         parsed = t.isEmpty ? null : t;
     }
 
-    // OLD pour le log
     final oldValue =
         field == 'status' ? (line['status'] ?? '').toString() : line[field];
 
-    // 2) écriture serveur
     try {
       final ids = await _collectItemIdsForLine(line);
       if (ids.isEmpty) {
         _snack('No items found for this line.');
         return;
       }
+
       final idsCsv = '(${ids.join(",")})';
       await _sb.from('item').update({field: parsed}).filter('id', 'in', idsCsv);
 
-      // 2bis) LOG comme l’edit
       await _logBatchEdit(
         orgId: widget.orgId,
         itemIds: ids,
         changes: {
-          field: {
-            'old': oldValue,
-            'new': parsed,
-          }
+          field: {'old': oldValue, 'new': parsed}
         },
         reason: 'inline_edit',
       );
 
-      // 3) ✅ optimistic update local
       setState(() {
         final oldStatus = (line['status'] ?? '').toString();
         final qty = (line['qty_status'] as int?) ?? 0;
@@ -1811,8 +1451,8 @@ class _MainInventoryPageState extends State<MainInventoryPage>
           _groups[gi] = g;
         }
       });
-      _refreshSilent();
 
+      _refreshSilent();
       _snack('Modified (${ids.length} item(s)).');
     } on PostgrestException catch (e) {
       _snack('Supabase error: ${e.message}');
@@ -1823,17 +1463,13 @@ class _MainInventoryPageState extends State<MainInventoryPage>
 
   @override
   Widget build(BuildContext context) {
-    // Tant que le rôle n'est pas chargé OU pas de TabController, on affiche un loader
     if (!_roleLoaded || _tabCtrl == null) {
-      return const Scaffold(
-        body: Center(child: CircularProgressIndicator()),
-      );
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
 
     final isLoggedIn = _sb.auth.currentSession != null;
 
     return WillPopScope(
-      // 🔒 empêche le "back" (geste 2 doigts, bouton retour navigateur, etc.)
       onWillPop: () async => false,
       child: Scaffold(
         appBar: AppBar(
@@ -1843,7 +1479,6 @@ class _MainInventoryPageState extends State<MainInventoryPage>
               data: const IconThemeData(opacity: 1.0),
               child: Row(
                 children: [
-                  // NEW: bouton vers la page de gestion des factures
                   IconButton(
                     tooltip: 'Invoices',
                     icon: const Iconify(

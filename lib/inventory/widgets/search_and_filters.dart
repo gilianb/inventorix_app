@@ -1,12 +1,12 @@
 // ignore_for_file: deprecated_member_use
-
 import 'package:flutter/material.dart';
 
-//icons
+// icons
 import 'package:iconify_flutter/iconify_flutter.dart';
 import 'package:iconify_flutter/icons/mdi.dart';
 
-/// Mapping group -> readable label
+import '../ui/ix/ix.dart';
+
 const Map<String, String> kGroupPrettyLabel = {
   'all': 'All',
   'purchase': 'Purchase',
@@ -15,14 +15,12 @@ const Map<String, String> kGroupPrettyLabel = {
   'vault': 'vault',
 };
 
-/// Simple formatting of a single status: "sent_to_grader" -> "Sent to grader"
 String prettyStatus(String raw) {
   if (raw.isEmpty) return raw;
   final s = raw.replaceAll('_', ' ');
   return s.substring(0, 1).toUpperCase() + s.substring(1);
 }
 
-/// Etiquettes lisibles pour les tranches de prix
 const Map<String, String> kPriceBandLabels = {
   'any': 'All prices',
   'p1': '< 50',
@@ -39,123 +37,145 @@ class SearchAndGameFilter extends StatelessWidget {
     required this.selectedGame,
     required this.onGameChanged,
     required this.onSearch,
-
-    // NEW
     required this.languages,
     required this.selectedLanguage,
     required this.onLanguageChanged,
     required this.priceBand,
     required this.onPriceBandChanged,
+    this.padding = const EdgeInsets.all(12),
   });
 
   final TextEditingController searchCtrl;
 
-  // Jeux
   final List<String> games;
   final String? selectedGame;
   final ValueChanged<String?> onGameChanged;
 
   final VoidCallback onSearch;
 
-  // NEW Langues
   final List<String> languages;
   final String? selectedLanguage;
   final ValueChanged<String?> onLanguageChanged;
 
-  // NEW Tranche de prix (estimated_price)
-  /// 'any' | 'p1' | 'p2' | 'p3' | 'p4'
   final String priceBand;
   final ValueChanged<String> onPriceBandChanged;
 
+  final EdgeInsetsGeometry padding;
+
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
     final hasGames = games.isNotEmpty;
     final hasLanguages = languages.isNotEmpty;
 
     return Padding(
-      padding: const EdgeInsets.all(12),
-      child: Wrap(
-        spacing: 12,
-        runSpacing: 8,
-        crossAxisAlignment: WrapCrossAlignment.center,
-        children: [
-          // Search
-          ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 420),
-            child: TextField(
-              controller: searchCtrl,
-              onSubmitted: (_) => onSearch(),
-              decoration: InputDecoration(
-                hintText: 'Search (name, language, game, vendor)',
-                prefixIcon: const Iconify(Mdi.magnify, color: Colors.grey),
-                suffixIcon: IconButton(
-                  icon: const Iconify(Mdi.close, color: Colors.grey),
-                  onPressed: () {
-                    searchCtrl.clear();
-                    onSearch();
-                  },
+      padding: padding,
+      child: LayoutBuilder(
+        builder: (ctx, cons) {
+          final maxW = cons.maxWidth;
+          final wide = maxW >= 900;
+
+          final searchWidth = wide ? 460.0 : maxW;
+
+          return Wrap(
+            spacing: 12,
+            runSpacing: 10,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              SizedBox(
+                width: searchWidth.clamp(260, 520),
+                child: TextField(
+                  controller: searchCtrl,
+                  textInputAction: TextInputAction.search,
+                  onSubmitted: (_) => onSearch(),
+                  decoration: ixDecoration(
+                    context,
+                    hintText: 'Search (name, language, game, vendor)',
+                    prefixIcon: Iconify(
+                      Mdi.magnify,
+                      color: cs.onSurfaceVariant,
+                    ),
+                    suffixIcon: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        IconButton(
+                          tooltip: 'Clear',
+                          icon: Iconify(Mdi.close, color: cs.onSurfaceVariant),
+                          onPressed: () {
+                            searchCtrl.clear();
+                            onSearch();
+                          },
+                        ),
+                        IconButton(
+                          tooltip: 'Search',
+                          icon: Icon(Icons.search, color: cs.primary),
+                          onPressed: onSearch,
+                        ),
+                      ],
+                    ),
+                  ),
                 ),
               ),
-            ),
-          ),
-
-          // Jeu
-          if (hasGames)
-            DropdownButton<String?>(
-              value: selectedGame,
-              hint: const Text('Filter by game'),
-              items: [
-                const DropdownMenuItem<String?>(
-                  value: null,
-                  child: Text('All games'),
+              if (hasGames)
+                IxDropdownField<String?>(
+                  width: 220,
+                  value: selectedGame,
+                  onChanged: onGameChanged,
+                  labelText: 'Game',
+                  leading: const Icon(Icons.videogame_asset_outlined),
+                  items: [
+                    const DropdownMenuItem<String?>(
+                      value: null,
+                      child: Text('All games'),
+                    ),
+                    ...games.map(
+                      (g) => DropdownMenuItem<String?>(
+                        value: g,
+                        child: Text(g),
+                      ),
+                    ),
+                  ],
                 ),
-                ...games.map(
-                  (g) => DropdownMenuItem<String?>(
-                    value: g,
-                    child: Text(g),
-                  ),
+              if (hasLanguages)
+                IxDropdownField<String?>(
+                  width: 220,
+                  value: selectedLanguage,
+                  onChanged: onLanguageChanged,
+                  labelText: 'Language',
+                  leading: const Icon(Icons.translate_outlined),
+                  items: [
+                    const DropdownMenuItem<String?>(
+                      value: null,
+                      child: Text('All languages'),
+                    ),
+                    ...languages.map(
+                      (lang) => DropdownMenuItem<String?>(
+                        value: lang,
+                        child: Text(lang),
+                      ),
+                    ),
+                  ],
                 ),
-              ],
-              onChanged: onGameChanged,
-            ),
-
-          // NEW : Langue
-          if (hasLanguages)
-            DropdownButton<String?>(
-              value: selectedLanguage,
-              hint: const Text('Filter by language'),
-              items: [
-                const DropdownMenuItem<String?>(
-                  value: null,
-                  child: Text('All languages'),
-                ),
-                ...languages.map(
-                  (lang) => DropdownMenuItem<String?>(
-                    value: lang,
-                    child: Text(lang),
-                  ),
-                ),
-              ],
-              onChanged: onLanguageChanged,
-            ),
-
-          // NEW : Tranche de prix (sur estimated_price)
-          DropdownButton<String>(
-            value: priceBand,
-            hint: const Text('Price'),
-            items: kPriceBandLabels.entries
-                .map(
-                  (e) => DropdownMenuItem<String>(
-                    value: e.key,
-                    child: Text(e.value),
-                  ),
-                )
-                .toList(),
-            onChanged: (v) {
-              if (v != null) onPriceBandChanged(v);
-            },
-          ),
-        ],
+              IxDropdownField<String>(
+                width: 190,
+                value: priceBand,
+                onChanged: (v) {
+                  if (v != null) onPriceBandChanged(v);
+                },
+                labelText: 'Price',
+                leading: const Icon(Icons.price_change_outlined),
+                items: kPriceBandLabels.entries
+                    .map(
+                      (e) => DropdownMenuItem<String>(
+                        value: e.key,
+                        child: Text(e.value),
+                      ),
+                    )
+                    .toList(),
+              ),
+            ],
+          );
+        },
       ),
     );
   }
@@ -173,56 +193,25 @@ class TypeTabs extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    final isSingle = typeFilter == 'single';
-
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 12),
-      child: Center(
-        child: DecoratedBox(
-          decoration: BoxDecoration(
-            color: cs.surfaceContainerHighest,
-            borderRadius: BorderRadius.circular(999),
-            border: Border.all(color: cs.primary.withOpacity(.20), width: 1),
-          ),
-          child: ToggleButtons(
-            isSelected: [isSingle, !isSingle],
-            onPressed: (i) => onTypeChanged(i == 0 ? 'single' : 'sealed'),
-            borderRadius: BorderRadius.circular(999),
-            borderWidth: 0,
-            borderColor: Colors.transparent,
-            selectedBorderColor: Colors.transparent,
-            color: cs.primary, // unselected text
-            selectedColor: cs.onPrimary, // selected text
-            fillColor: cs.primary, // selected background
-            splashColor: cs.primary.withOpacity(.15),
-            hoverColor: cs.primary.withOpacity(.08),
-            constraints: const BoxConstraints(
-              minHeight: 48, // taller
-              minWidth: 140, // wider
-            ),
-            textStyle: Theme.of(context).textTheme.titleMedium?.copyWith(
-                  fontWeight: FontWeight.w800, // bold
-                  letterSpacing: .3,
-                ),
-            children: const [
-              Padding(
-                padding: EdgeInsets.symmetric(horizontal: 18, vertical: 10),
-                child: Text('SINGLE'),
-              ),
-              Padding(
-                padding: EdgeInsets.symmetric(horizontal: 18, vertical: 10),
-                child: Text('SEALED'),
-              ),
-            ],
-          ),
+    return SegmentedButton<String>(
+      segments: const [
+        ButtonSegment(
+          value: 'single',
+          label: Text('SINGLE'),
+          icon: Icon(Icons.style_outlined, size: 16),
         ),
-      ),
+        ButtonSegment(
+          value: 'sealed',
+          label: Text('SEALED'),
+          icon: Icon(Icons.inventory_2_outlined, size: 16),
+        ),
+      ],
+      selected: {typeFilter},
+      onSelectionChanged: (s) => onTypeChanged(s.first),
     );
   }
 }
 
-// ActiveStatusFilterBar inchangé...
 class ActiveStatusFilterBar extends StatelessWidget {
   const ActiveStatusFilterBar({
     super.key,
@@ -239,21 +228,19 @@ class ActiveStatusFilterBar extends StatelessWidget {
   Widget build(BuildContext context) {
     if (statusFilter == null) return const SizedBox.shrink();
 
-    // Nice label: group -> EN label ; otherwise human readable status
     final raw = statusFilter!;
     final label = kGroupPrettyLabel[raw] ?? prettyStatus(raw);
 
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 12),
-      child: Wrap(
-        spacing: 8,
-        children: [
-          Chip(
-            avatar: const Icon(Icons.filter_alt, size: 18),
-            label: Text('Active filter: $label  ($linesCount rows)'),
-            onDeleted: onClear,
-          ),
-        ],
+      padding: IxSpace.page,
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: InputChip(
+          avatar: const Icon(Icons.filter_alt, size: 18),
+          label: Text('Active filter: $label  ($linesCount rows)'),
+          onDeleted: onClear,
+          deleteIcon: const Icon(Icons.close),
+        ),
       ),
     );
   }

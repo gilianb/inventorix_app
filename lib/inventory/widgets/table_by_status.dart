@@ -7,7 +7,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../utils/status_utils.dart';
 import '../utils/format.dart';
 
-//icons
+// icons
 import 'package:iconify_flutter/iconify_flutter.dart';
 import 'package:iconify_flutter/icons/mdi.dart';
 
@@ -78,14 +78,17 @@ class InventoryTableByStatus extends StatefulWidget {
 }
 
 class _InventoryTableByStatusState extends State<InventoryTableByStatus> {
-  // dimensions “fixes”
-  static const double _headH = 56;
-  static const double _rowH = 56;
+  // ✅ Compact density (pro grid feel)
+  static const double _headH = 48;
+  static const double _rowH = 48;
   static const double _sideW = 52;
 
   // limites de largeur des colonnes
   static const double _minColWidth = 60;
   static const double _maxColWidth = 720;
+
+  /// Hover sync across fixed-left / center / fixed-right
+  String? _hoveredKey;
 
   String _txt(dynamic v) =>
       (v == null || (v is String && v.trim().isEmpty)) ? '—' : v.toString();
@@ -146,13 +149,16 @@ class _InventoryTableByStatusState extends State<InventoryTableByStatus> {
     if (columnsChanged) {
       _columnWidths = null; // on recalculera des valeurs par défaut
     }
+
+    // reset hover if selection changed a lot
+    if (oldWidget.lines != widget.lines) {
+      _hoveredKey = null;
+    }
   }
 
   void _resetSortedLines() {
     _sortedLines = List<Map<String, dynamic>>.from(widget.lines);
 
-    // Si on change la config des colonnes (showUnitCosts, mode, etc.),
-    // on vérifie que sortColumnIndex reste valide.
     final specs = _columnSpecs();
     if (_sortColumnIndex != null) {
       if (_sortColumnIndex! < 0 ||
@@ -178,170 +184,91 @@ class _InventoryTableByStatusState extends State<InventoryTableByStatus> {
   List<_ColumnSortSpec> _columnSpecs() {
     if (widget.mode == InventoryTableMode.vault) {
       return [
-        // Photo → URL
+        _ColumnSortSpec(_SortKind.text,
+            (r) => (r['photo_url'] ?? '').toString().toLowerCase()),
+        _ColumnSortSpec(_SortKind.text,
+            (r) => (r['grading_note'] ?? '').toString().toLowerCase()),
+        _ColumnSortSpec(_SortKind.text,
+            (r) => (r['product_name'] ?? '').toString().toLowerCase()),
+        _ColumnSortSpec(_SortKind.text,
+            (r) => (r['language'] ?? '').toString().toLowerCase()),
+        _ColumnSortSpec(_SortKind.text,
+            (r) => (r['game_label'] ?? '').toString().toLowerCase()),
+        _ColumnSortSpec(_SortKind.date, (r) => _parseDate(r['purchase_date'])),
         _ColumnSortSpec(
-          _SortKind.text,
-          (r) => (r['photo_url'] ?? '').toString().toLowerCase(),
-        ),
+            _SortKind.number, (r) => (r['qty_status'] as num? ?? 0)),
+        _ColumnSortSpec(_SortKind.text,
+            (r) => (r['status'] ?? '').toString().toLowerCase()),
+        _ColumnSortSpec(_SortKind.number, (r) {
+          final unitCost = (r['unit_cost'] as num?) ?? 0;
+          final unitFees = (r['unit_fees'] as num?) ?? 0;
+          return unitCost + unitFees;
+        }),
         _ColumnSortSpec(
-          _SortKind.text,
-          (r) => (r['grading_note'] ?? '').toString().toLowerCase(),
-        ),
-        _ColumnSortSpec(
-          _SortKind.text,
-          (r) => (r['product_name'] ?? '').toString().toLowerCase(),
-        ),
-        _ColumnSortSpec(
-          _SortKind.text,
-          (r) => (r['language'] ?? '').toString().toLowerCase(),
-        ),
-        _ColumnSortSpec(
-          _SortKind.text,
-          (r) => (r['game_label'] ?? '').toString().toLowerCase(),
-        ),
-        _ColumnSortSpec(
-          _SortKind.date,
-          (r) => _parseDate(r['purchase_date']),
-        ),
-        _ColumnSortSpec(
-          _SortKind.number,
-          (r) => (r['qty_status'] as num? ?? 0),
-        ),
-        _ColumnSortSpec(
-          _SortKind.text,
-          (r) => (r['status'] ?? '').toString().toLowerCase(),
-        ),
-        // Price / unit = unit_cost + unit_fees
-        _ColumnSortSpec(
-          _SortKind.number,
-          (r) {
-            final unitCost = (r['unit_cost'] as num?) ?? 0;
-            final unitFees = (r['unit_fees'] as num?) ?? 0;
-            return unitCost + unitFees;
-          },
-        ),
-        // Market / unit
-        _ColumnSortSpec(
-          _SortKind.number,
-          (r) => (r['market_price'] as num?) ?? 0,
-        ),
+            _SortKind.number, (r) => (r['market_price'] as num?) ?? 0),
       ];
     }
 
-    // ---- FULL mode ----
     final specs = <_ColumnSortSpec>[
+      _ColumnSortSpec(_SortKind.text,
+          (r) => (r['photo_url'] ?? '').toString().toLowerCase()),
+      _ColumnSortSpec(_SortKind.text,
+          (r) => (r['grading_note'] ?? '').toString().toLowerCase()),
+      _ColumnSortSpec(_SortKind.text,
+          (r) => (r['product_name'] ?? '').toString().toLowerCase()),
+      _ColumnSortSpec(_SortKind.text,
+          (r) => (r['language'] ?? '').toString().toLowerCase()),
+      _ColumnSortSpec(_SortKind.text,
+          (r) => (r['game_label'] ?? '').toString().toLowerCase()),
+      _ColumnSortSpec(_SortKind.date, (r) => _parseDate(r['purchase_date'])),
+      _ColumnSortSpec(_SortKind.number, (r) => (r['qty_status'] as num? ?? 0)),
       _ColumnSortSpec(
-        _SortKind.text,
-        (r) => (r['photo_url'] ?? '').toString().toLowerCase(),
-      ),
-      _ColumnSortSpec(
-        _SortKind.text,
-        (r) => (r['grading_note'] ?? '').toString().toLowerCase(),
-      ),
-      _ColumnSortSpec(
-        _SortKind.text,
-        (r) => (r['product_name'] ?? '').toString().toLowerCase(),
-      ),
-      _ColumnSortSpec(
-        _SortKind.text,
-        (r) => (r['language'] ?? '').toString().toLowerCase(),
-      ),
-      _ColumnSortSpec(
-        _SortKind.text,
-        (r) => (r['game_label'] ?? '').toString().toLowerCase(),
-      ),
-      _ColumnSortSpec(
-        _SortKind.date,
-        (r) => _parseDate(r['purchase_date']),
-      ),
-      _ColumnSortSpec(
-        _SortKind.number,
-        (r) => (r['qty_status'] as num? ?? 0),
-      ),
-      _ColumnSortSpec(
-        _SortKind.text,
-        (r) => (r['status'] ?? '').toString().toLowerCase(),
-      ),
+          _SortKind.text, (r) => (r['status'] ?? '').toString().toLowerCase()),
     ];
 
     if (widget.showUnitCosts) {
-      // Price / unit
-      specs.add(
-        _ColumnSortSpec(
-          _SortKind.number,
-          (r) {
-            final qtyTotal = (r['qty_total'] as num?) ?? 0;
-            final totalWithFees = (r['total_cost_with_fees'] as num?) ?? 0;
-            if (qtyTotal == 0) return 0;
-            return totalWithFees / qtyTotal;
-          },
-        ),
-      );
-      // Price (Qty×unit)
-      specs.add(
-        _ColumnSortSpec(
-          _SortKind.number,
-          (r) {
-            final qtyTotal = (r['qty_total'] as num?) ?? 0;
-            final totalWithFees = (r['total_cost_with_fees'] as num?) ?? 0;
-            final q = (r['qty_status'] as num?) ?? 0;
-            final unit = qtyTotal > 0 ? (totalWithFees / qtyTotal) : 0;
-            return unit * q;
-          },
-        ),
-      );
+      specs.add(_ColumnSortSpec(_SortKind.number, (r) {
+        final qtyTotal = (r['qty_total'] as num?) ?? 0;
+        final totalWithFees = (r['total_cost_with_fees'] as num?) ?? 0;
+        if (qtyTotal == 0) return 0;
+        return totalWithFees / qtyTotal;
+      }));
+      specs.add(_ColumnSortSpec(_SortKind.number, (r) {
+        final qtyTotal = (r['qty_total'] as num?) ?? 0;
+        final totalWithFees = (r['total_cost_with_fees'] as num?) ?? 0;
+        final q = (r['qty_status'] as num?) ?? 0;
+        final unit = qtyTotal > 0 ? (totalWithFees / qtyTotal) : 0;
+        return unit * q;
+      }));
     }
 
     if (widget.showEstimated) {
-      specs.add(
-        _ColumnSortSpec(
-          _SortKind.number,
-          (r) => (r['estimated_price'] as num?) ?? 0,
-        ),
-      );
+      specs.add(_ColumnSortSpec(
+          _SortKind.number, (r) => (r['estimated_price'] as num?) ?? 0));
     }
 
     specs.addAll([
-      _ColumnSortSpec(
-        _SortKind.text,
-        (r) => (r['supplier_name'] ?? '').toString().toLowerCase(),
-      ),
-      _ColumnSortSpec(
-        _SortKind.text,
-        (r) => (r['buyer_company'] ?? '').toString().toLowerCase(),
-      ),
-      _ColumnSortSpec(
-        _SortKind.text,
-        (r) => (r['item_location'] ?? '').toString().toLowerCase(),
-      ),
-      _ColumnSortSpec(
-        _SortKind.text,
-        (r) => (r['grade_id'] ?? '').toString().toLowerCase(),
-      ),
-      _ColumnSortSpec(
-        _SortKind.date,
-        (r) => _parseDate(r['sale_date']),
-      ),
+      _ColumnSortSpec(_SortKind.text,
+          (r) => (r['supplier_name'] ?? '').toString().toLowerCase()),
+      _ColumnSortSpec(_SortKind.text,
+          (r) => (r['buyer_company'] ?? '').toString().toLowerCase()),
+      _ColumnSortSpec(_SortKind.text,
+          (r) => (r['item_location'] ?? '').toString().toLowerCase()),
+      _ColumnSortSpec(_SortKind.text,
+          (r) => (r['grade_id'] ?? '').toString().toLowerCase()),
+      _ColumnSortSpec(_SortKind.date, (r) => _parseDate(r['sale_date'])),
     ]);
 
     if (widget.showRevenue) {
-      specs.add(
-        _ColumnSortSpec(
-          _SortKind.number,
-          (r) => (r['sale_price'] as num?) ?? 0,
-        ),
-      );
+      specs.add(_ColumnSortSpec(
+          _SortKind.number, (r) => (r['sale_price'] as num?) ?? 0));
     }
 
     specs.addAll([
-      _ColumnSortSpec(
-        _SortKind.text,
-        (r) => (r['buyer_infos'] ?? '').toString().toLowerCase(),
-      ),
-      _ColumnSortSpec(
-        _SortKind.text,
-        (r) => (r['document_url'] ?? '').toString().toLowerCase(),
-      ),
+      _ColumnSortSpec(_SortKind.text,
+          (r) => (r['buyer_infos'] ?? '').toString().toLowerCase()),
+      _ColumnSortSpec(_SortKind.text,
+          (r) => (r['document_url'] ?? '').toString().toLowerCase()),
     ]);
 
     return specs;
@@ -364,7 +291,7 @@ class _InventoryTableByStatusState extends State<InventoryTableByStatus> {
       ];
     }
 
-    final titles = <String>[
+    return <String>[
       'Photo',
       'Grading note',
       'Product',
@@ -385,48 +312,46 @@ class _InventoryTableByStatusState extends State<InventoryTableByStatus> {
       'buyer infos',
       'Doc',
     ];
-    return titles;
   }
 
-  /// Largeurs par défaut (un peu plus petites) – dans le même ordre
   List<double> _buildDefaultWidths(int count) {
     if (widget.mode == InventoryTableMode.vault) {
       final base = <double>[
-        70, // Photo
-        120, // Grading
-        230, // Product
-        90, // Language
-        110, // Game
-        110, // Purchase
-        60, // Qty
-        130, // Status
-        110, // Price / unit
-        140, // Market / unit
+        70,
+        120,
+        230,
+        90,
+        110,
+        110,
+        60,
+        130,
+        110,
+        140,
       ];
       assert(base.length == count);
       return base;
     }
 
     final base = <double>[
-      70, // Photo
-      120, // Grading
-      230, // Product
-      90, // Language
-      110, // Game
-      110, // Purchase
-      60, // Qty
-      130, // Status
-      if (widget.showUnitCosts) 110, // Price / unit
-      if (widget.showUnitCosts) 120, // Price (Qty×unit)
-      if (widget.showEstimated) 120, // Estimated
-      140, // Supplier
-      140, // Buyer
-      160, // Item location
-      110, // Grade ID
-      110, // Sale date
-      if (widget.showRevenue) 120, // Sale price
-      170, // Tracking
-      100, // Doc
+      70,
+      120,
+      230,
+      90,
+      110,
+      110,
+      60,
+      130,
+      if (widget.showUnitCosts) 110,
+      if (widget.showUnitCosts) 120,
+      if (widget.showEstimated) 120,
+      140,
+      140,
+      160,
+      110,
+      110,
+      if (widget.showRevenue) 120,
+      170,
+      100,
     ];
     assert(base.length == count);
     return base;
@@ -443,9 +368,8 @@ class _InventoryTableByStatusState extends State<InventoryTableByStatus> {
     if (_columnWidths == null) return;
     setState(() {
       final w = _columnWidths!;
-      final newWidth =
+      w[columnIndex] =
           (w[columnIndex] + delta).clamp(_minColWidth, _maxColWidth);
-      w[columnIndex] = newWidth;
     });
   }
 
@@ -455,30 +379,53 @@ class _InventoryTableByStatusState extends State<InventoryTableByStatus> {
         _kColumnDividerWidth * (widths.length - 1);
   }
 
-  /// Wrapper pour ajouter automatiquement un tooltip aux Text simples
-  Widget _maybeWrapWithTooltip(Widget child) {
+  Alignment _alignForColumn(int columnIndex) {
+    final specs = _columnSpecs();
+    if (columnIndex < 0 || columnIndex >= specs.length) {
+      return Alignment.centerLeft;
+    }
+    switch (specs[columnIndex].kind) {
+      case _SortKind.number:
+        return Alignment.centerRight;
+      case _SortKind.date:
+        return Alignment.center;
+      case _SortKind.text:
+        return Alignment.centerLeft;
+    }
+  }
+
+  /// Tooltip + copy-on-long-press (nice grid UX)
+  Widget _maybeWrapWithTooltipAndCopy(BuildContext context, Widget child) {
     if (child is Text) {
       final data = child.data;
-      if (data == null || data.isEmpty || data == '—') {
-        return child;
-      }
-      return Tooltip(
-        message: data,
-        waitDuration: const Duration(milliseconds: 400),
-        child: Text(
-          data,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          textAlign: child.textAlign,
-          style: child.style,
-          softWrap: false,
+      if (data == null || data.isEmpty || data == '—') return child;
+
+      return GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onLongPress: () async {
+          await Clipboard.setData(ClipboardData(text: data));
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Copied')),
+          );
+        },
+        child: Tooltip(
+          message: data,
+          waitDuration: const Duration(milliseconds: 350),
+          child: Text(
+            data,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            textAlign: child.textAlign,
+            style: child.style,
+            softWrap: false,
+          ),
         ),
       );
     }
     return child;
   }
 
-  /// Détermine le sens initial du tri quand on clique pour la 1ère fois
   bool _defaultAscendingFor(int columnIndex) {
     final specs = _columnSpecs();
     if (columnIndex < 0 || columnIndex >= specs.length) return true;
@@ -486,17 +433,16 @@ class _InventoryTableByStatusState extends State<InventoryTableByStatus> {
 
     switch (kind) {
       case _SortKind.text:
-        return true; // A → Z
+        return true;
       case _SortKind.number:
       case _SortKind.date:
-        return false; // par défaut: du plus grand au plus petit (flèche ↓)
+        return false;
     }
   }
 
   void _handleSort(int columnIndex) {
     setState(() {
       if (_sortColumnIndex == columnIndex) {
-        // on inverse le sens
         _sortAscending = !_sortAscending;
       } else {
         _sortColumnIndex = columnIndex;
@@ -517,7 +463,6 @@ class _InventoryTableByStatusState extends State<InventoryTableByStatus> {
       final av = sel(a);
       final bv = sel(b);
 
-      // On met les valeurs nulles toujours en bas, quel que soit le sens
       if (av == null && bv == null) return 0;
       if (av == null) return 1;
       if (bv == null) return -1;
@@ -527,33 +472,44 @@ class _InventoryTableByStatusState extends State<InventoryTableByStatus> {
     });
   }
 
+  void _setHovered(String? key) {
+    if (_hoveredKey == key) return;
+    setState(() => _hoveredKey = key);
+  }
+
+  // Couleur de fond d’une ligne (partagée entre colonnes fixes et center)
+  Color _rowBg(BuildContext ctx, Map<String, dynamic> r,
+      {required bool selected, required bool hovered}) {
+    final s = (r['status'] ?? '').toString();
+    final base = statusColor(ctx, s);
+
+    // pro grid: lighter baseline, stronger on hover, strongest on selection
+    final double baseOp = selected ? 0.26 : 0.14;
+    final double hoverAdd = hovered ? 0.10 : 0.0;
+
+    final double op = (baseOp + hoverAdd).clamp(0.10, 0.42);
+    return base.withOpacity(op);
+  }
+
   // ---- VAULT cells ----
   DataRow _vaultRow(BuildContext context, Map<String, dynamic> r,
-      {required bool selected}) {
+      {required bool selected, required bool hovered}) {
     final s = (r['status'] ?? '').toString();
     final q = (r['qty_status'] as int?) ?? 0;
 
-    // Prix / u. : on utilise unit_cost + unit_fees du group
     final unitCost = (r['unit_cost'] as num?) ?? 0;
     final unitFees = (r['unit_fees'] as num?) ?? 0;
     final unit = unitCost + unitFees;
 
     final currency = (r['currency']?.toString() ?? 'USD');
 
-    // Market / u. (depuis product) + delta depuis price_history
     final num? market = (r['market_price'] as num?);
     final num? deltaPct = (r['market_change_pct'] as num?);
     final String mk = (r['market_kind']?.toString() ?? 'Raw');
 
-    final lineColor = MaterialStateProperty.resolveWith<Color?>(
-      (_) {
-        final base = statusColor(context, s);
-        return base.withOpacity(selected ? 0.35 : 0.2);
-      },
-    );
+    final bg = _rowBg(context, r, selected: selected, hovered: hovered);
 
     Widget marketCell() {
-      // Si pas de data → on considère un delta de 0.0%
       final num effectiveDelta = deltaPct ?? 0;
 
       final trendColor = effectiveDelta > 0
@@ -584,20 +540,13 @@ class _InventoryTableByStatusState extends State<InventoryTableByStatus> {
     }
 
     final cells = <DataCell>[
-      // Photo
-      DataCell(_FileCell(
-        url: r['photo_url']?.toString(),
-        isImagePreferred: true,
-      )),
-
-      // Grading note
+      DataCell(
+          _FileCell(url: r['photo_url']?.toString(), isImagePreferred: true)),
       DataCell(Text(_txt(r['grading_note']))),
-
-      // Produit → détails
       DataCell(
         Tooltip(
           message: r['product_name']?.toString() ?? '',
-          waitDuration: const Duration(milliseconds: 400),
+          waitDuration: const Duration(milliseconds: 350),
           child: InkWell(
             onTap: () => widget.onOpen(r),
             child: Text(
@@ -609,20 +558,10 @@ class _InventoryTableByStatusState extends State<InventoryTableByStatus> {
           ),
         ),
       ),
-
-      // Langue
       DataCell(Text(r['language']?.toString() ?? '')),
-
-      // Jeu
       DataCell(Text(r['game_label']?.toString() ?? '—')),
-
-      // Achat
       DataCell(Text(r['purchase_date']?.toString() ?? '')),
-
-      // Qté
       DataCell(Text('$q')),
-
-      // Statut (inline désactivé en mode groupe)
       DataCell(
         _EditableStatusCell(
           enabled: !widget.groupMode,
@@ -636,59 +575,41 @@ class _InventoryTableByStatusState extends State<InventoryTableByStatus> {
           },
         ),
       ),
-
-      // Prix / u.
       DataCell(Text('${money(unit)} $currency')),
-
-      // Market / u. (+% delta)
       DataCell(marketCell()),
     ];
 
     return DataRow(
-      color: lineColor,
+      color: MaterialStateProperty.all(bg),
       onSelectChanged: null,
       cells: cells,
     );
   }
 
-  // ---- FULL (legacy) row ----
+  // ---- FULL row ----
   DataRow _fullRow(BuildContext context, Map<String, dynamic> r,
-      {required bool selected}) {
+      {required bool selected, required bool hovered}) {
     final s = (r['status'] ?? '').toString();
     final q = (r['qty_status'] as int?) ?? 0;
 
-    // Coûts
     final qtyTotal = (r['qty_total'] as num?) ?? 0;
     final totalWithFees = (r['total_cost_with_fees'] as num?) ?? 0;
     final unit = (qtyTotal > 0) ? (totalWithFees / qtyTotal) : 0;
     final sumUnitTotal = unit * q;
 
     final est = (r['estimated_price'] as num?);
-
-    final lineColor = MaterialStateProperty.resolveWith<Color?>(
-      (_) {
-        final base = statusColor(context, s);
-        return base.withOpacity(selected ? 0.35 : 0.2);
-      },
-    );
-
     final currency = (r['currency']?.toString() ?? 'USD');
 
+    final bg = _rowBg(context, r, selected: selected, hovered: hovered);
+
     final cells = <DataCell>[
-      // Photo
-      DataCell(_FileCell(
-        url: r['photo_url']?.toString(),
-        isImagePreferred: true,
-      )),
-
-      // Grading note
+      DataCell(
+          _FileCell(url: r['photo_url']?.toString(), isImagePreferred: true)),
       DataCell(Text(_txt(r['grading_note']))),
-
-      // Produit → détails
       DataCell(
         Tooltip(
           message: r['product_name']?.toString() ?? '',
-          waitDuration: const Duration(milliseconds: 400),
+          waitDuration: const Duration(milliseconds: 350),
           child: InkWell(
             onTap: () => widget.onOpen(r),
             child: Text(
@@ -700,20 +621,10 @@ class _InventoryTableByStatusState extends State<InventoryTableByStatus> {
           ),
         ),
       ),
-
-      // Langue
       DataCell(Text(r['language']?.toString() ?? '')),
-
-      // Jeu
       DataCell(Text(r['game_label']?.toString() ?? '—')),
-
-      // Achat
       DataCell(Text(r['purchase_date']?.toString() ?? '')),
-
-      // Qté
       DataCell(Text('$q')),
-
-      // Statut
       DataCell(
         _EditableStatusCell(
           enabled: !widget.groupMode,
@@ -750,7 +661,6 @@ class _InventoryTableByStatusState extends State<InventoryTableByStatus> {
       );
     }
 
-    // Divers (tous éditables)
     cells.addAll([
       DataCell(
         _EditableTextCell(
@@ -795,25 +705,21 @@ class _InventoryTableByStatusState extends State<InventoryTableByStatus> {
 
     if (widget.showRevenue) {
       final sale = r['sale_price'];
-      final saleCur = _saleCurrency(r); // ✅ multi-devise
+      final saleCur = _saleCurrency(r);
 
       cells.add(
         DataCell(
           _EditableTextCell(
             initialText: sale == null ? '' : sale.toString(),
             placeholder: '—',
-            // ✅ affichage "lecture": 123.00 EUR (sans polluer la valeur éditée)
             displaySuffix: sale == null ? null : ' $saleCur',
             formatMoney: true,
             onSaved: (t) async => widget.onInlineUpdate(r, 'sale_price', t),
           ),
         ),
       );
-
-      final _ = saleCur;
     }
 
-    // Tracking
     cells.add(
       DataCell(
         _EditableTextCell(
@@ -824,28 +730,23 @@ class _InventoryTableByStatusState extends State<InventoryTableByStatus> {
       ),
     );
 
-    // Doc
     cells.add(DataCell(_FileCell(url: r['document_url']?.toString())));
 
     return DataRow(
-      color: lineColor,
+      color: MaterialStateProperty.all(bg),
       onSelectChanged: null,
       cells: cells,
     );
   }
 
-  // Couleur de fond d’une ligne (pour colonnes fixes)
-  Color _rowBg(BuildContext ctx, Map<String, dynamic> r,
-      {required bool selected}) {
-    final s = (r['status'] ?? '').toString();
-    return statusColor(ctx, s).withOpacity(selected ? 0.35 : 0.2);
-  }
-
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+
     final lines = _sortedLines;
 
-    // ------ Colonne fixe gauche (✏️ ou ✅) ------
+    // ------ Fixed-left (✏️ or ✅) ------
     final allSelected = widget.groupMode &&
         widget.selection.length == lines.length &&
         lines.isNotEmpty;
@@ -854,93 +755,112 @@ class _InventoryTableByStatusState extends State<InventoryTableByStatus> {
         ? false
         : (allSelected ? true : (anySelected ? null : false));
 
-    final fixedLeft = Column(
-      children: [
-        Container(
-          width: _sideW,
-          height: _headH,
-          alignment: Alignment.center,
-          color: Theme.of(context).colorScheme.surfaceVariant.withOpacity(.35),
-          child: widget.groupMode
-              ? Checkbox(
-                  tristate: true,
-                  value: headerCheckValue,
-                  onChanged: (_) {
-                    if (widget.onToggleSelectAll != null) {
-                      widget.onToggleSelectAll!.call(!allSelected);
-                    }
-                  },
-                )
-              : const Icon(Icons.edit, size: 18, color: Colors.black45),
-        ),
+    final fixedLeft = _FixedSideColumn(
+      width: _sideW,
+      headerHeight: _headH,
+      rowHeight: _rowH,
+      side: _FixedSide.left,
+      header: Container(
+        height: _headH,
+        alignment: Alignment.center,
+        child: widget.groupMode
+            ? Checkbox(
+                tristate: true,
+                value: headerCheckValue,
+                onChanged: (_) {
+                  widget.onToggleSelectAll?.call(!allSelected);
+                },
+              )
+            : const Icon(Icons.edit, size: 18, color: Colors.black45),
+      ),
+      rows: [
         for (final r in lines)
-          Builder(builder: (ctx) {
+          Builder(builder: (_) {
             final key = widget.lineKey(r);
             final selected =
                 widget.groupMode ? widget.selection.contains(key) : false;
-            return Container(
-              width: _sideW,
-              height: _rowH,
-              color: _rowBg(context, r, selected: selected),
-              alignment: Alignment.center,
-              child: widget.groupMode
-                  ? Checkbox(
-                      value: selected,
-                      onChanged: (v) =>
-                          widget.onToggleSelect?.call(r, (v ?? false)),
-                    )
-                  : IconButton(
-                      tooltip: 'Edit this listing',
-                      icon: const Iconify(Mdi.pencil,
-                          size: 20, color: Color.fromARGB(255, 34, 35, 36)),
-                      onPressed: widget.onEdit == null
-                          ? null
-                          : () => widget.onEdit!(r),
-                    ),
+            final hovered = _hoveredKey == key;
+
+            return MouseRegion(
+              onEnter: (_) => _setHovered(key),
+              onExit: (_) =>
+                  _setHovered(_hoveredKey == key ? null : _hoveredKey),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 120),
+                curve: Curves.easeOut,
+                height: _rowH,
+                alignment: Alignment.center,
+                color: _rowBg(context, r, selected: selected, hovered: hovered),
+                child: widget.groupMode
+                    ? Checkbox(
+                        value: selected,
+                        onChanged: (v) =>
+                            widget.onToggleSelect?.call(r, (v ?? false)),
+                      )
+                    : IconButton(
+                        tooltip: 'Edit this listing',
+                        icon: const Iconify(
+                          Mdi.pencil,
+                          size: 20,
+                          color: Color.fromARGB(255, 34, 35, 36),
+                        ),
+                        onPressed: widget.onEdit == null
+                            ? null
+                            : () => widget.onEdit!(r),
+                      ),
+              ),
             );
           }),
       ],
     );
 
-    // ------ Colonne fixe droite (❌) ------
+    // ------ Fixed-right (❌) ------
     final fixedRight = !widget.showDelete
         ? const SizedBox.shrink()
-        : Column(
-            children: [
-              Container(
-                width: _sideW,
-                height: _headH,
-                alignment: Alignment.center,
-                color: Theme.of(context)
-                    .colorScheme
-                    .surfaceVariant
-                    .withOpacity(.35),
-                child: const Icon(Icons.close, size: 18, color: Colors.black45),
-              ),
+        : _FixedSideColumn(
+            width: _sideW,
+            headerHeight: _headH,
+            rowHeight: _rowH,
+            side: _FixedSide.right,
+            header: Container(
+              height: _headH,
+              alignment: Alignment.center,
+              child: const Icon(Icons.close, size: 18, color: Colors.black45),
+            ),
+            rows: [
               for (final r in lines)
-                Builder(builder: (ctx) {
+                Builder(builder: (_) {
                   final key = widget.lineKey(r);
                   final selected =
                       widget.groupMode ? widget.selection.contains(key) : false;
-                  return Container(
-                    width: _sideW,
-                    height: _rowH,
-                    color: _rowBg(context, r, selected: selected),
-                    alignment: Alignment.center,
-                    child: IconButton(
-                      tooltip: 'Delete this row',
-                      icon: const Iconify(Mdi.close,
-                          size: 18, color: Colors.redAccent),
-                      onPressed: widget.onDelete == null
-                          ? null
-                          : () => widget.onDelete!(r),
+                  final hovered = _hoveredKey == key;
+
+                  return MouseRegion(
+                    onEnter: (_) => _setHovered(key),
+                    onExit: (_) =>
+                        _setHovered(_hoveredKey == key ? null : _hoveredKey),
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 120),
+                      curve: Curves.easeOut,
+                      height: _rowH,
+                      alignment: Alignment.center,
+                      color: _rowBg(context, r,
+                          selected: selected, hovered: hovered),
+                      child: IconButton(
+                        tooltip: 'Delete this row',
+                        icon: const Iconify(Mdi.close,
+                            size: 18, color: Colors.redAccent),
+                        onPressed: widget.onDelete == null
+                            ? null
+                            : () => widget.onDelete!(r),
+                      ),
                     ),
                   );
                 }),
             ],
           );
 
-    // ------ Colonnes dynamiques + tri + largeurs ------
+    // ------ Center: columns + sorting + resizing ------
     final columnTitles = _columnTitles();
     final colCount = columnTitles.length;
 
@@ -950,19 +870,36 @@ class _InventoryTableByStatusState extends State<InventoryTableByStatus> {
     final widths = _ensureColumnWidths(colCount);
     final tableWidth = _totalTableWidth(widths);
 
-    final dataRows = lines.map<DataRow>((r) {
-      final selected = widget.groupMode
-          ? widget.selection.contains(widget.lineKey(r))
-          : false;
-      return widget.mode == InventoryTableMode.vault
-          ? _vaultRow(context, r, selected: selected)
-          : _fullRow(context, r, selected: selected);
-    }).toList();
+    final dataRows = <DataRow>[];
+    for (final r in lines) {
+      final key = widget.lineKey(r);
+      final selected =
+          widget.groupMode ? widget.selection.contains(key) : false;
+      final hovered = _hoveredKey == key;
+
+      dataRows.add(
+        widget.mode == InventoryTableMode.vault
+            ? _vaultRow(context, r, selected: selected, hovered: hovered)
+            : _fullRow(context, r, selected: selected, hovered: hovered),
+      );
+    }
 
     Widget buildHeaderRow() {
       return Container(
         height: _headH,
-        color: Theme.of(context).colorScheme.surfaceVariant.withOpacity(.35),
+        decoration: BoxDecoration(
+          color: cs.surfaceVariant.withOpacity(.40),
+          border: Border(
+            bottom: BorderSide(color: cs.outlineVariant.withOpacity(.55)),
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.04),
+              blurRadius: 6,
+              offset: const Offset(0, 2),
+            ),
+          ],
+        ),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -979,6 +916,7 @@ class _InventoryTableByStatusState extends State<InventoryTableByStatus> {
               if (i < colCount - 1)
                 _ColumnResizeHandle(
                   height: _headH,
+                  accent: cs.primary,
                   onDrag: (delta) => _onResizeColumn(i, delta),
                 ),
             ],
@@ -988,33 +926,51 @@ class _InventoryTableByStatusState extends State<InventoryTableByStatus> {
     }
 
     Widget buildDataRowWidget(DataRow row, Map<String, dynamic> sourceRow) {
+      final key = widget.lineKey(sourceRow);
+      final selected =
+          widget.groupMode ? widget.selection.contains(key) : false;
+      final hovered = _hoveredKey == key;
+
       final bg =
-          row.color?.resolve(const <MaterialState>{}) ?? Colors.transparent;
+          _rowBg(context, sourceRow, selected: selected, hovered: hovered);
+
       final cells = row.cells;
 
-      return Container(
-        height: _rowH,
-        color: bg,
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            for (int i = 0; i < colCount; i++) ...[
-              SizedBox(
-                width: widths[i],
-                child: Align(
-                  alignment: Alignment.centerLeft,
-                  child: _maybeWrapWithTooltip(
-                    cells[i].child,
+      return MouseRegion(
+        onEnter: (_) => _setHovered(key),
+        onExit: (_) => _setHovered(_hoveredKey == key ? null : _hoveredKey),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 120),
+          curve: Curves.easeOut,
+          height: _rowH,
+          color: bg,
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              for (int i = 0; i < colCount; i++) ...[
+                SizedBox(
+                  width: widths[i],
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                    child: Align(
+                      alignment: _alignForColumn(i),
+                      child: _maybeWrapWithTooltipAndCopy(
+                        context,
+                        cells[i].child,
+                      ),
+                    ),
                   ),
                 ),
-              ),
-              if (i < colCount - 1)
-                _ColumnResizeHandle(
-                  height: _rowH,
-                  onDrag: (delta) => _onResizeColumn(i, delta),
-                ),
+                if (i < colCount - 1)
+                  _ColumnResizeHandle(
+                    height: _rowH,
+                    accent: cs.primary,
+                    onDrag: (delta) => _onResizeColumn(i, delta),
+                    subtle: true,
+                  ),
+              ],
             ],
-          ],
+          ),
         ),
       );
     }
@@ -1045,10 +1001,94 @@ class _InventoryTableByStatusState extends State<InventoryTableByStatus> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               fixedLeft,
-              Expanded(child: centerTable),
+              Expanded(
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    border: Border(
+                      left:
+                          BorderSide(color: cs.outlineVariant.withOpacity(.55)),
+                      right:
+                          BorderSide(color: cs.outlineVariant.withOpacity(.55)),
+                    ),
+                  ),
+                  child: centerTable,
+                ),
+              ),
               fixedRight,
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+/* ============== Fixed side columns ============== */
+
+enum _FixedSide { left, right }
+
+class _FixedSideColumn extends StatelessWidget {
+  const _FixedSideColumn({
+    required this.width,
+    required this.headerHeight,
+    required this.rowHeight,
+    required this.side,
+    required this.header,
+    required this.rows,
+  });
+
+  final double width;
+  final double headerHeight;
+  final double rowHeight;
+  final _FixedSide side;
+  final Widget header;
+  final List<Widget> rows;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+
+    final shadow = side == _FixedSide.left
+        ? [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.06),
+              blurRadius: 8,
+              offset: const Offset(2, 0),
+            )
+          ]
+        : [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.06),
+              blurRadius: 8,
+              offset: const Offset(-2, 0),
+            )
+          ];
+
+    return SizedBox(
+      width: width,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: cs.surface,
+          boxShadow: shadow,
+          border: Border(
+            right: side == _FixedSide.left
+                ? BorderSide(color: cs.outlineVariant.withOpacity(.55))
+                : BorderSide.none,
+            left: side == _FixedSide.right
+                ? BorderSide(color: cs.outlineVariant.withOpacity(.55))
+                : BorderSide.none,
+          ),
+        ),
+        child: Column(
+          children: [
+            Container(
+              height: headerHeight,
+              alignment: Alignment.center,
+              color: cs.surfaceVariant.withOpacity(.40),
+              child: header,
+            ),
+            ...rows,
+          ],
         ),
       ),
     );
@@ -1062,15 +1102,15 @@ class _EditableTextCell extends StatefulWidget {
     required this.initialText,
     required this.onSaved,
     this.placeholder,
-    this.displaySuffix, // ✅ NEW
-    this.formatMoney = false, // ✅ NEW
+    this.displaySuffix,
+    this.formatMoney = false,
   });
 
   final String initialText;
   final Future<void> Function(String newValue) onSaved;
   final String? placeholder;
-  final String? displaySuffix; // ✅ NEW
-  final bool formatMoney; // ✅ NEW
+  final String? displaySuffix;
+  final bool formatMoney;
 
   @override
   State<_EditableTextCell> createState() => _EditableTextCellState();
@@ -1081,7 +1121,6 @@ class _EditableTextCellState extends State<_EditableTextCell> {
   late final TextEditingController _c;
   bool _saving = false;
 
-  // 🔁 annuler sur clic hors cellule (OK pour textfields)
   late final FocusNode _focusNode;
   String _original = '';
 
@@ -1092,7 +1131,7 @@ class _EditableTextCellState extends State<_EditableTextCell> {
     _focusNode = FocusNode();
     _focusNode.addListener(() {
       if (_editing && !_focusNode.hasFocus && !_saving) {
-        _c.text = _original; // annuler
+        _c.text = _original;
         setState(() => _editing = false);
       }
     });
@@ -1160,7 +1199,7 @@ class _EditableTextCellState extends State<_EditableTextCell> {
         onLongPress: _startEdit,
         child: Tooltip(
           message: display,
-          waitDuration: const Duration(milliseconds: 400),
+          waitDuration: const Duration(milliseconds: 350),
           child: Align(
             alignment: Alignment.centerLeft,
             child: Text(
@@ -1174,7 +1213,7 @@ class _EditableTextCellState extends State<_EditableTextCell> {
     }
 
     return RawKeyboardListener(
-      focusNode: FocusNode(), // capter Esc
+      focusNode: FocusNode(),
       onKey: (evt) {
         if (evt.isKeyPressed(LogicalKeyboardKey.escape)) {
           _c.text = _original;
@@ -1200,7 +1239,8 @@ class _EditableTextCellState extends State<_EditableTextCell> {
               ? const SizedBox(
                   height: 18,
                   width: 18,
-                  child: CircularProgressIndicator(strokeWidth: 2))
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
               : Row(
                   children: [
                     IconButton(
@@ -1291,14 +1331,14 @@ class _EditableStatusCellState extends State<_EditableStatusCell> {
   @override
   Widget build(BuildContext context) {
     final chip = Chip(
+      visualDensity: VisualDensity.compact,
+      labelPadding: const EdgeInsets.symmetric(horizontal: 6),
       label: Text((widget.value).toUpperCase()),
       backgroundColor: widget.color.withOpacity(0.15),
       side: BorderSide(color: widget.color.withOpacity(0.6)),
     );
 
-    if (!widget.enabled) {
-      return chip;
-    }
+    if (!widget.enabled) return chip;
 
     if (!_editing) {
       return GestureDetector(
@@ -1392,9 +1432,7 @@ class _EditableStatusCellState extends State<_EditableStatusCell> {
                 },
                 focusColor:
                     _value == null ? null : statusColor(context, _value!),
-                onChanged: (v) {
-                  setState(() => _value = v);
-                },
+                onChanged: (v) => setState(() => _value = v),
                 decoration: const InputDecoration(
                   isDense: true,
                   border: OutlineInputBorder(),
@@ -1436,7 +1474,7 @@ class _EditableStatusCellState extends State<_EditableStatusCell> {
   }
 }
 
-/* ============== Header + handle de resize ============== */
+/* ============== Header + resize handle ============== */
 
 class _HeaderCell extends StatelessWidget {
   const _HeaderCell({
@@ -1467,13 +1505,15 @@ class _HeaderCell extends StatelessWidget {
                 title,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: style?.copyWith(fontWeight: FontWeight.w600),
+                style: style?.copyWith(fontWeight: FontWeight.w700),
               ),
             ),
+            const SizedBox(width: 6),
             if (isSorted)
               Icon(
-                ascending ? Icons.arrow_upward : Icons.arrow_downward,
-                size: 16,
+                ascending ? Icons.keyboard_arrow_up : Icons.keyboard_arrow_down,
+                size: 18,
+                color: Theme.of(context).colorScheme.onSurface.withOpacity(.70),
               ),
           ],
         ),
@@ -1482,31 +1522,52 @@ class _HeaderCell extends StatelessWidget {
   }
 }
 
-class _ColumnResizeHandle extends StatelessWidget {
+class _ColumnResizeHandle extends StatefulWidget {
   const _ColumnResizeHandle({
     required this.height,
     required this.onDrag,
+    required this.accent,
+    this.subtle = false,
   });
 
   final double height;
   final ValueChanged<double> onDrag;
+  final Color accent;
+  final bool subtle;
+
+  @override
+  State<_ColumnResizeHandle> createState() => _ColumnResizeHandleState();
+}
+
+class _ColumnResizeHandleState extends State<_ColumnResizeHandle> {
+  bool _hover = false;
 
   @override
   Widget build(BuildContext context) {
+    final lineColor =
+        _hover ? widget.accent.withOpacity(.80) : Colors.black.withOpacity(.12);
+
     return MouseRegion(
       cursor: SystemMouseCursors.resizeColumn,
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
       child: GestureDetector(
         behavior: HitTestBehavior.translucent,
-        onHorizontalDragUpdate: (details) {
-          onDrag(details.delta.dx);
-        },
+        onHorizontalDragUpdate: (details) => widget.onDrag(details.delta.dx),
         child: SizedBox(
           width: _kColumnDividerWidth,
-          height: height,
-          child: const Center(
-            child: SizedBox(
-              width: 3,
-              height: double.infinity,
+          height: widget.height,
+          child: Center(
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 120),
+              curve: Curves.easeOut,
+              width: _hover ? 2.0 : 1.0,
+              height:
+                  widget.subtle ? widget.height * 0.55 : widget.height * 0.75,
+              decoration: BoxDecoration(
+                color: lineColor,
+                borderRadius: BorderRadius.circular(2),
+              ),
             ),
           ),
         ),
@@ -1622,8 +1683,8 @@ class _HoverableImageThumbState extends State<_HoverableImageThumb> {
               clipBehavior: Clip.antiAlias,
               child: Container(
                 constraints: const BoxConstraints(
-                  maxWidth: 300,
-                  maxHeight: 300,
+                  maxWidth: 320,
+                  maxHeight: 320,
                 ),
                 child: Image.network(
                   widget.imgUrl,
@@ -1659,7 +1720,7 @@ class _HoverableImageThumbState extends State<_HoverableImageThumb> {
       child: InkWell(
         onTap: widget.onTap,
         child: ClipRRect(
-          borderRadius: BorderRadius.circular(4),
+          borderRadius: BorderRadius.circular(6),
           child: Image.network(
             widget.imgUrl,
             height: 32,
