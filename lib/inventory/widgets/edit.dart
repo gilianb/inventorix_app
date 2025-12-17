@@ -1143,19 +1143,6 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
                   ),
                 ),
                 // ✅ sale_currency only
-                labelWithField(
-                  'Sale currency',
-                  DropdownButtonFormField<String>(
-                    value: _saleCurrency,
-                    items: saleCurrencies
-                        .map((c) => DropdownMenuItem(value: c, child: Text(c)))
-                        .toList(),
-                    onChanged: (v) =>
-                        setState(() => _saleCurrency = v ?? _saleCurrency),
-                    decoration:
-                        const InputDecoration(hintText: 'Sale currency'),
-                  ),
-                ),
               ]),
               const SizedBox(height: 12),
 
@@ -1213,18 +1200,8 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
               // ====== LIGNE 2 ======
               wrapFields(cons, [
                 // ✅ USD only
-                labelWithField(
-                  'Unit cost (USD)',
-                  _perm.canSeeUnitCosts
-                      ? numberField(_unitCostCtrl, 'e.g.: 95.00', decimal: true)
-                      : const InputDecorator(
-                          decoration: InputDecoration(),
-                          child: Padding(
-                            padding: EdgeInsets.symmetric(vertical: 8),
-                            child: Text('—'),
-                          ),
-                        ),
-                ),
+                labelWithField('Unit cost (USD)',
+                    numberField(_unitCostCtrl, 'e.g.: 95.00', decimal: true)),
                 // ✅ USD only
                 labelWithField(
                   'Estimated price per unit (USD)',
@@ -1235,6 +1212,19 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
                 labelWithField(
                   'Sale price ($_saleCurrency)',
                   numberField(_salePriceCtrl, 'e.g.: 145.00', decimal: true),
+                ),
+                labelWithField(
+                  'Sale currency',
+                  DropdownButtonFormField<String>(
+                    value: _saleCurrency,
+                    items: saleCurrencies
+                        .map((c) => DropdownMenuItem(value: c, child: Text(c)))
+                        .toList(),
+                    onChanged: (v) =>
+                        setState(() => _saleCurrency = v ?? _saleCurrency),
+                    decoration:
+                        const InputDecoration(hintText: 'Sale currency'),
+                  ),
                 ),
               ]),
               const SizedBox(height: 12),
