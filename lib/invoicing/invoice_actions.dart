@@ -362,4 +362,67 @@ class InvoiceActions {
 
     return invoice;
   }
+
+  String _contentTypeForFileName(String fileName) {
+    final lower = fileName.toLowerCase();
+    if (lower.endsWith('.pdf')) return 'application/pdf';
+    if (lower.endsWith('.png')) return 'image/png';
+    if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg';
+    return 'application/octet-stream';
+  }
+
+  /// External invoice/document (expense) not linked to any item:
+  /// 1) upload file to Storage
+  /// 2) create PURCHASE invoice with related_item_id = null
+  Future<Invoice> attachExternalInvoiceDocument({
+    required String orgId,
+    required String currency,
+    required String supplierName,
+    required String externalInvoiceNumber,
+    required DateTime issueDate,
+    required double totalAmount,
+    required String fileName,
+    required Uint8List fileBytes,
+    int? folderId,
+    String? notes,
+  }) async {
+    final safeSupplier = _normalizeSegment(supplierName);
+    final now = DateTime.now();
+    final year = now.year.toString();
+
+    final cleanedFileName = fileName.replaceAll(
+      RegExp(r'[^A-Za-z0-9._-]'),
+      '_',
+    );
+
+    final storageFileName = '${now.microsecondsSinceEpoch}_$cleanedFileName';
+
+    // Storage path: <orgId>/external/<year>/<Supplier>/<timestamp_filename>
+    final path = '$orgId/external/$year/$safeSupplier/$storageFileName';
+
+    await client.storage.from('invoices').uploadBinary(
+          path,
+          fileBytes,
+          fileOptions: FileOptions(
+            upsert: true,
+            contentType: _contentTypeForFileName(cleanedFileName),
+          ),
+        );
+
+    final documentUrl = 'invoices/$path';
+
+    final invoice = await invoiceService.createExternalPurchaseInvoice(
+      orgId: orgId,
+      supplierName: supplierName,
+      invoiceNumber: externalInvoiceNumber,
+      currency: currency,
+      documentUrl: documentUrl,
+      issueDate: issueDate,
+      totalAmount: totalAmount,
+      folderId: folderId,
+      notes: notes,
+    );
+
+    return invoice;
+  }
 }

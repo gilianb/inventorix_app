@@ -833,4 +833,90 @@ class InvoiceService {
       await client.storage.from('invoices').remove([pathInBucket]);
     }
   }
+
+  /// Create an "external" PURCHASE invoice not linked to any item (expense, phone bill, etc.)
+  Future<Invoice> createExternalPurchaseInvoice({
+    required String orgId,
+    required String supplierName,
+    required String invoiceNumber,
+    required String currency,
+    required String documentUrl,
+    required DateTime issueDate,
+    required double totalAmount,
+    int? folderId,
+    String? notes,
+  }) async {
+    // Buyer = organization name
+    String buyerName = 'Inventory';
+    try {
+      final orgRow = await client
+          .from('organization')
+          .select('name')
+          .eq('id', orgId)
+          .maybeSingle();
+      if (orgRow != null &&
+          orgRow['name'] != null &&
+          orgRow['name'].toString().trim().isNotEmpty) {
+        buyerName = orgRow['name'].toString().trim();
+      }
+    } catch (_) {}
+
+    final totalExcl = totalAmount;
+    final totalTax = 0.0;
+    final totalIncl = totalAmount;
+
+    final invoice = Invoice(
+      id: 0,
+      orgId: orgId,
+      folderId: folderId,
+      type: InvoiceType.purchase,
+      status: InvoiceStatus.paid,
+      invoiceNumber: invoiceNumber,
+      issueDate: issueDate,
+      dueDate: null,
+      currency: currency,
+
+      // Seller (provider)
+      sellerName: supplierName,
+      sellerAddress: null,
+      sellerCountry: null,
+      sellerVatNumber: null,
+      sellerTaxRegistration: null,
+      sellerRegistrationNumber: null,
+
+      // Buyer (your org)
+      buyerName: buyerName,
+      buyerAddress: null,
+      buyerCountry: null,
+      buyerVatNumber: null,
+      buyerTaxRegistration: null,
+      buyerEmail: null,
+      buyerPhone: null,
+
+      totalExclTax: totalExcl,
+      totalTax: totalTax,
+      totalInclTax: totalIncl,
+
+      notes: notes,
+      paymentTerms: null,
+      documentUrl: documentUrl,
+
+      // ✅ important: not linked to an item
+      relatedItemId: null,
+      relatedOrderId: null,
+
+      createdAt: DateTime.now(),
+      updatedAt: DateTime.now(),
+      createdBy: null,
+    );
+
+    final insertMap = invoice.toInsertMap();
+    insertMap['document_url'] = documentUrl;
+    insertMap['related_item_id'] = null;
+
+    final data =
+        await client.from('invoice').insert(insertMap).select().single();
+
+    return Invoice.fromMap(data as Map<String, dynamic>);
+  }
 }

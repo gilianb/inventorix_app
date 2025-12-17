@@ -14,6 +14,10 @@ import '../models/invoice_folder.dart';
 
 // Dialog de sélection des items pour créer une facture de vente
 import 'invoice_select_items_dialog.dart';
+
+// ✅ NEW: external invoice/document dialog
+import 'attach_external_invoice_dialog.dart';
+
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:url_launcher/url_launcher.dart';
 
@@ -289,7 +293,7 @@ class _InvoiceManagementPageState extends State<InvoiceManagementPage> {
           'You are about to delete the folder "${node.path}"\n'
           '• Folders to delete: ${folderIds.length}\n'
           '• Invoices to delete: ${invoicesToDelete.length}\n\n'
-          'All these invoices (and their PDF files) will be permanently deleted.\n'
+          'All these invoices (and their PDF/files) will be permanently deleted.\n'
           'This action cannot be undone.',
         ),
         actions: [
@@ -314,7 +318,7 @@ class _InvoiceManagementPageState extends State<InvoiceManagementPage> {
     final client = Supabase.instance.client;
 
     try {
-      // 1) delete all invoices (and their PDFs) using existing service
+      // 1) delete all invoices (and their files) using existing service
       for (final inv in invoicesToDelete) {
         await _invoiceService.deleteInvoice(inv, deletePdf: true);
       }
@@ -338,8 +342,9 @@ class _InvoiceManagementPageState extends State<InvoiceManagementPage> {
   }
 
   // ---------------------------------------------------------------------------
-  // Invoice actions: view, move, attach/remove PDF, mark paid, delete
+  // Invoice actions: view, move, attach/remove document, mark paid, delete
   // ---------------------------------------------------------------------------
+
   Future<void> _viewInvoicePdf(Invoice invoice) async {
     if (invoice.documentUrl == null) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -353,35 +358,59 @@ class _InvoiceManagementPageState extends State<InvoiceManagementPage> {
     // document_url stocké comme: 'invoices/<...path in bucket...>'
     final fullPath = invoice.documentUrl!;
     final pathInBucket = fullPath.replaceFirst('invoices/', '');
+    final lower = pathInBucket.toLowerCase();
+    final isPdf = lower.endsWith('.pdf');
 
     try {
       if (kIsWeb) {
-        // 🌐 WEB : on génère une URL signée et on ouvre dans le navigateur
-        final signedUrl = await client.storage.from('invoices').createSignedUrl(
-              pathInBucket,
-              60, // URL valable 60 secondes
-            );
+        // 🌐 WEB : URL signée + open
+        final signedUrl = await client.storage
+            .from('invoices')
+            .createSignedUrl(pathInBucket, 60);
 
         final uri = Uri.tryParse(signedUrl);
         if (uri != null) {
           await launchUrl(uri, mode: LaunchMode.externalApplication);
         } else {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Invalid PDF URL')),
+            const SnackBar(content: Text('Invalid document URL')),
           );
         }
-      } else {
-        // 📱/💻 Mobile & desktop : on garde le plugin printing
-        final bytes =
-            await client.storage.from('invoices').download(pathInBucket);
+        return;
+      }
 
+      // 📱/💻 Mobile & desktop : download bytes then preview
+      final bytes =
+          await client.storage.from('invoices').download(pathInBucket);
+
+      if (isPdf) {
         await Printing.layoutPdf(
           onLayout: (_) async => bytes,
+        );
+      } else {
+        if (!mounted) return;
+        await showDialog<void>(
+          context: context,
+          builder: (_) => AlertDialog(
+            title: const Text('Document preview'),
+            content: SizedBox(
+              width: 700,
+              child: InteractiveViewer(
+                child: Image.memory(bytes, fit: BoxFit.contain),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: const Text('Close'),
+              ),
+            ],
+          ),
         );
       }
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error while loading PDF: $e')),
+        SnackBar(content: Text('Error while loading document: $e')),
       );
     }
   }
@@ -393,7 +422,7 @@ class _InvoiceManagementPageState extends State<InvoiceManagementPage> {
         title: const Text('Delete invoice'),
         content: Text(
           'Are you sure you want to delete invoice ${invoice.invoiceNumber}?\n'
-          'This will delete the invoice, its lines and the PDF file.',
+          'This will delete the invoice, its lines and the attached file.',
         ),
         actions: [
           TextButton(
@@ -466,8 +495,10 @@ class _InvoiceManagementPageState extends State<InvoiceManagementPage> {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-            content: Text(
-                'Invoice ${invoice.invoiceNumber} moved to ${_folderNameById[selectedId] ?? 'folder'}')),
+          content: Text(
+            'Invoice ${invoice.invoiceNumber} moved to ${_folderNameById[selectedId] ?? 'folder'}',
+          ),
+        ),
       );
       await _loadData();
     } catch (e) {
@@ -492,9 +523,7 @@ class _InvoiceManagementPageState extends State<InvoiceManagementPage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                const Text(
-                  'Choose the destination folder for this invoice.',
-                ),
+                const Text('Choose the destination folder for this invoice.'),
                 const SizedBox(height: 12),
                 Expanded(
                   child: ListView(
@@ -544,11 +573,11 @@ class _InvoiceManagementPageState extends State<InvoiceManagementPage> {
     );
   }
 
-  /// (3) Attach or replace the PDF of an invoice
+  /// (3) Attach or replace the document of an invoice (PDF/Image)
   Future<void> _attachOrReplacePdf(Invoice invoice) async {
     final result = await FilePicker.platform.pickFiles(
       type: FileType.custom,
-      allowedExtensions: ['pdf'],
+      allowedExtensions: const ['pdf', 'png', 'jpg', 'jpeg'],
       withData: true,
     );
     if (result == null || result.files.isEmpty) return;
@@ -564,21 +593,32 @@ class _InvoiceManagementPageState extends State<InvoiceManagementPage> {
     final client = Supabase.instance.client;
 
     try {
-      // 1) delete old pdf if any
+      // 1) delete old file if any
       if (invoice.documentUrl != null) {
         final oldFull = invoice.documentUrl!;
         final oldPath = oldFull.replaceFirst('invoices/', '');
         await client.storage.from('invoices').remove([oldPath]);
       }
 
-      // 2) upload new pdf
+      // 2) upload new file (keep extension)
       final now = DateTime.now().millisecondsSinceEpoch;
+      final safeName = (file.name).replaceAll(RegExp(r'[^A-Za-z0-9._-]'), '_');
       final newPathInBucket =
-          'org_${widget.orgId}/inv_${invoice.id}_$now.pdf'; // inside bucket
+          'org_${widget.orgId}/inv_${invoice.id}_$now\_$safeName';
+
+      final lower = safeName.toLowerCase();
+      final contentType = lower.endsWith('.pdf')
+          ? 'application/pdf'
+          : lower.endsWith('.png')
+              ? 'image/png'
+              : (lower.endsWith('.jpg') || lower.endsWith('.jpeg'))
+                  ? 'image/jpeg'
+                  : 'application/octet-stream';
+
       await client.storage.from('invoices').uploadBinary(
             newPathInBucket,
             file.bytes!,
-            fileOptions: const FileOptions(contentType: 'application/pdf'),
+            fileOptions: FileOptions(contentType: contentType),
           );
 
       final newDocumentUrl = 'invoices/$newPathInBucket';
@@ -593,8 +633,8 @@ class _InvoiceManagementPageState extends State<InvoiceManagementPage> {
         SnackBar(
           content: Text(
             invoice.documentUrl == null
-                ? 'PDF attached to invoice ${invoice.invoiceNumber}.'
-                : 'PDF replaced for invoice ${invoice.invoiceNumber}.',
+                ? 'Document attached to invoice ${invoice.invoiceNumber}.'
+                : 'Document replaced for invoice ${invoice.invoiceNumber}.',
           ),
         ),
       );
@@ -602,12 +642,12 @@ class _InvoiceManagementPageState extends State<InvoiceManagementPage> {
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error while attaching PDF: $e')),
+        SnackBar(content: Text('Error while attaching document: $e')),
       );
     }
   }
 
-  /// (3) Remove PDF from invoice (without deleting the invoice)
+  /// (3) Remove attached document from invoice (without deleting the invoice)
   Future<void> _detachPdf(Invoice invoice) async {
     if (invoice.documentUrl == null) {
       return;
@@ -616,9 +656,9 @@ class _InvoiceManagementPageState extends State<InvoiceManagementPage> {
     final confirm = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Remove attached PDF'),
+        title: const Text('Remove attached document'),
         content: Text(
-          'Remove the PDF attached to invoice ${invoice.invoiceNumber}?\n'
+          'Remove the document attached to invoice ${invoice.invoiceNumber}?\n'
           'The invoice itself will not be deleted.',
         ),
         actions: [
@@ -650,14 +690,75 @@ class _InvoiceManagementPageState extends State<InvoiceManagementPage> {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('PDF removed from invoice ${invoice.invoiceNumber}.'),
+          content:
+              Text('Document removed from invoice ${invoice.invoiceNumber}.'),
         ),
       );
       await _loadData();
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error while removing PDF: $e')),
+        SnackBar(content: Text('Error while removing document: $e')),
+      );
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // External invoice/document (not linked to an item)
+  // ---------------------------------------------------------------------------
+
+  Future<void> _onAttachExternalInvoice() async {
+    // Devise par défaut (tu pourras la remplacer par un setting org)
+    const defaultCurrency = 'AED';
+
+    final result = await AttachExternalInvoiceDialog.show(
+      context,
+      currency: defaultCurrency,
+      folders: _folders,
+    );
+
+    if (result == null) return;
+
+    try {
+      int? folderId = result.folderId;
+
+      // create folder if user typed a new one
+      final newFolderName = result.newFolderName?.trim();
+      if (newFolderName != null && newFolderName.isNotEmpty) {
+        final folder = await _invoiceService.getOrCreateFolder(
+          orgId: widget.orgId,
+          name: newFolderName,
+        );
+        folderId = folder.id;
+      }
+
+      final actions = InvoiceActions(Supabase.instance.client);
+
+      final created = await actions.attachExternalInvoiceDocument(
+        orgId: widget.orgId,
+        currency: result.currency,
+        supplierName: result.supplierName,
+        externalInvoiceNumber: result.invoiceNumber,
+        issueDate: result.issueDate,
+        totalAmount: result.totalAmount,
+        fileName: result.fileName,
+        fileBytes: result.fileBytes,
+        folderId: folderId,
+        notes: result.notes,
+      );
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+            content:
+                Text('External document ${created.invoiceNumber} attached.')),
+      );
+
+      await _loadData();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error while attaching external document: $e')),
       );
     }
   }
@@ -727,10 +828,7 @@ class _InvoiceManagementPageState extends State<InvoiceManagementPage> {
     }
 
     return Chip(
-      label: Text(
-        label,
-        style: const TextStyle(color: Colors.white),
-      ),
+      label: Text(label, style: const TextStyle(color: Colors.white)),
       backgroundColor: color,
       visualDensity: VisualDensity.compact,
     );
@@ -756,10 +854,7 @@ class _InvoiceManagementPageState extends State<InvoiceManagementPage> {
     }
 
     return Chip(
-      label: Text(
-        label,
-        style: const TextStyle(color: Colors.white),
-      ),
+      label: Text(label, style: const TextStyle(color: Colors.white)),
       backgroundColor: color,
       visualDensity: VisualDensity.compact,
     );
@@ -817,9 +912,7 @@ class _InvoiceManagementPageState extends State<InvoiceManagementPage> {
       if (!mounted) return;
 
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Invoice ${invoice.invoiceNumber} created.'),
-        ),
+        SnackBar(content: Text('Invoice ${invoice.invoiceNumber} created.')),
       );
 
       await _loadData();
@@ -847,6 +940,11 @@ class _InvoiceManagementPageState extends State<InvoiceManagementPage> {
             onPressed: _onCreateSalesInvoiceFromManagement,
             icon: const Icon(Icons.receipt_long_outlined),
             tooltip: 'New sales invoice',
+          ),
+          IconButton(
+            onPressed: _onAttachExternalInvoice,
+            icon: const Icon(Icons.upload_file_outlined),
+            tooltip: 'Attach external invoice/document',
           ),
           IconButton(
             onPressed: _createFolderDialog,
@@ -1006,7 +1104,6 @@ class _InvoiceManagementPageState extends State<InvoiceManagementPage> {
       childrenPadding: const EdgeInsets.only(left: 16),
       initiallyExpanded: true,
       children: [
-        // If this node also corresponds to a real folder, make a "This folder only" tile
         if (node.folderId != null)
           ListTile(
             dense: true,
@@ -1028,7 +1125,6 @@ class _InvoiceManagementPageState extends State<InvoiceManagementPage> {
             ),
             onTap: () => _selectFolderById(node.folderId!),
           ),
-        // And a virtual "All subfolders" selection
         ListTile(
           dense: true,
           contentPadding: const EdgeInsets.only(left: 8, right: 8),
@@ -1042,7 +1138,6 @@ class _InvoiceManagementPageState extends State<InvoiceManagementPage> {
           trailing: _buildFolderCountChip(node),
           onTap: () => _selectFolderByPrefix(node.path),
         ),
-        // Children nodes
         ...node.children.map(
           (child) => Padding(
             padding: const EdgeInsets.only(left: 4),
@@ -1116,9 +1211,7 @@ class _InvoiceManagementPageState extends State<InvoiceManagementPage> {
               Expanded(
                 child: Text(
                   _currentFilterLabel(),
-                  style: const TextStyle(
-                    fontWeight: FontWeight.w600,
-                  ),
+                  style: const TextStyle(fontWeight: FontWeight.w600),
                 ),
               ),
             ],
@@ -1140,7 +1233,7 @@ class _InvoiceManagementPageState extends State<InvoiceManagementPage> {
                   ? _folderNameById[invoice.folderId!] ?? ''
                   : '';
 
-              final hasPdf = invoice.documentUrl != null;
+              final hasDoc = invoice.documentUrl != null;
 
               return Card(
                 margin: const EdgeInsets.symmetric(vertical: 6),
@@ -1213,7 +1306,9 @@ class _InvoiceManagementPageState extends State<InvoiceManagementPage> {
                         PopupMenuItem(
                           value: 'view',
                           child: Text(
-                            hasPdf ? 'View PDF' : 'View PDF (none attached)',
+                            hasDoc
+                                ? 'View document'
+                                : 'View document (none attached)',
                           ),
                         ),
                       );
@@ -1222,16 +1317,16 @@ class _InvoiceManagementPageState extends State<InvoiceManagementPage> {
                         PopupMenuItem(
                           value: 'attach',
                           child: Text(
-                            hasPdf ? 'Replace PDF' : 'Attach PDF',
+                            hasDoc ? 'Replace document' : 'Attach document',
                           ),
                         ),
                       );
 
-                      if (hasPdf) {
+                      if (hasDoc) {
                         items.add(
                           const PopupMenuItem(
                             value: 'detach',
-                            child: Text('Remove attached PDF'),
+                            child: Text('Remove attached document'),
                           ),
                         );
                       }
