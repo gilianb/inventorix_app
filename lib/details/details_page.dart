@@ -19,8 +19,13 @@ import 'widgets/price_trends.dart';
 import 'widgets/qr_line_button.dart'; // <-- QR widget
 import 'widgets/price_history_chart.dart'; // <-- graph historique
 
+import 'widgets/details_overview_panel.dart';
+import 'widgets/details_section_header.dart';
+import 'widgets/details_status_filter_bar.dart';
+
 import 'details_service.dart';
 import '../../inventory/widgets/finance_overview.dart';
+import '../inventory/utils/fx_to_usd.dart';
 import '../public/public_item_page.dart'; // <-- Aperçu public (NOUVEAU)
 
 //icons
@@ -101,7 +106,7 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
   List<Map<String, dynamic>> _relatedInvoices = [];
 
   String? _localStatusFilter;
-  bool _showItemsTable = true;
+  bool _showItemsTable = false;
   bool _dirty = false;
 
   Map<String, dynamic>? _productExtras; // { blueprint_id, tcg_player_id }
@@ -733,7 +738,9 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
       return const SizedBox.shrink();
     }
 
-    return Row(
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
       children: [
         if (hasSale)
           _InvoiceDocButton(
@@ -741,7 +748,6 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
             icon: Icons.receipt_long,
             onPressed: () => _openInvoiceDocument(saleDoc),
           ),
-        if (hasSale && (hasPurchase || hasFallback)) const SizedBox(width: 8),
         if (hasPurchase)
           _InvoiceDocButton(
             label: 'Purchase invoice',
@@ -838,6 +844,16 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
     final f = (_localStatusFilter ?? '').toString();
     if (f.isEmpty) return _items;
     return _items.where((e) => (e['status'] ?? '') == f).toList();
+  }
+
+  Map<String, int> _statusCounts(List<Map<String, dynamic>> items) {
+    final m = <String, int>{};
+    for (final it in items) {
+      final s = (it['status'] ?? '').toString();
+      if (s.isEmpty) continue;
+      m[s] = (m[s] ?? 0) + 1;
+    }
+    return m;
   }
 
   // ----- Helpers QR par token -----
@@ -1152,6 +1168,21 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
                 .toLowerCase() ==
             'single');
 
+    final finance = _isOwner
+        ? FinanceOverview(
+            items: sourceItems,
+            currency: currency,
+            baseCurrency: 'USD',
+            fxToUsd: kFxToUsd,
+            titleInvested: 'Invested (view)',
+            titleEstimated: 'Estimated value',
+            titleSold: 'Actual revenue',
+            subtitleInvested: 'Σ costs (unsold items)',
+            subtitleEstimated: 'Σ estimated_price (unsold)',
+            subtitleSold: 'Σ sale_price (sold)',
+          )
+        : const SizedBox.shrink();
+
     return WillPopScope(
       onWillPop: () async {
         Navigator.pop(context, _dirty);
@@ -1160,6 +1191,11 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
       child: Scaffold(
         appBar: AppBar(
           leading: BackButton(onPressed: () => Navigator.pop(context, _dirty)),
+          title: Text(
+            _title.isEmpty ? 'Details' : _title,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
           actions: [
             if (_isOwner)
               IconButton(
@@ -1197,197 +1233,114 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
                 historyCount: _movements.length,
                 showMargins: _isOwner,
               ),
-              const SizedBox(height: 12),
-              LayoutBuilder(
-                builder: (ctx, cons) {
-                  final wide = cons.maxWidth >= 760;
-
-                  final finance = _isOwner
-                      ? FinanceOverview(
-                          items: sourceItems,
-                          currency: currency,
-                          titleInvested: 'Invested (view)',
-                          titleEstimated: 'Estimated value',
-                          titleSold: 'Actual revenue',
-                          subtitleInvested: 'Σ costs (unsold items)',
-                          subtitleEstimated: 'Σ estimated_price (unsold)',
-                          subtitleSold: 'Σ sale_price (sold)',
-                        )
-                      : const SizedBox.shrink();
-
-                  if (wide) {
-                    return Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        SizedBox(
-                          width: 320,
-                          child: Column(
-                            children: [
-                              MediaThumb(
-                                imageUrl: displayImageUrl,
-                                isAsset: !hasPhoto,
-                                aspectRatio: 0.72,
-                                onOpen: hasPhoto
-                                    ? () async {
-                                        final uri = Uri.tryParse(photoUrl);
-                                        if (uri != null) {
-                                          await launchUrl(uri,
-                                              mode: LaunchMode
-                                                  .externalApplication);
-                                        }
-                                      }
-                                    : null,
-                              ),
-                              const SizedBox(height: 8),
-                              _buildInvoiceDocButtons(uDoc),
-                              const SizedBox(height: 8),
-                              Align(
-                                alignment: Alignment.centerLeft,
-                                child: QrLineButton.inline(
-                                  publicUrl: publicUrl,
-                                  appLink: appLink,
-                                  onCopy: (link) async {
-                                    await Clipboard.setData(
-                                        ClipboardData(text: link));
-                                    _snack('Link copied');
-                                  },
-                                ),
-                              ),
-                              const SizedBox(height: 4),
-                              Align(
-                                alignment: Alignment.centerLeft,
-                                child: TextButton(
-                                  onPressed: (publicToken == null)
-                                      ? null
-                                      : () {
-                                          Navigator.of(context).push(
-                                            MaterialPageRoute(
-                                              builder: (_) => PublicItemPage(
-                                                token: publicToken,
-                                              ),
-                                            ),
-                                          );
-                                        },
-                                  child: const Text('Public preview'),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Column(
-                            children: [
-                              finance,
-                              if (_isOwner) const SizedBox(height: 12),
-                              InfoExtrasCard(
-                                data: info,
-                                currencyFallback: currency,
-                                showMargins: _isOwner,
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
-                    );
-                  } else {
-                    return Column(
-                      children: [
-                        MediaThumb(
-                          imageUrl: displayImageUrl,
-                          isAsset: !hasPhoto,
-                          aspectRatio: 0.72,
-                          onOpen: hasPhoto
-                              ? () async {
-                                  final uri = Uri.tryParse(photoUrl);
-                                  if (uri != null) {
-                                    await launchUrl(uri,
-                                        mode: LaunchMode.externalApplication);
-                                  }
-                                }
-                              : null,
-                        ),
-                        const SizedBox(height: 8),
-                        _buildInvoiceDocButtons(uDoc),
-                        const SizedBox(height: 8),
-                        Align(
-                          alignment: Alignment.centerLeft,
-                          child: QrLineButton.inline(
-                            publicUrl: publicUrl,
-                            appLink: appLink,
-                            onCopy: (link) async {
-                              await Clipboard.setData(
-                                  ClipboardData(text: link));
-                              _snack('Link copied');
-                            },
-                          ),
-                        ),
-                        Align(
-                          alignment: Alignment.centerLeft,
-                          child: TextButton(
-                            onPressed: (publicToken == null)
-                                ? null
-                                : () {
-                                    Navigator.of(context).push(
-                                      MaterialPageRoute(
-                                        builder: (_) => PublicItemPage(
-                                          token: publicToken,
-                                        ),
-                                      ),
-                                    );
-                                  },
-                            child: const Text('Public preview'),
-                          ),
-                        ),
-                        const SizedBox(height: 12),
-                        finance,
-                        if (_isOwner) const SizedBox(height: 12),
-                        InfoExtrasCard(
-                          data: info,
-                          currencyFallback: currency,
-                          showMargins: _isOwner,
-                        ),
-                      ],
-                    );
-                  }
+              DetailsStatusFilterBar(
+                counts: _statusCounts(_items),
+                selected: status,
+                total: _items.length,
+                onSelected: (s) {
+                  setState(() {
+                    _localStatusFilter = s;
+                    _ovStatus = s;
+                  });
                 },
               ),
-              const SizedBox(height: 16),
-              Row(
-                children: [
-                  Text('Items',
-                      style: Theme.of(context)
-                          .textTheme
-                          .titleMedium
-                          ?.copyWith(fontWeight: FontWeight.w700)),
-                  const SizedBox(width: 8),
-                  IconButton(
-                    tooltip: _showItemsTable ? 'Hide' : 'Show',
-                    icon: Iconify(
-                        _showItemsTable ? Mdi.chevron_up : Mdi.chevron_down),
-                    onPressed: () =>
-                        setState(() => _showItemsTable = !_showItemsTable),
+              const SizedBox(height: 12),
+              DetailsOverviewPanel(
+                mediaThumb: MediaThumb(
+                  imageUrl: displayImageUrl,
+                  isAsset: !hasPhoto,
+                  aspectRatio: 0.72,
+                  onOpen: hasPhoto
+                      ? () async {
+                          final uri = Uri.tryParse(photoUrl);
+                          if (uri != null) {
+                            await launchUrl(
+                              uri,
+                              mode: LaunchMode.externalApplication,
+                            );
+                          }
+                        }
+                      : null,
+                ),
+                invoiceButtons: _buildInvoiceDocButtons(uDoc),
+                qrRow: Align(
+                  alignment: Alignment.centerLeft,
+                  child: QrLineButton.inline(
+                    publicUrl: publicUrl,
+                    appLink: appLink,
+                    onCopy: (link) async {
+                      await Clipboard.setData(ClipboardData(text: link));
+                      _snack('Link copied');
+                    },
                   ),
-                ],
-              ),
-              if (_showItemsTable)
-                ItemsTable(
-                  items: visibleItems,
-                  currency: currency,
+                ),
+                publicPreviewButton: Align(
+                  alignment: Alignment.centerLeft,
+                  child: TextButton(
+                    onPressed: (publicToken == null)
+                        ? null
+                        : () {
+                            Navigator.of(context).push(
+                              MaterialPageRoute(
+                                builder: (_) => PublicItemPage(
+                                  token: publicToken,
+                                ),
+                              ),
+                            );
+                          },
+                    child: const Text('Public preview'),
+                  ),
+                ),
+                showFinance: _isOwner,
+                finance: finance,
+                infoCard: InfoExtrasCard(
+                  data: info,
+                  currencyFallback: currency,
                   showMargins: _isOwner,
                 ),
+              ),
               const SizedBox(height: 16),
-              Row(
-                children: const [
-                  Text('Price trends',
-                      style: TextStyle(fontWeight: FontWeight.w700)),
-                  SizedBox(width: 8),
-                  Tooltip(
-                    message:
-                        'Collectr (Edge) + CardTrader — Graph based on price_history (1 point/day).',
-                    child: Icon(Icons.info_outline, size: 18),
+              DetailsSectionHeader(
+                title: 'Items',
+                subtitle: 'Showing $qtyStatus / ${_items.length} item(s)',
+                icon: Icons.inventory_2_outlined,
+                trailing: IconButton(
+                  tooltip: _showItemsTable ? 'Hide' : 'Show',
+                  icon: Iconify(
+                    _showItemsTable ? Mdi.chevron_up : Mdi.chevron_down,
                   ),
-                ],
+                  onPressed: () =>
+                      setState(() => _showItemsTable = !_showItemsTable),
+                ),
+              ),
+              const SizedBox(height: 8),
+              AnimatedSwitcher(
+                duration: const Duration(milliseconds: 180),
+                switchInCurve: Curves.easeOut,
+                switchOutCurve: Curves.easeIn,
+                transitionBuilder: (child, anim) {
+                  return FadeTransition(
+                    opacity: anim,
+                    child: SizeTransition(sizeFactor: anim, child: child),
+                  );
+                },
+                child: _showItemsTable
+                    ? ItemsTable(
+                        key: const ValueKey('items_table'),
+                        items: visibleItems,
+                        currency: currency,
+                        showMargins: _isOwner,
+                      )
+                    : const SizedBox.shrink(
+                        key: ValueKey('items_table_hidden'),
+                      ),
+              ),
+              const SizedBox(height: 16),
+              DetailsSectionHeader(
+                title: 'Price trends',
+                icon: Icons.trending_up,
+                tooltip:
+                    'Collectr (Edge) + CardTrader — Graph based on price_history (1 point/day).',
               ),
               const SizedBox(height: 8),
               PriceTrendsCard(
@@ -1456,8 +1409,9 @@ class _InvoiceDocButton extends StatelessWidget {
   Widget build(BuildContext context) {
     return OutlinedButton.icon(
       style: OutlinedButton.styleFrom(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        textStyle: const TextStyle(fontSize: 13),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        textStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       ),
       icon: Icon(icon, size: 18),
       label: Text(label),

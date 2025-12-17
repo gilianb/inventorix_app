@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+
+import '../../inventory/utils/status_utils.dart';
 import 'marge.dart';
 import 'history_popover.dart';
 
@@ -123,24 +125,62 @@ class DetailsHeader extends StatelessWidget {
                     runSpacing: 6,
                     crossAxisAlignment: WrapCrossAlignment.center,
                     children: [
+                      // Status chip (color-coded)
+                      Builder(builder: (ctx) {
+                        final c = statusColor(ctx, status);
+                        return Chip(
+                          label: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Container(
+                                width: 8,
+                                height: 8,
+                                decoration: BoxDecoration(
+                                  color: c,
+                                  shape: BoxShape.circle,
+                                ),
+                              ),
+                              const SizedBox(width: 6),
+                              Text(
+                                status.toUpperCase(),
+                                style: TextStyle(
+                                  color: c,
+                                  fontWeight: FontWeight.w800,
+                                  letterSpacing: 0.2,
+                                ),
+                              ),
+                            ],
+                          ),
+                          backgroundColor: c.withOpacity(.14),
+                          shape: StadiumBorder(
+                            side: BorderSide(color: c.withOpacity(.55)),
+                          ),
+                          visualDensity: VisualDensity.compact,
+                          materialTapTargetSize:
+                              MaterialTapTargetSize.shrinkWrap,
+                        );
+                      }),
+
+                      // Qty chip
                       Chip(
-                        label: Text(
-                          status.toUpperCase(),
-                          style: const TextStyle(color: Colors.white),
-                        ),
-                        backgroundColor: kAccentB,
-                      ),
-                      Chip(
-                        avatar: const Icon(
+                        avatar: Icon(
                           Icons.format_list_numbered,
                           size: 16,
-                          color: Colors.white,
+                          color: kAccentC,
                         ),
                         label: Text(
                           'Qty: $qty',
-                          style: const TextStyle(color: Colors.white),
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w700,
+                            color: Colors.black87,
+                          ),
                         ),
-                        backgroundColor: kAccentC,
+                        backgroundColor: kAccentC.withOpacity(.12),
+                        shape: StadiumBorder(
+                          side: BorderSide(color: kAccentC.withOpacity(.55)),
+                        ),
+                        visualDensity: VisualDensity.compact,
+                        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
                       ),
                       if (showMargins)
                         Tooltip(
