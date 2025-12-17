@@ -71,9 +71,9 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
   final _sb = Supabase.instance.client;
 
   // RBAC (non bloquant ici)
-  final OrgRole _role = OrgRole.viewer;
+  //final OrgRole _role = OrgRole.viewer;
   bool _roleLoaded = false;
-  RolePermissions get _perm => kRoleMatrix[_role]!;
+  //RolePermissions get _perm => kRoleMatrix[_role]!;
 
   // combien d'items modifier dans ce groupe
   late int _countToEdit;
