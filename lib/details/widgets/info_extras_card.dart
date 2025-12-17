@@ -56,6 +56,7 @@ class InfoExtrasCard extends StatelessWidget {
     if (u.isEmpty) return;
     final uri = Uri.tryParse(u);
     if (uri == null) return;
+
     if (await canLaunchUrl(uri)) {
       await launchUrl(uri, mode: LaunchMode.externalApplication);
     } else {
@@ -66,93 +67,131 @@ class InfoExtrasCard extends StatelessWidget {
     }
   }
 
-  Widget _kv(BuildContext ctx, String label, String value) {
-    final styleLabel = Theme.of(ctx).textTheme.labelMedium?.copyWith(
-          letterSpacing: .15,
-          fontWeight: FontWeight.w700,
-          color: kAccentA,
-        );
-    final styleValue =
-        Theme.of(ctx).textTheme.bodyMedium?.copyWith(height: 1.15);
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 6),
-      child: Row(
+  // ======== UI helpers ========
+
+  TextStyle? _labelStyle(BuildContext ctx) =>
+      Theme.of(ctx).textTheme.labelSmall?.copyWith(
+            fontWeight: FontWeight.w800,
+            letterSpacing: .35,
+            color: Colors.black54,
+          );
+
+  TextStyle? _valueStyle(BuildContext ctx) =>
+      Theme.of(ctx).textTheme.bodyMedium?.copyWith(
+            height: 1.15,
+            fontWeight: FontWeight.w600,
+          );
+
+  Widget _sectionTitle(BuildContext ctx, IconData icon, String title) {
+    return Row(
+      children: [
+        Icon(icon, size: 18, color: kAccentA),
+        const SizedBox(width: 8),
+        Text(
+          title,
+          style: Theme.of(ctx).textTheme.titleSmall?.copyWith(
+                fontWeight: FontWeight.w900,
+                letterSpacing: .2,
+              ),
+        ),
+      ],
+    );
+  }
+
+  Widget _tile(BuildContext ctx,
+      {required String label, required Widget child}) {
+    final cs = Theme.of(ctx).colorScheme;
+
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+      decoration: BoxDecoration(
+        color: cs.surface,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: kAccentA.withOpacity(.14), width: 0.9),
+        boxShadow: [
+          BoxShadow(
+            color: kAccentA.withOpacity(.06),
+            blurRadius: 10,
+            offset: const Offset(0, 6),
+          ),
+        ],
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            kAccentA.withOpacity(.035),
+            kAccentB.withOpacity(.03),
+          ],
+        ),
+      ),
+      child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          SizedBox(width: 160, child: Text(label, style: styleLabel)),
-          const SizedBox(width: 8),
-          Expanded(child: Text(value, style: styleValue)),
+          Text(label.toUpperCase(), style: _labelStyle(ctx)),
+          const SizedBox(height: 6),
+          DefaultTextStyle(
+            style: _valueStyle(ctx) ?? const TextStyle(),
+            child: child,
+          ),
         ],
       ),
     );
   }
 
-  // Widget version to allow colored chips
-  Widget _kvW(BuildContext ctx, String label, Widget value) {
-    final styleLabel = Theme.of(ctx).textTheme.labelMedium?.copyWith(
-          letterSpacing: .15,
-          fontWeight: FontWeight.w700,
-          color: kAccentA,
-        );
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 6),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          SizedBox(width: 160, child: Text(label, style: styleLabel)),
-          const SizedBox(width: 8),
-          value,
-        ],
+  Widget _tileText(BuildContext ctx, String label, String value) {
+    return _tile(
+      ctx,
+      label: label,
+      child: Text(
+        value,
+        maxLines: 2,
+        overflow: TextOverflow.ellipsis,
       ),
     );
   }
 
-  Widget _kvLink(BuildContext ctx, String label, String? url) {
+  Widget _tileLink(BuildContext ctx, String label, String? url) {
     final u = (url ?? '').trim();
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 6),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          SizedBox(
-            width: 160,
-            child: Text(label,
-                style: Theme.of(ctx).textTheme.labelMedium?.copyWith(
-                      letterSpacing: .15,
-                      fontWeight: FontWeight.w700,
-                      color: kAccentA,
-                    )),
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: u.isEmpty
-                ? const Text('—')
-                : InkWell(
-                    onTap: () => _openUrl(ctx, u),
-                    borderRadius: BorderRadius.circular(6),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Flexible(
-                          child: Text(
-                            u,
-                            overflow: TextOverflow.ellipsis,
-                            maxLines: 1,
-                            style: const TextStyle(
-                              color: kAccentA,
-                              decoration: TextDecoration.underline,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 6),
-                        const Icon(Icons.open_in_new,
-                            size: 16, color: kAccentA),
-                      ],
-                    ),
+    if (u.isEmpty) {
+      return _tileText(ctx, label, '—');
+    }
+
+    return _tile(
+      ctx,
+      label: label,
+      child: InkWell(
+        onTap: () => _openUrl(ctx, u),
+        borderRadius: BorderRadius.circular(10),
+        child: Row(
+          children: [
+            Expanded(
+              child: Tooltip(
+                message: u,
+                waitDuration: const Duration(milliseconds: 400),
+                child: Text(
+                  u,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: kAccentA,
+                    decoration: TextDecoration.underline,
+                    fontWeight: FontWeight.w800,
                   ),
-          ),
-        ],
+                ),
+              ),
+            ),
+            const SizedBox(width: 10),
+            Container(
+              padding: const EdgeInsets.all(6),
+              decoration: BoxDecoration(
+                color: kAccentA.withOpacity(.10),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: kAccentA.withOpacity(.22)),
+              ),
+              child: const Icon(Icons.open_in_new, size: 16, color: kAccentA),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -179,11 +218,29 @@ class InfoExtrasCard extends StatelessWidget {
       label: Text(
         label,
         style:
-            const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+            const TextStyle(color: Colors.white, fontWeight: FontWeight.w800),
       ),
       backgroundColor: bg,
       materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
       visualDensity: const VisualDensity(horizontal: -2, vertical: -2),
+    );
+  }
+
+  Widget _grid(BuildContext ctx, List<Widget> tiles, {required bool twoCols}) {
+    return LayoutBuilder(
+      builder: (_, cons) {
+        final double gap = 10;
+        final double w = cons.maxWidth;
+        final double tileW = twoCols ? (w - gap) / 2 : w;
+
+        return Wrap(
+          spacing: gap,
+          runSpacing: gap,
+          children: [
+            for (final t in tiles) SizedBox(width: tileW, child: t),
+          ],
+        );
+      },
     );
   }
 
@@ -197,8 +254,6 @@ class InfoExtrasCard extends StatelessWidget {
         : _txt(data['currency']);
 
     // ✅ MULTI-DEVISE (lié à sale_price)
-    // Si une devise de vente existe, on l'utilise pour afficher sale_price.
-    // Sinon, fallback sur la devise de l'item.
     final saleCurrencyRaw = _txt(
       data['sale_currency'] ??
           data['sale_price_currency'] ??
@@ -208,13 +263,10 @@ class InfoExtrasCard extends StatelessWidget {
         ? currency
         : saleCurrencyRaw;
 
-    // Si la devise de vente diffère, on ne dérive PAS la marge (sinon mélange de devises).
     final bool sameCurrencyForMargin = (saleCurrency == currency);
 
     // === Margin calculations ===
     final num? pct = _asNum(data['marge']); // % if present
-
-    // ✅ sale_price lu tel quel, mais la marge n'est calculée que si devises identiques
     final num? sale = _asNum(data['sale_price']);
 
     final num cost =
@@ -224,152 +276,170 @@ class InfoExtrasCard extends StatelessWidget {
         (_asNum(data['grading_fees']) ?? 0);
     final num invested = cost + fees;
 
-    // Valeur de marge : uniquement si même devise (sinon incohérent)
     final num? valueMargin = (showMargins && sameCurrencyForMargin)
         ? (sale == null ? null : (sale - invested))
         : null;
 
-    // % marge :
-    // - si marge déjà stockée -> OK (c'est un %)
-    // - sinon on dérive seulement si même devise
     final num? pctDerived = (pct != null)
         ? pct
         : ((sameCurrencyForMargin && sale != null && invested > 0)
             ? ((sale - invested) / invested * 100)
             : null);
 
-    final left = <Widget>[
-      _kv(context, 'Product name', _txt(data['product_name'])),
-      _kv(context, 'Game', _txt(data['game_label'] ?? data['game_code'])),
-      _kv(context, 'Language', _txt(data['language'])),
-      _kv(context, 'Type', _txt(data['type'])),
-      _kv(context, 'Purchase date', _date(data['purchase_date'])),
-      _kv(context, 'Supplier', _txt(data['supplier_name'])),
-      _kv(context, 'Buyer', _txt(data['buyer_company'])),
-      _kv(context, 'Channel ID', _txt(data['channel_id'])),
-      _kv(context, 'Item location', _txt(data['item_location'])),
-      _kv(context, 'Tracking', _txt(data['tracking'])),
-      _kv(context, 'Grade ID', _txt(data['grade_id'])),
-      _kv(context, 'Grading note', _txt(data['grading_note'])),
-      _kv(context, 'Grading fees', _money(data['grading_fees'], currency)),
-      if (showMargins)
-        _kvW(context, 'Margin (%)',
-            MarginChip(marge: pctDerived, compact: true)),
+    final notes = (data['notes'] ?? '').toString().trim();
+
+    // ===== Sections (tiles) =====
+    final basics = <Widget>[
+      _tileText(context, 'Product name', _txt(data['product_name'])),
+      _tileText(context, 'Game', _txt(data['game_label'] ?? data['game_code'])),
+      _tileText(context, 'Language', _txt(data['language'])),
+      _tileText(context, 'Type', _txt(data['type'])),
+      _tileText(context, 'Purchase date', _date(data['purchase_date'])),
+      _tileText(context, 'Status', _txt(data['status'])),
     ];
 
-    final right = <Widget>[
-      _kv(context, 'Unit cost', _money(data['unit_cost'], currency)),
-      _kv(context, 'Unit fees', _money(data['unit_fees'], currency)),
-      _kv(context, 'Estimated price',
+    final people = <Widget>[
+      _tileText(context, 'Supplier', _txt(data['supplier_name'])),
+      _tileText(context, 'Buyer company', _txt(data['buyer_company'])),
+      _tileText(context, 'Buyer info', _txt(data['buyer_infos'])),
+      _tileText(context, 'Payment type', _txt(data['payment_type'])),
+    ];
+
+    final logistics = <Widget>[
+      _tileText(context, 'Channel ID', _txt(data['channel_id'])),
+      _tileText(context, 'Item location', _txt(data['item_location'])),
+      _tileText(context, 'Tracking', _txt(data['tracking'])),
+      _tileText(context, 'Grade ID', _txt(data['grade_id'])),
+      _tileText(context, 'Grading note', _txt(data['grading_note'])),
+    ];
+
+    final pricing = <Widget>[
+      _tileText(context, 'Unit cost', _money(data['unit_cost'], currency)),
+      _tileText(context, 'Unit fees', _money(data['unit_fees'], currency)),
+      _tileText(context, 'Estimated price',
           _money(data['estimated_price'], currency)),
-
-      // ✅ sale_price affiché avec la devise de vente
-      _kv(context, 'Sale price', _money(data['sale_price'], saleCurrency)),
-      _kv(context, 'Sale currency', saleCurrency),
-
-      _kv(context, 'Sale date', _date(data['sale_date'])),
-      _kv(context, 'Currency', currency),
-      _kv(context, 'Created at', _date(data['created_at'])),
-      _kvLink(context, 'Photo URL', data['photo_url']),
-      _kvLink(context, 'Document URL', data['document_url']),
-      _kv(context, 'Shipping fees per unit',
+      _tileText(context, 'Shipping fees / unit',
           _money(data['shipping_fees'], currency)),
-      _kv(context, 'Commission fees per unit',
+      _tileText(context, 'Commission fees / unit',
           _money(data['commission_fees'], currency)),
-      _kv(context, 'Payment type', _txt(data['payment_type'])),
-      _kv(context, 'Buyer info', _txt(data['buyer_infos'])),
-
-      if (showMargins)
-        _kvW(
-          context,
-          'Margin (value per unit)',
-          _marginValueChip(valueMargin, currency, pctDerived),
-        ),
+      _tileText(
+          context, 'Grading fees', _money(data['grading_fees'], currency)),
     ];
 
-    final notes = (data['notes'] ?? '').toString();
+    final saleTiles = <Widget>[
+      _tileText(
+          context, 'Sale price', _money(data['sale_price'], saleCurrency)),
+      _tileText(context, 'Sale currency', saleCurrency),
+      _tileText(context, 'Sale date', _date(data['sale_date'])),
+      _tileText(context, 'Currency (cost)', currency),
+      _tileText(context, 'Created at', _date(data['created_at'])),
+    ];
+
+    final links = <Widget>[
+      _tileLink(context, 'Photo URL', data['photo_url']?.toString()),
+      _tileLink(context, 'Document URL', data['document_url']?.toString()),
+    ];
+
+    final margins = <Widget>[
+      _tile(
+        context,
+        label: 'Margin (%)',
+        child: Align(
+          alignment: Alignment.centerLeft,
+          child: MarginChip(marge: pctDerived, compact: true),
+        ),
+      ),
+      _tile(
+        context,
+        label: 'Margin value / unit',
+        child: Align(
+          alignment: Alignment.centerLeft,
+          child: _marginValueChip(valueMargin, currency, pctDerived),
+        ),
+      ),
+    ];
 
     return Card(
-      elevation: 0.8,
-      shadowColor: kAccentA.withOpacity(.18),
+      elevation: 1,
+      shadowColor: kAccentA.withOpacity(.16),
       color: cs.surface,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       child: Container(
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: kAccentA.withOpacity(.18), width: 1),
+          border: Border.all(color: kAccentA.withOpacity(.16), width: 1),
           gradient: LinearGradient(
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
             colors: [
-              kAccentA.withOpacity(.05),
-              kAccentB.withOpacity(.05),
+              kAccentA.withOpacity(.055),
+              kAccentB.withOpacity(.045),
             ],
           ),
         ),
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 14),
+          padding: const EdgeInsets.fromLTRB(14, 14, 14, 14),
           child: LayoutBuilder(
             builder: (ctx, cons) {
-              final twoCols = cons.maxWidth >= 680;
+              final twoCols = cons.maxWidth >= 820;
+
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Row(
-                    children: const [
-                      Icon(Icons.info_outline, size: 18, color: kAccentA),
-                      SizedBox(width: 8),
-                      Text('Information',
-                          style: TextStyle(
-                              fontWeight: FontWeight.w800, fontSize: 16)),
-                    ],
-                  ),
+                  _sectionTitle(ctx, Icons.info_outline, 'Information'),
                   const SizedBox(height: 10),
-                  if (twoCols)
-                    Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Expanded(child: Column(children: left)),
-                        const SizedBox(width: 28),
-                        Expanded(child: Column(children: right)),
-                      ],
-                    )
-                  else
-                    Column(
-                      children: [
-                        ...left,
-                        const SizedBox(height: 8),
-                        ...right,
-                      ],
-                    ),
+                  _grid(ctx, basics, twoCols: twoCols),
                   const SizedBox(height: 14),
-                  Divider(
-                    height: 1,
-                    thickness: 1,
-                    color: kAccentA.withOpacity(.25),
-                  ),
+                  _sectionTitle(ctx, Icons.people_alt_outlined, 'Parties'),
                   const SizedBox(height: 10),
-                  Text('Notes',
-                      style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                            fontWeight: FontWeight.w700,
-                            color: kAccentA,
-                          )),
-                  const SizedBox(height: 6),
+                  _grid(ctx, people, twoCols: twoCols),
+                  const SizedBox(height: 14),
+                  _sectionTitle(
+                      ctx, Icons.local_shipping_outlined, 'Logistics'),
+                  const SizedBox(height: 10),
+                  _grid(ctx, logistics, twoCols: twoCols),
+                  const SizedBox(height: 14),
+                  _sectionTitle(ctx, Icons.attach_money, 'Pricing'),
+                  const SizedBox(height: 10),
+                  _grid(ctx, pricing, twoCols: twoCols),
+                  const SizedBox(height: 14),
+                  _sectionTitle(ctx, Icons.sell_outlined, 'Sale'),
+                  const SizedBox(height: 10),
+                  _grid(ctx, saleTiles, twoCols: twoCols),
+                  const SizedBox(height: 14),
+                  _sectionTitle(ctx, Icons.link, 'Links'),
+                  const SizedBox(height: 10),
+                  _grid(ctx, links, twoCols: twoCols),
+                  const SizedBox(height: 14),
+                  if (showMargins) ...[
+                    _sectionTitle(ctx, Icons.percent, 'Margins'),
+                    const SizedBox(height: 10),
+                    _grid(ctx, margins, twoCols: twoCols),
+                    const SizedBox(height: 14),
+                  ],
+                  Divider(
+                      height: 1,
+                      thickness: 1,
+                      color: kAccentA.withOpacity(.20)),
+                  const SizedBox(height: 10),
+                  _sectionTitle(ctx, Icons.sticky_note_2_outlined, 'Notes'),
+                  const SizedBox(height: 8),
                   Container(
                     width: double.infinity,
                     padding: const EdgeInsets.symmetric(
                         horizontal: 12, vertical: 10),
                     decoration: BoxDecoration(
                       color: cs.surfaceContainerHighest,
-                      borderRadius: BorderRadius.circular(10),
+                      borderRadius: BorderRadius.circular(12),
                       border: Border.all(
-                        color: kAccentA.withOpacity(.25),
-                        width: 0.8,
-                      ),
+                          color: kAccentA.withOpacity(.18), width: 0.9),
                     ),
                     child: Text(
                       notes.isEmpty ? '—' : notes,
-                      style: Theme.of(context).textTheme.bodyMedium,
+                      style: Theme.of(ctx)
+                          .textTheme
+                          .bodyMedium
+                          ?.copyWith(height: 1.25),
                     ),
                   ),
                 ],
