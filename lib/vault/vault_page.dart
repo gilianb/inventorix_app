@@ -7,7 +7,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:http/http.dart' as http; // ✅ FX HTTP
 
 import 'package:inventorix_app/inventory/widgets/table_by_status.dart';
-import 'package:inventorix_app/inventory/widgets/edit.dart';
+import 'package:inventorix_app/edit/edit_page.dart';
 import 'package:inventorix_app/inventory/widgets/search_and_filters.dart';
 import 'package:inventorix_app/inventory/widgets/finance_overview.dart';
 

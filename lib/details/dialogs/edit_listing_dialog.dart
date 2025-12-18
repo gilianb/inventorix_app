@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import '../../inventory/widgets/edit.dart' show EditItemsDialog;
+import '../../edit/edit_page.dart' show EditItemsDialog;
 
 class EditListingDialog {
   static Future<bool?> show(

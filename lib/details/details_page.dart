@@ -8,7 +8,7 @@ import 'package:printing/printing.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-import '../inventory/widgets/edit.dart' show EditItemsDialog;
+import '../edit/edit_page.dart' show EditItemsDialog;
 
 import 'widgets/info_extras_card.dart';
 

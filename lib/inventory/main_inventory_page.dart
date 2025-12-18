@@ -7,7 +7,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../inventory/widgets/status_breakdown_panel.dart';
 import '../../inventory/widgets/table_by_status.dart';
 import '../../inventory/utils/status_utils.dart';
-import '../../inventory/widgets/edit.dart';
+import '../edit/edit_page.dart';
 import '../../inventory/widgets/finance_overview.dart';
 
 // ✅ NEW: Grouped products view (C)
