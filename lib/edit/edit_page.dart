@@ -257,8 +257,9 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
 
   List<String> _statusListWithExtra({required String current}) {
     final list = <String>[...kStatusOrder];
-    if (current.trim().isNotEmpty && !list.contains(current))
+    if (current.trim().isNotEmpty && !list.contains(current)) {
       list.insert(0, current);
+    }
     return list;
   }
 
@@ -965,7 +966,7 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
       ),
     );
 
-    Widget _text(
+    Widget text(
       TextEditingController c, {
       required String hint,
       int? minLines,
@@ -981,7 +982,7 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
       );
     }
 
-    Widget _num(TextEditingController c,
+    Widget num(TextEditingController c,
         {required String hint, bool decimal = true}) {
       return TextField(
         controller: c,
@@ -1132,7 +1133,7 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
                   children: [
                     LabeledField(
                       label: 'Product name',
-                      child: _text(_productNameCtrl, hint: 'Product name'),
+                      child: text(_productNameCtrl, hint: 'Product name'),
                     ),
                     LabeledField(
                       label: 'Type',
@@ -1220,21 +1221,21 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
                     LabeledField(
                       label: 'Grade ID',
                       child:
-                          _text(_gradeIdCtrl, hint: 'PSA serial number, etc.'),
+                          text(_gradeIdCtrl, hint: 'PSA serial number, etc.'),
                     ),
                     LabeledField(
                       label: 'Grading Note',
-                      child: _text(_gradingNoteCtrl, hint: 'e.g.: Excellent'),
+                      child: text(_gradingNoteCtrl, hint: 'e.g.: Excellent'),
                     ),
                     LabeledField(
                       label: 'Grading Fees (USD)',
-                      child: _num(_gradingFeesCtrl,
+                      child: num(_gradingFeesCtrl,
                           hint: 'e.g.: 25.00', decimal: true),
                     ),
                     LabeledField(
                       label: 'Item Location',
                       child:
-                          _text(_itemLocationCtrl, hint: 'e.g.: Paris / Dubai'),
+                          text(_itemLocationCtrl, hint: 'e.g.: Paris / Dubai'),
                     ),
                   ],
                 ),
@@ -1249,17 +1250,17 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
                   children: [
                     LabeledField(
                       label: 'Unit cost (USD)',
-                      child: _num(_unitCostCtrl,
+                      child: num(_unitCostCtrl,
                           hint: 'e.g.: 95.00', decimal: true),
                     ),
                     LabeledField(
                       label: 'Estimated price per unit (USD)',
-                      child: _num(_estimatedPriceCtrl,
+                      child: num(_estimatedPriceCtrl,
                           hint: 'e.g.: 125.00', decimal: true),
                     ),
                     LabeledField(
                       label: 'Sale price ($_saleCurrency)',
-                      child: _num(_salePriceCtrl,
+                      child: num(_salePriceCtrl,
                           hint: 'e.g.: 145.00', decimal: true),
                     ),
                     LabeledField(
@@ -1322,12 +1323,12 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
                     ),
                     LabeledField(
                       label: 'Tracking',
-                      child: _text(_trackingCtrl,
+                      child: text(_trackingCtrl,
                           hint: 'e.g.: UPS 1Z... / DHL *****...'),
                     ),
                     LabeledField(
                       label: 'Sale location (Channel ID)',
-                      child: _text(
+                      child: text(
                         _channelIdCtrl,
                         hint: 'e.g.: 12',
                         keyboardType: const TextInputType.numberWithOptions(
@@ -1336,7 +1337,7 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
                     ),
                     LabeledField(
                       label: 'Buyer company',
-                      child: _text(_buyerCompanyCtrl, hint: 'Buyer company'),
+                      child: text(_buyerCompanyCtrl, hint: 'Buyer company'),
                     ),
                   ],
                 ),
@@ -1351,21 +1352,21 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
                   children: [
                     LabeledField(
                       label: 'Supplier name',
-                      child: _text(_supplierNameCtrl, hint: 'Supplier'),
+                      child: text(_supplierNameCtrl, hint: 'Supplier'),
                     ),
                     LabeledField(
                       label: 'Notes',
-                      child: _text(_notesCtrl,
+                      child: text(_notesCtrl,
                           hint: 'Notes', minLines: 1, maxLines: 3),
                     ),
                     LabeledField(
                       label: 'Payment type',
-                      child: _text(_paymentTypeCtrl,
+                      child: text(_paymentTypeCtrl,
                           hint: 'e.g. PayPal / Bank / ...'),
                     ),
                     LabeledField(
                       label: 'Buyer infos',
-                      child: _text(
+                      child: text(
                         _buyerInfosCtrl,
                         hint: 'Name / Address / Order ref...',
                         minLines: 1,
@@ -1387,12 +1388,12 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
                   children: [
                     LabeledField(
                       label: 'Shipping fees (USD)',
-                      child: _num(_shippingFeesCtrl,
+                      child: num(_shippingFeesCtrl,
                           hint: 'e.g.: 12.50', decimal: true),
                     ),
                     LabeledField(
                       label: 'Commission fees (USD)',
-                      child: _num(_commissionFeesCtrl,
+                      child: num(_commissionFeesCtrl,
                           hint: 'e.g.: 5.90', decimal: true),
                     ),
                   ],

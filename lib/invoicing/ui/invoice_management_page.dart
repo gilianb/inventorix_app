@@ -604,7 +604,7 @@ class _InvoiceManagementPageState extends State<InvoiceManagementPage> {
       final now = DateTime.now().millisecondsSinceEpoch;
       final safeName = (file.name).replaceAll(RegExp(r'[^A-Za-z0-9._-]'), '_');
       final newPathInBucket =
-          'org_${widget.orgId}/inv_${invoice.id}_$now\_$safeName';
+          'org_${widget.orgId}/inv_${invoice.id}_${now}_$safeName';
 
       final lower = safeName.toLowerCase();
       final contentType = lower.endsWith('.pdf')

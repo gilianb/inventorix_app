@@ -1,4 +1,6 @@
 // lib/details/widgets/details_status_filter_bar.dart
+// ignore_for_file: deprecated_member_use
+
 import 'package:flutter/material.dart';
 
 import '../../inventory/utils/status_utils.dart';
@@ -50,7 +52,7 @@ class DetailsStatusFilterBar extends StatelessWidget {
     return Card(
       margin: const EdgeInsets.only(top: 10),
       elevation: 0,
-      color: theme.colorScheme.surfaceVariant.withOpacity(.35),
+      color: theme.colorScheme.surfaceContainerHighest.withOpacity(.35),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
       child: Padding(
         padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),

@@ -90,6 +90,7 @@ class FinanceOverview extends StatelessWidget {
   (num invested, num middle, num sold, Set<String> missingFx) _compute() {
     final missing = <String>{};
 
+    // ignore: no_leading_underscores_for_local_identifiers
     String _usedSaleCurrency(Map<String, dynamic> r) {
       final saleCur = _cur(r['sale_currency']);
       final legacyCur = _cur(r['currency']);

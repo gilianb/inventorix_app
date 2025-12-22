@@ -416,7 +416,7 @@ class _NewStockPageState extends State<NewStockPage> {
 
                 // ✅ Devise (prix par devise) - UI simple
                 DropdownButtonFormField<String>(
-                  value: _currency,
+                  initialValue: _currency,
                   items: currencies
                       .map((c) => DropdownMenuItem(value: c, child: Text(c)))
                       .toList(),

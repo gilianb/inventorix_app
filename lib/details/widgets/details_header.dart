@@ -1,3 +1,5 @@
+// ignore_for_file: deprecated_member_use
+
 import 'package:flutter/material.dart';
 
 import '../../inventory/utils/status_utils.dart';
@@ -50,7 +52,6 @@ class DetailsHeader extends StatelessWidget {
     return Card(
       elevation: 0.8,
       color: cs.surface,
-      // ignore: deprecated_member_use
       shadowColor: kAccentA.withOpacity(.18),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       child: Container(

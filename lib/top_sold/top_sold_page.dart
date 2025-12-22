@@ -12,17 +12,15 @@ import 'package:inventorix_app/details/details_page.dart'
 // 🔐 RBAC
 import 'package:inventorix_app/org/roles.dart';
 
-//icons
-import 'package:iconify_flutter/iconify_flutter.dart';
-import 'package:iconify_flutter/icons/mdi.dart';
+import 'models/top_sold_models.dart';
+import 'widgets/top_sold_filters_bar.dart';
+import 'widgets/top_sold_restock_banner.dart';
+import 'widgets/top_sold_product_tile.dart';
 
 class TopSoldPage extends StatefulWidget {
   const TopSoldPage({super.key, this.orgId, this.onOpenDetails});
 
-  /// Filtre d’organisation (UUID). Si null/empty => pas de filtre org côté requêtes.
   final String? orgId;
-
-  /// Callback pour ouvrir la page Détails depuis l’onglet Top Sold
   final void Function(Map<String, dynamic> itemRow)? onOpenDetails;
 
   @override
@@ -38,50 +36,37 @@ class _TopSoldPageState extends State<TopSoldPage> {
   // RBAC
   OrgRole _role = OrgRole.viewer;
   RolePermissions get _perm => kRoleMatrix[_role]!;
-  bool get _isOwner => _role == OrgRole.owner;
 
-  String _typeFilter = 'all'; // 'all' | 'single' | 'sealed'
+  String _typeFilter = 'all'; // all|single|sealed
   String? _gameFilter; // games.label (nullable)
-  List<Map<String, dynamic>> _rows = [];
+  String _dateFilter = 'all'; // all|month|week
+
+  TopSoldSort _sort = TopSoldSort.marge;
+  int _topN = 20;
 
   final _searchCtrl = TextEditingController();
 
-  /// Filtre de période sur purchase_date
-  /// 'all' | 'month' (30j) | 'week' (7j)
-  String _dateFilter = 'all';
+  List<TopSoldProductVM> _products = [];
+  List<TopSoldProductVM> _restockOOS = [];
 
   static const String _kDefaultAsset = 'assets/images/default_card.png';
 
-  // Base de statuts éligibles à l'onglet "Top Sold" (sans "vault")
-  static const List<String> _soldLike = ['sold', 'shipped', 'finalized'];
-  static const String _vaultStatus = 'vault';
+  /// Statuts de vente (on garde large côté Dart, aucun risque si un status n'existe pas)
+  static const Set<String> _soldLikeStatuses = {
+    'sold',
+    'awaiting_payment',
+    'sold_awaiting_payment',
+    'shipped',
+    'finalized',
+  };
 
-  /// 🔒 Fallback strict (si group_sig absent)
-  /// IMPORTANT: LIST (ordre stable) pour générer une clé déterministe.
-  static const List<String> _strictLineKeys = [
-    'product_id',
-    'game_id',
-    'type',
-    'language',
-    'channel_id',
-    'purchase_date',
-    'currency',
-    'supplier_name',
-    'buyer_company',
-    'notes',
-    'grade_id',
-    'grading_note',
-    'grading_fees',
-    'sale_date',
-    'sale_price',
-    'sale_currency', // ✅ multi-devise sale_price
-    'tracking',
-    'photo_url',
-    'document_url',
-    'estimated_price',
-    'item_location',
-    'unit_cost',
-    'unit_fees',
+  /// Exclusion “stock”: si un item est dans ces statuts, il ne compte pas comme copie en stock
+  static const List<String> _excludeFromStockCandidates = [
+    'sold',
+    'awaiting_payment',
+    'sold_awaiting_payment',
+    'shipped',
+    'finalized',
   ];
 
   @override
@@ -141,9 +126,7 @@ class _TopSoldPageState extends State<TopSoldPage> {
               .eq('id', orgId as Object)
               .maybeSingle();
           final createdBy = org?['created_by'] as String?;
-          if (createdBy != null && createdBy == uid) {
-            roleStr = 'owner';
-          }
+          if (createdBy != null && createdBy == uid) roleStr = 'owner';
         } catch (_) {}
       }
 
@@ -172,7 +155,10 @@ class _TopSoldPageState extends State<TopSoldPage> {
 
   String _safeStr(dynamic v) => (v == null) ? '' : v.toString();
 
-  DateTime? _purchaseDateStart() {
+  void _snack(String m) =>
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
+
+  DateTime? _saleDateStart() {
     final now = DateTime.now();
     switch (_dateFilter) {
       case 'week':
@@ -180,14 +166,22 @@ class _TopSoldPageState extends State<TopSoldPage> {
       case 'month':
         return now.subtract(const Duration(days: 30));
       default:
-        return null; // all time
+        return null;
     }
   }
 
-  void _snack(String m) =>
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
+  String _money(num? n) => n == null ? '—' : n.toDouble().toStringAsFixed(2);
 
-  // ✅ Multi-devise sale_price: devise de vente (fallback currency -> USD)
+  DateTime? _parseDate(dynamic v) {
+    if (v == null) return null;
+    if (v is DateTime) return v;
+    final s = v.toString().trim();
+    if (s.isEmpty) return null;
+    // YYYY-MM-DD
+    return DateTime.tryParse(s);
+  }
+
+  /// ✅ Multi-devise sale_price: devise de vente (fallback currency -> USD)
   String _saleCurrency(Map<String, dynamic> r) {
     final sc = (r['sale_currency'] ?? '').toString().trim();
     if (sc.isNotEmpty) return sc;
@@ -195,376 +189,40 @@ class _TopSoldPageState extends State<TopSoldPage> {
     return c.isNotEmpty ? c : 'USD';
   }
 
-  // --------- Fetch principal ----------
-  Future<void> _fetch() async {
-    setState(() => _loading = true);
-    try {
-      final canSeeCosts = _perm.canSeeUnitCosts;
-      final canSeeRevenue = _perm.canSeeRevenue;
+  // ---------- Thumbnail ----------
+  Widget _cardThumb(String photoUrl) {
+    const double h = 100;
+    const double w = 72;
+    final hasNet = photoUrl.isNotEmpty;
 
-      String buildCols({required bool includeSaleCurrency}) {
-        return <String>[
-          'id',
-          'org_id',
-          'group_sig', // ✅ clé robuste pour ouvrir Détails + grouper
-          'product_id',
-          'type',
-          'language',
-          'game_id',
-          'status',
-          'sale_date',
-          if (canSeeRevenue) 'sale_price',
-          if (canSeeRevenue && includeSaleCurrency) 'sale_currency',
-          'currency',
-          'marge',
-          if (canSeeCosts) 'unit_cost',
-          if (canSeeCosts) 'unit_fees',
-          if (canSeeCosts) 'shipping_fees',
-          if (canSeeCosts) 'commission_fees',
-          if (canSeeCosts) 'grading_fees',
-          'photo_url',
-          'buyer_company',
-          'supplier_name',
-          'purchase_date',
-          'channel_id',
-          'notes',
-          'grade_id',
-          'grading_note',
-          'document_url',
-          'estimated_price',
-          'item_location',
-          'tracking',
-        ].join(', ');
-      }
+    Widget img;
+    if (hasNet) {
+      img = Image.network(
+        photoUrl,
+        fit: BoxFit.cover,
+        errorBuilder: (_, __, ___) =>
+            Image.asset(_kDefaultAsset, fit: BoxFit.cover),
+      );
+    } else {
+      img = Image.asset(_kDefaultAsset, fit: BoxFit.cover);
+    }
 
-      Future<List<Map<String, dynamic>>> runQuery(
-          {required bool includeSaleCurrency}) async {
-        PostgrestFilterBuilder q = _sb
-            .from('item_masked')
-            .select(buildCols(includeSaleCurrency: includeSaleCurrency));
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(10),
+      child: SizedBox(width: w, height: h, child: img),
+    );
+  }
 
-        if (_typeFilter != 'all') {
-          q = q.eq('type', _typeFilter);
-        }
-
-        // 🔐 filtre org si fourni
-        if ((widget.orgId ?? '').isNotEmpty) {
-          q = q.eq('org_id', widget.orgId as Object);
-        }
-
-        // Filtre période sur purchase_date
-        final after = _purchaseDateStart();
-        if (after != null) {
-          final afterStr =
-              after.toIso8601String().split('T').first; // YYYY-MM-DD
-          q = q.gte('purchase_date', afterStr);
-        }
-
-        final List<dynamic> raw =
-            await q.order('sale_date', ascending: false).limit(5000);
-
-        return raw
-            .map<Map<String, dynamic>>(
-                (e) => Map<String, dynamic>.from(e as Map))
-            .toList();
-      }
-
-      // 1) Query (robuste si la colonne sale_currency n'existe pas encore)
-      List<Map<String, dynamic>> items;
-      try {
-        items = await runQuery(includeSaleCurrency: canSeeRevenue);
-      } on PostgrestException catch (e) {
-        final msg = e.message.toLowerCase();
-        final looksLikeMissingSaleCurrency =
-            msg.contains('sale_currency') && msg.contains('column');
-        if (!looksLikeMissingSaleCurrency) rethrow;
-        items = await runQuery(includeSaleCurrency: false);
-      }
-
-      // 2) Statuts autorisés selon le rôle
-      final wantedStatuses = _isOwner
-          ? [..._soldLike, _vaultStatus]
-          : List<String>.from(_soldLike);
-
-      // 2.bis) Filtre statuts + contrainte revenu si nécessaire
-      items = items.where((r) {
-        final s = (r['status'] ?? '').toString();
-        final hasSale = canSeeRevenue ? r['sale_price'] != null : true;
-        return wantedStatuses.contains(s) && hasSale;
-      }).toList();
-
-      // 3) Lookups product & games (pour nom/sku/jeu)
-      final productIds =
-          items.map((r) => r['product_id']).whereType<int>().toSet().toList();
-      final gameIds =
-          items.map((r) => r['game_id']).whereType<int>().toSet().toList();
-
-      Map<int, Map<String, dynamic>> productById = {};
-      Map<int, Map<String, dynamic>> gameById = {};
-
-      if (productIds.isNotEmpty) {
-        final List<dynamic> prods = await _sb
-            .from('product')
-            .select('id, name, sku, language, org_id')
-            .filter('id', 'in', '(${productIds.join(",")})');
-        productById = {
-          for (final p in prods.map((e) => Map<String, dynamic>.from(e as Map)))
-            (p['id'] as int): p
-        };
-      }
-
-      if (gameIds.isNotEmpty) {
-        final List<dynamic> games = await _sb
-            .from('games')
-            .select('id, label, code')
-            .filter('id', 'in', '(${gameIds.join(",")})');
-        gameById = {
-          for (final g in games.map((e) => Map<String, dynamic>.from(e as Map)))
-            (g['id'] as int): g
-        };
-      }
-
-      // 3.bis) Fallback: noms depuis la vue MASQUÉE
-      Map<int, Map<String, dynamic>> vInfoByProductId = {};
-      if (productIds.isNotEmpty) {
-        final String idsCsv = '(${productIds.join(",")})';
-        final List<dynamic> vrows = await _sb
-            .from('v_items_by_status_masked')
-            .select(
-                'product_id, game_id, product_name, game_label, game_code, language')
-            .filter('product_id', 'in', idsCsv)
-            .limit(5000);
-        for (final e in vrows) {
-          final m = Map<String, dynamic>.from(e as Map);
-          final pid = (m['product_id'] as num?)?.toInt();
-          if (pid != null && !vInfoByProductId.containsKey(pid)) {
-            vInfoByProductId[pid] = {
-              'product_name': (m['product_name'] ?? '').toString(),
-              'language': (m['language'] ?? '').toString(),
-              'game_label': (m['game_label'] ?? '').toString(),
-              'game_code': (m['game_code'] ?? '').toString(),
-            };
-          }
-        }
-      }
-
-      // 4) Filtre jeu + recherche locale
-      final rawQ = _searchCtrl.text.trim().toLowerCase();
-      final tokens = rawQ.isEmpty
-          ? const <String>[]
-          : rawQ.split(RegExp(r'\s+')).where((t) => t.isNotEmpty).toList();
-
-      bool matchesSearch(Map<String, dynamic> r) {
-        if (tokens.isEmpty) return true;
-
-        final pid = r['product_id'] as int?;
-        final gid = r['game_id'] as int?;
-
-        final product = pid != null ? (productById[pid] ?? const {}) : const {};
-        final game = gid != null ? (gameById[gid] ?? const {}) : const {};
-        final vinfo =
-            pid != null ? (vInfoByProductId[pid] ?? const {}) : const {};
-
-        final fields = <String>[
-          (product['name'] ?? vinfo['product_name'] ?? '').toString(),
-          (product['sku'] ?? '').toString(),
-          (vinfo['language'] ?? r['language'] ?? '').toString(),
-          (game['label'] ?? vinfo['game_label'] ?? '').toString(),
-          (game['code'] ?? vinfo['game_code'] ?? '').toString(),
-          (r['supplier_name'] ?? '').toString(),
-          (r['buyer_company'] ?? '').toString(),
-          (r['tracking'] ?? '').toString(),
-        ].map((s) => s.toLowerCase()).toList();
-
-        return tokens.every((t) => fields.any((f) => f.contains(t)));
-      }
-
-      bool matchesGame(Map<String, dynamic> r) {
-        if ((_gameFilter ?? '').isEmpty) return true;
-        final pid = r['product_id'] as int?;
-        final gid = r['game_id'] as int?;
-        final game = gid != null ? (gameById[gid] ?? const {}) : const {};
-        final vinfo =
-            pid != null ? (vInfoByProductId[pid] ?? const {}) : const {};
-        final label = (game['label'] ?? '').toString();
-        final fall = (vinfo['game_label'] ?? '').toString();
-        return label == _gameFilter || fall == _gameFilter;
-      }
-
-      if ((_gameFilter ?? '').isNotEmpty || tokens.isNotEmpty) {
-        items = items.where((r) => matchesGame(r) && matchesSearch(r)).toList();
-      }
-
-      // 5) REGROUPEMENT (priorité: org_id + group_sig + status)
-      final Map<String, Map<String, dynamic>> groups = {};
-
-      String keyOf(Map<String, dynamic> r) {
-        final org = _safeStr(r['org_id']);
-        final gs = _safeStr(r['group_sig']);
-        final st = _safeStr(r['status']);
-        if (gs.isNotEmpty && org.isNotEmpty && st.isNotEmpty) {
-          return '$org|$gs|$st';
-        }
-
-        // fallback strict si group_sig absent
-        final buf = StringBuffer();
-        for (final k in _strictLineKeys) {
-          final v = r.containsKey(k) ? r[k] : null;
-          buf.write('$k=');
-          if (v == null) {
-            buf.write('∅|');
-          } else {
-            buf.write('${v.toString()}|');
-          }
-        }
-        buf.write('status=$st|');
-        buf.write('org_id=$org|');
-        return buf.toString();
-      }
-
-      for (final r in items) {
-        final key = keyOf(r);
-
-        final g = groups.putIfAbsent(key, () {
-          final base = <String, dynamic>{};
-
-          // champs utiles affichage / open details
-          base['org_id'] = r['org_id'];
-          base['group_sig'] = r['group_sig'];
-          base['status'] = r['status'];
-
-          base['product_id'] = r['product_id'];
-          base['game_id'] = r['game_id'];
-          base['type'] = r['type'];
-          base['language'] = r['language'];
-
-          // garder les champs strict (au cas où)
-          for (final k in _strictLineKeys) {
-            base[k] = r[k];
-          }
-
-          base['_count'] = 0;
-          base['_sum_marge'] = 0.0;
-          base['_sum_sale'] = 0.0;
-          base['_sum_ucost'] = 0.0;
-          base['_sum_ufees'] = 0.0;
-          base['_sum_ship'] = 0.0;
-          base['_sum_comm'] = 0.0;
-          base['_sum_grad'] = 0.0;
-
-          base['_any_photo'] = (r['photo_url'] ?? '').toString();
-          base['currency'] = r['currency'];
-          base['sale_currency'] = r['sale_currency'];
-          return base;
-        });
-
-        g['_count'] = (g['_count'] as int) + 1;
-        g['_sum_marge'] =
-            (g['_sum_marge'] as num).toDouble() + (_asNum(r['marge']) ?? 0);
-
-        if (_perm.canSeeRevenue) {
-          g['_sum_sale'] = (g['_sum_sale'] as num).toDouble() +
-              (_asNum(r['sale_price']) ?? 0);
-        }
-
-        if (_perm.canSeeUnitCosts) {
-          g['_sum_ucost'] = (g['_sum_ucost'] as num).toDouble() +
-              (_asNum(r['unit_cost']) ?? 0);
-          g['_sum_ufees'] = (g['_sum_ufees'] as num).toDouble() +
-              (_asNum(r['unit_fees']) ?? 0);
-          g['_sum_ship'] = (g['_sum_ship'] as num).toDouble() +
-              (_asNum(r['shipping_fees']) ?? 0);
-          g['_sum_comm'] = (g['_sum_comm'] as num).toDouble() +
-              (_asNum(r['commission_fees']) ?? 0);
-          g['_sum_grad'] = (g['_sum_grad'] as num).toDouble() +
-              (_asNum(r['grading_fees']) ?? 0);
-        }
-
-        final curPhoto = (g['_any_photo'] ?? '').toString();
-        if (curPhoto.isEmpty) {
-          final cand = (r['photo_url'] ?? '').toString();
-          if (cand.isNotEmpty) g['_any_photo'] = cand;
-        }
-      }
-
-      // 6) Lignes d’affichage (moyennes par groupe)
-      final rows = <Map<String, dynamic>>[];
-      for (final g in groups.values) {
-        final cnt = (g['_count'] as int);
-        num avg(num sum) => cnt == 0 ? 0 : sum / cnt;
-
-        final pid = g['product_id'] as int?;
-        final gid = g['game_id'] as int?;
-
-        final prod = (pid != null)
-            ? (productById[pid] ?? const <String, dynamic>{})
-            : const <String, dynamic>{};
-        final game = (gid != null)
-            ? (gameById[gid] ?? const <String, dynamic>{})
-            : const <String, dynamic>{};
-        final vinfo = (pid != null)
-            ? (vInfoByProductId[pid] ?? const <String, dynamic>{})
-            : const <String, dynamic>{};
-
-        final resolvedProductName = _safeStr(prod['name']).isNotEmpty
-            ? _safeStr(prod['name'])
-            : _safeStr(vinfo['product_name']);
-
-        final resolvedGameLabel = _safeStr(game['label']).isNotEmpty
-            ? _safeStr(game['label'])
-            : _safeStr(vinfo['game_label']);
-
-        final resolvedGameCode = _safeStr(game['code']).isNotEmpty
-            ? _safeStr(game['code'])
-            : _safeStr(vinfo['game_code']);
-
-        rows.add({
-          for (final k in _strictLineKeys) k: g[k],
-          'org_id': g['org_id'],
-          'group_sig': g['group_sig'],
-          'status': g['status'],
-          'product_id': pid,
-          'game_id': gid,
-          'type': g['type'],
-          'language': g['language'],
-          'product_name': resolvedProductName,
-          'language_display': (g['language'] ?? '').toString(),
-          'game_label': resolvedGameLabel,
-          'game_code': resolvedGameCode,
-          'product': prod,
-          'game': game,
-          'photo_url': (g['_any_photo'] ?? '').toString(),
-          'currency': g['currency'] ?? 'USD',
-          'sale_currency': (g['sale_currency'] ?? g['currency'] ?? 'USD'),
-          'marge': avg((g['_sum_marge'] as num)),
-          if (_perm.canSeeRevenue) 'sale_price': avg((g['_sum_sale'] as num)),
-          if (_perm.canSeeUnitCosts) 'unit_cost': avg((g['_sum_ucost'] as num)),
-          if (_perm.canSeeUnitCosts) 'unit_fees': avg((g['_sum_ufees'] as num)),
-          if (_perm.canSeeUnitCosts)
-            'shipping_fees': avg((g['_sum_ship'] as num)),
-          if (_perm.canSeeUnitCosts)
-            'commission_fees': avg((g['_sum_comm'] as num)),
-          if (_perm.canSeeUnitCosts)
-            'grading_fees': avg((g['_sum_grad'] as num)),
-          'qty': cnt,
-        });
-      }
-
-      // 7) Tri final marge desc
-      rows.sort((a, b) {
-        final ma = a['marge'] as num?;
-        final mb = b['marge'] as num?;
-        if (ma == null && mb == null) return 0;
-        if (ma == null) return 1;
-        if (mb == null) return -1;
-        return mb.compareTo(ma);
-      });
-
-      _rows = rows;
-    } catch (e) {
-      if (mounted) _snack('Erreur Top Sold : $e');
-    } finally {
-      if (mounted) setState(() => _loading = false);
+  Color _statusColor(String status) {
+    switch (status) {
+      case 'sold':
+      case 'awaiting_payment':
+      case 'sold_awaiting_payment':
+      case 'shipped':
+      case 'finalized':
+        return kAccentG;
+      default:
+        return kAccentA;
     }
   }
 
@@ -618,423 +276,546 @@ class _TopSoldPageState extends State<TopSoldPage> {
       }
     }
 
-    // Fallback: ancienne résolution par champs (au cas où)
-    final type = (line['type'] ?? '').toString();
-    final language = (line['language'] ?? '').toString();
-    final int? productId = line['product_id'] as int?;
-    final int? gameId = line['game_id'] as int?;
+    _snack("Unable to open details (missing group_sig).");
+  }
 
-    if (productId == null || gameId == null) {
-      _snack('Insufficient data to open details.');
-      return;
+  // --------- Stock check (Top N) ----------
+  String? _extractInvalidEnumValue(String msg) {
+    // exemple: invalid input value for enum item_status: "awaiting_payment"
+    final re = RegExp(r'enum\s+\w+:\s+"([^"]+)"');
+    final m = re.firstMatch(msg);
+    return m?.group(1);
+  }
+
+  Future<bool> _hasAnyInStock({
+    required String orgId,
+    required int productId,
+  }) async {
+    // On tente avec une liste large (incluant awaiting_payment etc),
+    // et si Postgres se plaint d’une valeur enum invalide, on la retire et on retry.
+    final exclude = List<String>.from(_excludeFromStockCandidates);
+
+    Future<bool> runWith(List<String> ex) async {
+      final notIn = '(${ex.join(",")})';
+      PostgrestTransformBuilder<PostgrestList> q = _sb
+          .from('item_masked')
+          .select('id')
+          .eq('org_id', orgId)
+          .eq('product_id', productId)
+          .not('status', 'in', notIn)
+          .limit(1);
+
+      final List<dynamic> raw = await q;
+      return raw.isNotEmpty;
     }
 
-    Map<String, dynamic>? rep;
-
-    Future<Map<String, dynamic>?> probe(List<List<dynamic>> conds) async {
-      var q = _sb.from('item').select('id, group_sig').eq('org_id', orgId);
-      for (final c in conds) {
-        final k = c[0] as String;
-        final op = c[1] as String;
-        final v = c.length > 2 ? c[2] : null;
-        if (op == 'is') {
-          q = q.filter(k, 'is', null);
-        } else if (op == 'eq') {
-          q = q.eq(k, v);
+    for (var i = 0; i < exclude.length + 2; i++) {
+      try {
+        return await runWith(exclude);
+      } on PostgrestException catch (e) {
+        final msg = e.message;
+        if (!msg.toLowerCase().contains('invalid input value for enum')) {
+          rethrow;
+        }
+        final bad = _extractInvalidEnumValue(msg);
+        if (bad == null) rethrow;
+        exclude.remove(bad);
+        if (exclude.isEmpty) {
+          // plus rien à exclure => tout compte comme stock
+          return true;
         }
       }
-      return await q.order('id', ascending: false).limit(1).maybeSingle();
     }
+    return await runWith(exclude);
+  }
 
+  // --------- Fetch principal ----------
+  Future<void> _fetch() async {
+    setState(() => _loading = true);
     try {
-      rep = await probe([
-        ['status', 'eq', status],
-        ['type', 'eq', type],
-        ['language', 'eq', language],
-        ['product_id', 'eq', productId],
-        ['game_id', 'eq', gameId],
-      ]);
+      final canSeeCosts = _perm.canSeeUnitCosts;
+      final canSeeRevenue = _perm.canSeeRevenue;
 
-      rep ??= await probe([
-        ['status', 'eq', status],
-        ['product_id', 'eq', productId],
-        ['game_id', 'eq', gameId],
-      ]);
+      String buildCols({required bool includeSaleCurrency}) {
+        return <String>[
+          'id',
+          'org_id',
+          'group_sig',
+          'product_id',
+          'type',
+          'language',
+          'game_id',
+          'status',
+          'sale_date',
+          if (canSeeRevenue) 'sale_price',
+          if (canSeeRevenue && includeSaleCurrency) 'sale_currency',
+          'currency',
+          'marge',
+          if (canSeeCosts) 'unit_cost',
+          if (canSeeCosts) 'unit_fees',
+          if (canSeeCosts) 'shipping_fees',
+          if (canSeeCosts) 'commission_fees',
+          if (canSeeCosts) 'grading_fees',
+          'photo_url',
+        ].join(', ');
+      }
 
-      rep ??= await probe([
-        ['status', 'eq', status],
-        ['product_id', 'eq', productId],
-      ]);
+      Future<List<Map<String, dynamic>>> runQuery(
+          {required bool includeSaleCurrency}) async {
+        PostgrestFilterBuilder q = _sb
+            .from('item_masked')
+            .select(buildCols(includeSaleCurrency: includeSaleCurrency));
 
-      if (rep == null || rep['id'] == null) {
-        _snack("Unable to identify the item group for this line.");
+        if (_typeFilter != 'all') {
+          q = q.eq('type', _typeFilter);
+        }
+
+        if ((widget.orgId ?? '').isNotEmpty) {
+          q = q.eq('org_id', widget.orgId as Object);
+        }
+
+        final after = _saleDateStart();
+        if (after != null) {
+          final afterStr = after.toIso8601String().split('T').first;
+          q = q.gte('sale_date', afterStr);
+        }
+
+        // tri sur sale_date, mais on prend large et on filtre les status côté Dart
+        final List<dynamic> raw =
+            await q.order('sale_date', ascending: false).limit(5000);
+
+        return raw
+            .map<Map<String, dynamic>>(
+                (e) => Map<String, dynamic>.from(e as Map))
+            .toList();
+      }
+
+      // Query (robuste si sale_currency manque)
+      List<Map<String, dynamic>> items;
+      try {
+        items = await runQuery(includeSaleCurrency: canSeeRevenue);
+      } on PostgrestException catch (e) {
+        final msg = e.message.toLowerCase();
+        final looksLikeMissingSaleCurrency =
+            msg.contains('sale_currency') && msg.contains('column');
+        if (!looksLikeMissingSaleCurrency) rethrow;
+        items = await runQuery(includeSaleCurrency: false);
+      }
+
+      // Filtre: uniquement items vendus-like + contraintes revenue si besoin
+      items = items.where((r) {
+        final s = (r['status'] ?? '').toString();
+        final soldLike = _soldLikeStatuses.contains(s);
+        final okRevenue = canSeeRevenue ? (r['sale_price'] != null) : true;
+        return soldLike && okRevenue;
+      }).toList();
+
+      if (items.isEmpty) {
+        setState(() {
+          _products = [];
+          _restockOOS = [];
+        });
         return;
       }
-    } catch (e) {
-      _snack('Error resolving group: $e');
-      return;
-    }
 
-    final payload = {
-      'org_id': orgId,
-      ...line,
-      'id': rep['id'],
-      if ((rep['group_sig']?.toString().isNotEmpty ?? false))
-        'group_sig': rep['group_sig'],
-    };
+      // Lookups product & games (nom/sku/jeu)
+      final productIds =
+          items.map((r) => r['product_id']).whereType<int>().toSet().toList();
+      final gameIds =
+          items.map((r) => r['game_id']).whereType<int>().toSet().toList();
 
-    if (widget.onOpenDetails != null) {
-      widget.onOpenDetails!(payload);
-    } else {
-      // ignore: use_build_context_synchronously
-      await Navigator.of(context).push<bool>(
-        MaterialPageRoute(
-          builder: (_) =>
-              GroupDetailsPage(group: Map<String, dynamic>.from(payload)),
-        ),
-      );
-    }
-  }
+      Map<int, Map<String, dynamic>> productById = {};
+      Map<int, Map<String, dynamic>> gameById = {};
 
-  String _money(num? n) => n == null ? '—' : n.toDouble().toStringAsFixed(2);
+      if (productIds.isNotEmpty) {
+        final List<dynamic> prods = await _sb
+            .from('product')
+            .select('id, name, sku, language, org_id')
+            .filter('id', 'in', '(${productIds.join(",")})');
+        productById = {
+          for (final p in prods.map((e) => Map<String, dynamic>.from(e as Map)))
+            (p['id'] as int): p
+        };
+      }
 
-  Widget _cardThumb(String photoUrl) {
-    const double h = 100;
-    const double w = 72;
-    final hasNet = photoUrl.isNotEmpty;
+      if (gameIds.isNotEmpty) {
+        final List<dynamic> games = await _sb
+            .from('games')
+            .select('id, label, code')
+            .filter('id', 'in', '(${gameIds.join(",")})');
+        gameById = {
+          for (final g in games.map((e) => Map<String, dynamic>.from(e as Map)))
+            (g['id'] as int): g
+        };
+      }
 
-    Widget img;
-    if (hasNet) {
-      img = Image.network(
-        photoUrl,
-        fit: BoxFit.cover,
-        errorBuilder: (_, __, ___) => Image.asset(
-          _kDefaultAsset,
-          fit: BoxFit.cover,
-        ),
-      );
-    } else {
-      img = Image.asset(
-        _kDefaultAsset,
-        fit: BoxFit.cover,
-      );
-    }
+      // Fallback: infos depuis v_items_by_status_masked
+      Map<int, Map<String, dynamic>> vInfoByProductId = {};
+      if (productIds.isNotEmpty) {
+        final String idsCsv = '(${productIds.join(",")})';
+        try {
+          final List<dynamic> vrows = await _sb
+              .from('v_items_by_status_masked')
+              .select(
+                  'product_id, game_id, product_name, game_label, game_code, language')
+              .filter('product_id', 'in', idsCsv)
+              .limit(5000);
+          for (final e in vrows) {
+            final m = Map<String, dynamic>.from(e as Map);
+            final pid = (m['product_id'] as num?)?.toInt();
+            if (pid != null && !vInfoByProductId.containsKey(pid)) {
+              vInfoByProductId[pid] = {
+                'product_name': (m['product_name'] ?? '').toString(),
+                'language': (m['language'] ?? '').toString(),
+                'game_label': (m['game_label'] ?? '').toString(),
+                'game_code': (m['game_code'] ?? '').toString(),
+              };
+            }
+          }
+        } catch (_) {
+          // no-op (view/cols might differ)
+        }
+      }
 
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(10),
-      child: SizedBox(
-        width: w,
-        height: h,
-        child: img,
-      ),
-    );
-  }
+      // Search + game filter (local)
+      final rawQ = _searchCtrl.text.trim().toLowerCase();
+      final tokens = rawQ.isEmpty
+          ? const <String>[]
+          : rawQ.split(RegExp(r'\s+')).where((t) => t.isNotEmpty).toList();
 
-  @override
-  Widget build(BuildContext context) {
-    if (!_roleLoaded) {
-      return const Center(child: CircularProgressIndicator());
-    }
+      bool matchesSearchForItem(Map<String, dynamic> r) {
+        if (tokens.isEmpty) return true;
+        final pid = r['product_id'] as int?;
+        final gid = r['game_id'] as int?;
+        final prod = pid != null ? (productById[pid] ?? const {}) : const {};
+        final game = gid != null ? (gameById[gid] ?? const {}) : const {};
+        final vinfo =
+            pid != null ? (vInfoByProductId[pid] ?? const {}) : const {};
 
-    return Column(
-      children: [
-        // === Barre filtres ===
-        Padding(
-          padding: const EdgeInsets.fromLTRB(12, 12, 12, 6),
-          child: Card(
-            elevation: 1,
-            shadowColor: kAccentA.withOpacity(.18),
-            shape:
-                RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-            child: Container(
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(16),
-                gradient: LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: [
-                    kAccentA.withOpacity(.06),
-                    kAccentB.withOpacity(.05)
-                  ],
-                ),
-                border:
-                    Border.all(color: kAccentA.withOpacity(.15), width: 0.8),
-              ),
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
-                child: Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  crossAxisAlignment: WrapCrossAlignment.center,
-                  children: [
-                    SegmentedButton<String>(
-                      segments: const [
-                        ButtonSegment(value: 'all', label: Text('Tous')),
-                        ButtonSegment(value: 'single', label: Text('Single')),
-                        ButtonSegment(value: 'sealed', label: Text('Sealed')),
-                      ],
-                      selected: {_typeFilter},
-                      onSelectionChanged: (s) {
-                        setState(() => _typeFilter = s.first);
-                        _fetch();
-                      },
-                    ),
-                    SegmentedButton<String>(
-                      segments: const [
-                        ButtonSegment(value: 'all', label: Text('All time')),
-                        ButtonSegment(
-                            value: 'month', label: Text('Last month')),
-                        ButtonSegment(value: 'week', label: Text('Last week')),
-                      ],
-                      selected: {_dateFilter},
-                      onSelectionChanged: (s) {
-                        setState(() => _dateFilter = s.first);
-                        _fetch();
-                      },
-                    ),
-                    FutureBuilder<List<String>>(
-                      future: _availableGames(),
-                      builder: (ctx, snap) {
-                        final games = (snap.data ?? const []);
-                        final safeValue =
-                            (_gameFilter != null && games.contains(_gameFilter))
-                                ? _gameFilter
-                                : null;
-                        return DropdownButton<String?>(
-                          value: safeValue,
-                          hint: const Text('Filter by game'),
-                          items: <DropdownMenuItem<String?>>[
-                            const DropdownMenuItem<String?>(
-                                value: null, child: Text('All games')),
-                            ...games.map(
-                              (g) => DropdownMenuItem<String?>(
-                                value: g,
-                                child: Text(g),
-                              ),
-                            ),
-                          ],
-                          onChanged: (v) {
-                            setState(() => _gameFilter = v);
-                            _fetch();
-                          },
-                        );
-                      },
-                    ),
-                    SizedBox(
-                      width: 260,
-                      child: TextField(
-                        controller: _searchCtrl,
-                        decoration: InputDecoration(
-                          prefixIcon: const Iconify(Mdi.magnify),
-                          hintText: 'Search (multi-words: name/sku/game...)',
-                          isDense: true,
-                          border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(10)),
-                          suffixIcon: _searchCtrl.text.isEmpty
-                              ? null
-                              : IconButton(
-                                  icon: const Iconify(Mdi.close),
-                                  onPressed: () {
-                                    _searchCtrl.clear();
-                                    _fetch();
-                                  },
-                                ),
-                        ),
-                        onSubmitted: (_) => _fetch(),
-                      ),
-                    ),
-                    FilledButton.icon(
-                      onPressed: _fetch,
-                      icon: const Iconify(Mdi.refresh),
-                      label: const Text('Refresh'),
-                    ),
-                  ],
-                ),
-              ),
-            ),
+        final fields = <String>[
+          (prod['name'] ?? vinfo['product_name'] ?? '').toString(),
+          (prod['sku'] ?? '').toString(),
+          (vinfo['language'] ?? r['language'] ?? '').toString(),
+          (game['label'] ?? vinfo['game_label'] ?? '').toString(),
+          (game['code'] ?? vinfo['game_code'] ?? '').toString(),
+          (r['status'] ?? '').toString(),
+        ].map((s) => s.toLowerCase()).toList();
+
+        return tokens.every((t) => fields.any((f) => f.contains(t)));
+      }
+
+      bool matchesGameForItem(Map<String, dynamic> r) {
+        if ((_gameFilter ?? '').isEmpty) return true;
+        final pid = r['product_id'] as int?;
+        final gid = r['game_id'] as int?;
+        final game = gid != null ? (gameById[gid] ?? const {}) : const {};
+        final vinfo =
+            pid != null ? (vInfoByProductId[pid] ?? const {}) : const {};
+        final label = (game['label'] ?? '').toString();
+        final fall = (vinfo['game_label'] ?? '').toString();
+        return label == _gameFilter || fall == _gameFilter;
+      }
+
+      items = items
+          .where((r) => matchesGameForItem(r) && matchesSearchForItem(r))
+          .toList();
+
+      if (items.isEmpty) {
+        setState(() {
+          _products = [];
+          _restockOOS = [];
+        });
+        return;
+      }
+
+      // ---------- Build group aggregates (for sheet + anchor) ----------
+      final Map<String, _GroupAgg> groupAgg = {};
+
+      for (final r in items) {
+        final orgId = _safeStr(r['org_id']);
+        final pid = r['product_id'] as int?;
+        if (orgId.isEmpty || pid == null) continue;
+
+        final status = _safeStr(r['status']);
+        final groupSig = _safeStr(r['group_sig']);
+
+        // group key: org + groupSig + status (si groupSig vide => fallback sur pid+status)
+        final key = groupSig.isNotEmpty
+            ? '$orgId|$groupSig|$status'
+            : '$orgId|pid=$pid|$status';
+
+        final g = groupAgg.putIfAbsent(
+          key,
+          () => _GroupAgg(
+            orgId: orgId,
+            productId: pid,
+            gameId: r['game_id'] as int?,
+            type: _safeStr(r['type']),
+            language: _safeStr(r['language']),
+            groupSig: groupSig,
+            status: status,
+            photoUrl: _safeStr(r['photo_url']),
           ),
-        ),
+        );
 
-        // === Liste Top Sold ===
-        Expanded(
-          child: _loading
-              ? const Center(child: CircularProgressIndicator())
-              : (_rows.isEmpty
-                  ? const Center(child: Text('No sales found.'))
-                  : ListView.builder(
-                      padding: const EdgeInsets.fromLTRB(12, 8, 12, 24),
-                      itemCount: _rows.length,
-                      itemBuilder: (ctx, i) {
-                        final Map<String, dynamic> r =
-                            Map<String, dynamic>.from(_rows[i]);
-                        final Map<String, dynamic> product =
-                            Map<String, dynamic>.from(r['product'] ?? const {});
-                        final Map<String, dynamic> game =
-                            Map<String, dynamic>.from(r['game'] ?? const {});
+        g.qty += 1;
+        g.margeSum += (_asNum(r['marge']) ?? 0).toDouble();
 
-                        final String title =
-                            _safeStr(r['product_name']).isNotEmpty
-                                ? _safeStr(r['product_name'])
-                                : (_safeStr(product['name']).isNotEmpty
-                                    ? _safeStr(product['name'])
-                                    : 'Produit #${_safeStr(r['product_id'])}');
+        final saleDate = _parseDate(r['sale_date']);
+        if (saleDate != null) {
+          g.lastSaleDate =
+              (g.lastSaleDate == null || saleDate.isAfter(g.lastSaleDate!))
+                  ? saleDate
+                  : g.lastSaleDate;
+        }
 
-                        final String gameLbl =
-                            _safeStr(r['game_label']).isNotEmpty
-                                ? _safeStr(r['game_label'])
-                                : _safeStr(game['label']);
-                        final String sku = _safeStr(product['sku']);
-                        final String subtitle = [gameLbl, sku]
-                            .where((e) => e.isNotEmpty)
-                            .join(' • ');
+        if (g.photoUrl.isEmpty && _safeStr(r['photo_url']).isNotEmpty) {
+          g.photoUrl = _safeStr(r['photo_url']);
+        }
 
-                        final String photoUrl = _safeStr(r['photo_url']);
-                        final String status = _safeStr(r['status']);
+        if (canSeeRevenue) {
+          final cur = _saleCurrency(r);
+          g.revenueByCur[cur] = (g.revenueByCur[cur] ?? 0) +
+              (_asNum(r['sale_price']) ?? 0).toDouble();
+        }
 
-                        final String currency = _safeStr(r['currency']).isEmpty
-                            ? 'USD'
-                            : _safeStr(r['currency']);
+        if (canSeeCosts) {
+          final cur =
+              _safeStr(r['currency']).isEmpty ? 'USD' : _safeStr(r['currency']);
+          final cost = ((_asNum(r['unit_cost']) ?? 0) +
+                  (_asNum(r['unit_fees']) ?? 0) +
+                  (_asNum(r['shipping_fees']) ?? 0) +
+                  (_asNum(r['commission_fees']) ?? 0) +
+                  (_asNum(r['grading_fees']) ?? 0))
+              .toDouble();
+          g.costByCur[cur] = (g.costByCur[cur] ?? 0) + cost;
+        }
+      }
 
-                        final String saleCur = _saleCurrency(r); // ✅
+      // Groups per product
+      final Map<String, List<TopSoldGroupVM>> groupsByProductKey = {};
+      for (final g in groupAgg.values) {
+        final avgMarge = g.qty == 0 ? 0 : (g.margeSum / g.qty);
+        final vm = TopSoldGroupVM(
+          orgId: g.orgId,
+          productId: g.productId,
+          gameId: g.gameId,
+          type: g.type,
+          language: g.language,
+          groupSig: g.groupSig,
+          status: g.status,
+          qty: g.qty,
+          avgMarge: avgMarge as double,
+          revenueByCurrency: Map<String, double>.from(g.revenueByCur),
+          costByCurrency: Map<String, double>.from(g.costByCur),
+          photoUrl: g.photoUrl,
+          lastSaleDate: g.lastSaleDate,
+        );
 
-                        final num? marge = _asNum(r['marge']);
-                        final num unitCost = _perm.canSeeUnitCosts
-                            ? ((_asNum(r['unit_cost']) ?? 0) +
-                                (_asNum(r['unit_fees']) ?? 0) +
-                                (_asNum(r['shipping_fees']) ?? 0) +
-                                (_asNum(r['commission_fees']) ?? 0) +
-                                (_asNum(r['grading_fees']) ?? 0))
-                            : 0;
-                        final num? salePrice = _perm.canSeeRevenue
-                            ? _asNum(r['sale_price'])
-                            : null;
+        final pk = '${g.orgId}|${g.productId}';
+        groupsByProductKey.putIfAbsent(pk, () => []).add(vm);
+      }
 
-                        return Card(
-                          elevation: 0.8,
-                          shadowColor: kAccentA.withOpacity(.12),
-                          shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(14)),
-                          child: InkWell(
-                            borderRadius: BorderRadius.circular(14),
-                            onTap: () => _openDetails(r),
-                            child: Padding(
-                              padding: const EdgeInsets.all(12),
-                              child: Row(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  _cardThumb(photoUrl),
-                                  const SizedBox(width: 12),
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        Text(
-                                          title,
-                                          maxLines: 2,
-                                          overflow: TextOverflow.ellipsis,
-                                          style: (Theme.of(context)
-                                                  .textTheme
-                                                  .titleMedium
-                                                  ?.copyWith(
-                                                      fontWeight:
-                                                          FontWeight.w800)) ??
-                                              const TextStyle(
-                                                  fontSize: 16,
-                                                  fontWeight: FontWeight.w800),
-                                        ),
-                                        if (subtitle.isNotEmpty) ...[
-                                          const SizedBox(height: 2),
-                                          Text(
-                                            subtitle,
-                                            maxLines: 1,
-                                            overflow: TextOverflow.ellipsis,
-                                            style: (Theme.of(context)
-                                                    .textTheme
-                                                    .bodySmall
-                                                    ?.copyWith(
-                                                        color: Theme.of(context)
-                                                            .colorScheme
-                                                            .onSurfaceVariant)) ??
-                                                const TextStyle(
-                                                    fontSize: 12,
-                                                    color: Colors.black54),
-                                          ),
-                                        ],
-                                        const SizedBox(height: 8),
-                                        Wrap(
-                                          spacing: 8,
-                                          runSpacing: 6,
-                                          crossAxisAlignment:
-                                              WrapCrossAlignment.center,
-                                          children: [
-                                            Chip(
-                                              label: Text(
-                                                status.isEmpty
-                                                    ? '—'
-                                                    : status.toUpperCase(),
-                                                style: const TextStyle(
-                                                    color: Colors.white),
-                                              ),
-                                              backgroundColor:
-                                                  _statusColor(status),
-                                            ),
-                                            MarginChip(marge: marge),
-                                            if (_perm.canSeeRevenue)
-                                              Chip(
-                                                avatar: const Icon(Icons.sell,
-                                                    size: 16,
-                                                    color: Colors.white),
-                                                label: Text(
-                                                  (salePrice == null)
-                                                      ? '—'
-                                                      : '${_money(salePrice)} $saleCur',
-                                                  style: const TextStyle(
-                                                      color: Colors.white),
-                                                ),
-                                                backgroundColor: kAccentB,
-                                              ),
-                                            if (_perm.canSeeUnitCosts)
-                                              Chip(
-                                                avatar: const Icon(
-                                                    Icons.savings,
-                                                    size: 16,
-                                                    color: Colors.white),
-                                                label: Text(
-                                                  '${_money(unitCost)} $currency',
-                                                  style: const TextStyle(
-                                                      color: Colors.white),
-                                                ),
-                                                backgroundColor: kAccentC,
-                                              ),
-                                          ],
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                        );
-                      },
-                    )),
-        ),
-      ],
-    );
-  }
+      for (final list in groupsByProductKey.values) {
+        list.sort((a, b) {
+          final da = a.lastSaleDate;
+          final db = b.lastSaleDate;
+          if (da == null && db == null) return 0;
+          if (da == null) return 1;
+          if (db == null) return -1;
+          return db.compareTo(da);
+        });
+      }
 
-  Color _statusColor(String status) {
-    switch (status) {
-      case 'sold':
-      case 'shipped':
-      case 'finalized':
-        return kAccentG;
-      default:
-        return kAccentA;
+      // ---------- Build product aggregates ----------
+      final Map<String, _ProdAgg> prodAgg = {};
+
+      for (final r in items) {
+        final orgId = _safeStr(r['org_id']);
+        final pid = r['product_id'] as int?;
+        if (orgId.isEmpty || pid == null) continue;
+
+        final key = '$orgId|$pid';
+        final a = prodAgg.putIfAbsent(
+          key,
+          () => _ProdAgg(
+            orgId: orgId,
+            productId: pid,
+            gameId: r['game_id'] as int?,
+            type: _safeStr(r['type']),
+            language: _safeStr(r['language']),
+            photoUrl: _safeStr(r['photo_url']),
+          ),
+        );
+
+        a.soldQty += 1;
+        a.margeSum += (_asNum(r['marge']) ?? 0).toDouble();
+
+        final saleDate = _parseDate(r['sale_date']);
+        if (saleDate != null) {
+          a.lastSaleDate =
+              (a.lastSaleDate == null || saleDate.isAfter(a.lastSaleDate!))
+                  ? saleDate
+                  : a.lastSaleDate;
+        }
+
+        if (a.photoUrl.isEmpty && _safeStr(r['photo_url']).isNotEmpty) {
+          a.photoUrl = _safeStr(r['photo_url']);
+        }
+
+        if (canSeeRevenue) {
+          final cur = _saleCurrency(r);
+          a.revenueByCur[cur] = (a.revenueByCur[cur] ?? 0) +
+              (_asNum(r['sale_price']) ?? 0).toDouble();
+        }
+
+        if (canSeeCosts) {
+          final cur =
+              _safeStr(r['currency']).isEmpty ? 'USD' : _safeStr(r['currency']);
+          final cost = ((_asNum(r['unit_cost']) ?? 0) +
+                  (_asNum(r['unit_fees']) ?? 0) +
+                  (_asNum(r['shipping_fees']) ?? 0) +
+                  (_asNum(r['commission_fees']) ?? 0) +
+                  (_asNum(r['grading_fees']) ?? 0))
+              .toDouble();
+          a.costByCur[cur] = (a.costByCur[cur] ?? 0) + cost;
+        }
+      }
+
+      // ---------- Resolve names and build product VMs ----------
+      final products = <TopSoldProductVM>[];
+
+      for (final a in prodAgg.values) {
+        final pid = a.productId;
+        final gid = a.gameId;
+
+        final prod = productById[pid] ?? const <String, dynamic>{};
+        final game = (gid != null)
+            ? (gameById[gid] ?? const <String, dynamic>{})
+            : const <String, dynamic>{};
+        final vinfo = vInfoByProductId[pid] ?? const <String, dynamic>{};
+
+        final productName = _safeStr(prod['name']).isNotEmpty
+            ? _safeStr(prod['name'])
+            : _safeStr(vinfo['product_name']);
+
+        final sku = _safeStr(prod['sku']);
+
+        final gameLabel = _safeStr(game['label']).isNotEmpty
+            ? _safeStr(game['label'])
+            : _safeStr(vinfo['game_label']);
+
+        final gameCode = _safeStr(game['code']).isNotEmpty
+            ? _safeStr(game['code'])
+            : _safeStr(vinfo['game_code']);
+
+        final avgMarge = a.soldQty == 0 ? 0 : (a.margeSum / a.soldQty);
+
+        final pk = '${a.orgId}|${a.productId}';
+        final groups = (groupsByProductKey[pk] ?? const <TopSoldGroupVM>[]);
+        final preview = groups.take(12).toList();
+        final anchor = groups.isNotEmpty ? groups.first : null;
+
+        products.add(
+          TopSoldProductVM(
+            orgId: a.orgId,
+            productId: a.productId,
+            gameId: a.gameId,
+            type: a.type,
+            language: a.language,
+            productName: productName.isNotEmpty ? productName : 'Produit #$pid',
+            sku: sku,
+            gameLabel: gameLabel,
+            gameCode: gameCode,
+            photoUrl: a.photoUrl,
+            soldQty: a.soldQty,
+            avgMarge: avgMarge as double,
+            revenueByCurrency: Map<String, double>.from(a.revenueByCur),
+            costByCurrency: Map<String, double>.from(a.costByCur),
+            lastSaleDate: a.lastSaleDate,
+            groupsPreview: preview,
+            anchorGroup: anchor,
+            inStockTopN: null, // calculé après pour top N
+          ),
+        );
+      }
+
+      // ---------- Sort products ----------
+      void sortProducts(List<TopSoldProductVM> list) {
+        list.sort((a, b) {
+          switch (_sort) {
+            case TopSoldSort.marge:
+              return (b.avgMarge).compareTo(a.avgMarge);
+            case TopSoldSort.qty:
+              return b.soldQty.compareTo(a.soldQty);
+            case TopSoldSort.revenue:
+              double sum(Map<String, double> m) =>
+                  m.values.fold(0.0, (p, e) => p + e);
+              return sum(b.revenueByCurrency)
+                  .compareTo(sum(a.revenueByCurrency));
+          }
+        });
+      }
+
+      sortProducts(products);
+
+      // ---------- Stock check only for Top N ----------
+      final top = products.take(_topN).toList();
+      final inStockByKey = <String, bool>{};
+
+      // On lance en parallèle (Top N max 50 => ok)
+      final futures = top.map((p) async {
+        final ok = await _hasAnyInStock(orgId: p.orgId, productId: p.productId);
+        inStockByKey['${p.orgId}|${p.productId}'] = ok;
+      }).toList();
+
+      await Future.wait(futures);
+
+      final rebuilt = <TopSoldProductVM>[];
+      for (final p in products) {
+        final key = '${p.orgId}|${p.productId}';
+        final bool? inStock =
+            inStockByKey.containsKey(key) ? inStockByKey[key] : null;
+
+        rebuilt.add(
+          TopSoldProductVM(
+            orgId: p.orgId,
+            productId: p.productId,
+            gameId: p.gameId,
+            type: p.type,
+            language: p.language,
+            productName: p.productName,
+            sku: p.sku,
+            gameLabel: p.gameLabel,
+            gameCode: p.gameCode,
+            photoUrl: p.photoUrl,
+            soldQty: p.soldQty,
+            avgMarge: p.avgMarge,
+            revenueByCurrency: p.revenueByCurrency,
+            costByCurrency: p.costByCurrency,
+            lastSaleDate: p.lastSaleDate,
+            groupsPreview: p.groupsPreview,
+            anchorGroup: p.anchorGroup,
+            inStockTopN: inStock,
+          ),
+        );
+      }
+
+      final oos =
+          rebuilt.take(_topN).where((p) => p.inStockTopN == false).toList();
+
+      setState(() {
+        _products = rebuilt;
+        _restockOOS = oos;
+      });
+    } catch (e) {
+      if (mounted) _snack('Erreur Top Sold : $e');
+    } finally {
+      if (mounted) setState(() => _loading = false);
     }
   }
 
+  // --------- Games ----------
   Future<List<String>> _availableGames() async {
     try {
       final List<dynamic> raw = await _sb
@@ -1052,4 +833,248 @@ class _TopSoldPageState extends State<TopSoldPage> {
       return const [];
     }
   }
+
+  // --------- UI ----------
+  void _openProductSheet(TopSoldProductVM p) {
+    showModalBottomSheet(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (ctx) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 18),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  p.productName,
+                  style: Theme.of(ctx).textTheme.titleLarge?.copyWith(
+                        fontWeight: FontWeight.w900,
+                      ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  [
+                    if (p.gameLabel.isNotEmpty) p.gameLabel,
+                    if (p.sku.isNotEmpty) p.sku,
+                    'Sold: ${p.soldQty}',
+                    if (p.isOutOfStockTopN) 'OUT OF STOCK',
+                  ].join(' • '),
+                  style: Theme.of(ctx).textTheme.bodySmall,
+                ),
+                const SizedBox(height: 12),
+                if (p.groupsPreview.isEmpty)
+                  const Text('Aucun groupe à afficher.')
+                else
+                  Flexible(
+                    child: ListView.builder(
+                      shrinkWrap: true,
+                      itemCount: p.groupsPreview.length,
+                      itemBuilder: (c, i) {
+                        final g = p.groupsPreview[i];
+                        return Card(
+                          elevation: 0,
+                          child: ListTile(
+                            leading: const Icon(Icons.receipt_long_outlined),
+                            title: Text(
+                              '${g.status.toUpperCase()} • Qty: ${g.qty}',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            subtitle: Text(
+                              g.groupSig.isNotEmpty
+                                  ? 'group_sig: ${g.groupSig}'
+                                  : '(group_sig vide)',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            trailing: const Icon(Icons.chevron_right),
+                            onTap: () {
+                              Navigator.of(ctx).pop();
+                              _openDetails(g.toOpenDetailsPayload());
+                            },
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                const SizedBox(height: 8),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: FilledButton.icon(
+                    onPressed: () {
+                      Navigator.of(ctx).pop();
+                      final anchor = p.anchorGroup;
+                      if (anchor != null) {
+                        _openDetails(anchor.toOpenDetailsPayload());
+                      } else {
+                        _snack('Aucun groupe anchor pour ouvrir Détails.');
+                      }
+                    },
+                    icon: const Icon(Icons.open_in_new),
+                    label: const Text('Ouvrir Détails (anchor)'),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _marginChip(num? marge) => MarginChip(marge: marge);
+
+  @override
+  Widget build(BuildContext context) {
+    if (!_roleLoaded) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    final canSeeRevenue = _perm.canSeeRevenue;
+    final canSeeCosts = _perm.canSeeUnitCosts;
+
+    return Column(
+      children: [
+        TopSoldFiltersBar(
+          typeFilter: _typeFilter,
+          dateFilter: _dateFilter,
+          gameFilter: _gameFilter,
+          sort: _sort,
+          topN: _topN,
+          searchCtrl: _searchCtrl,
+          gamesFuture: _availableGames(),
+          onTypeChanged: (v) {
+            setState(() => _typeFilter = v);
+            _fetch();
+          },
+          onDateChanged: (v) {
+            setState(() => _dateFilter = v);
+            _fetch();
+          },
+          onGameChanged: (v) {
+            setState(() => _gameFilter = v);
+            _fetch();
+          },
+          onSortChanged: (v) {
+            setState(() => _sort = v);
+            _fetch();
+          },
+          onTopNChanged: (v) {
+            setState(() => _topN = v);
+            _fetch();
+          },
+          onRefresh: _fetch,
+          onSearchSubmitted: (_) => _fetch(),
+          onClearSearch: () {
+            _searchCtrl.clear();
+            _fetch();
+          },
+          accentA: kAccentA,
+          accentB: kAccentB,
+        ),
+
+        // ✅ Bandeau “À racheter”
+        if (!_loading)
+          TopSoldRestockBanner(
+            topN: _topN,
+            oosItems: _restockOOS,
+            onTapItem: _openProductSheet,
+            accentA: kAccentA,
+            accentG: kAccentG,
+          ),
+
+        Expanded(
+          child: _loading
+              ? const Center(child: CircularProgressIndicator())
+              : (_products.isEmpty
+                  ? const Center(child: Text('No sales found.'))
+                  : RefreshIndicator(
+                      onRefresh: _fetch,
+                      child: ListView.builder(
+                        padding: const EdgeInsets.fromLTRB(12, 8, 12, 24),
+                        itemCount: _products.length,
+                        itemBuilder: (ctx, i) {
+                          final p = _products[i];
+
+                          return TopSoldProductTile(
+                            p: p,
+                            canSeeRevenue: canSeeRevenue,
+                            canSeeCosts: canSeeCosts,
+                            onTap: () => _openProductSheet(p),
+                            cardThumb: _cardThumb,
+                            money: _money,
+                            statusChipColor: _statusColor,
+                            marginChip: _marginChip,
+                            accentA: kAccentA,
+                            accentB: kAccentB,
+                            accentC: kAccentC,
+                          );
+                        },
+                      ),
+                    )),
+        ),
+      ],
+    );
+  }
+}
+
+// ----------------- Internal aggs -----------------
+class _GroupAgg {
+  _GroupAgg({
+    required this.orgId,
+    required this.productId,
+    required this.gameId,
+    required this.type,
+    required this.language,
+    required this.groupSig,
+    required this.status,
+    required this.photoUrl,
+  });
+
+  final String orgId;
+  final int productId;
+  final int? gameId;
+  final String type;
+  final String language;
+
+  final String groupSig;
+  final String status;
+
+  int qty = 0;
+  double margeSum = 0.0;
+
+  final Map<String, double> revenueByCur = {};
+  final Map<String, double> costByCur = {};
+
+  String photoUrl;
+  DateTime? lastSaleDate;
+}
+
+class _ProdAgg {
+  _ProdAgg({
+    required this.orgId,
+    required this.productId,
+    required this.gameId,
+    required this.type,
+    required this.language,
+    required this.photoUrl,
+  });
+
+  final String orgId;
+  final int productId;
+  final int? gameId;
+  final String type;
+  final String language;
+
+  int soldQty = 0;
+  double margeSum = 0.0;
+
+  final Map<String, double> revenueByCur = {};
+  final Map<String, double> costByCur = {};
+
+  String photoUrl;
+  DateTime? lastSaleDate;
 }

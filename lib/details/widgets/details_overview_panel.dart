@@ -1,4 +1,6 @@
 // lib/details/widgets/details_overview_panel.dart
+// ignore_for_file: deprecated_member_use
+
 import 'package:flutter/material.dart';
 
 const kAccentA = Color(0xFF6C5CE7); // violet
@@ -132,12 +134,10 @@ class _LinksCard extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 10),
-
               if (_hasInvoiceButtons) ...[
                 invoiceButtons,
                 const SizedBox(height: 10),
               ],
-
               qrRow,
               const SizedBox(height: 4),
               publicPreviewButton,

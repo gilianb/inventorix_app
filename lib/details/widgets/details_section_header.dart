@@ -1,4 +1,6 @@
 // lib/details/widgets/details_section_header.dart
+// ignore_for_file: deprecated_member_use
+
 import 'package:flutter/material.dart';
 
 /// A consistent, compact section header used across the Details page.

@@ -266,7 +266,7 @@ class _AttachExternalInvoiceDialogState
                   ),
                   const SizedBox(height: 10),
                   DropdownButtonFormField<String>(
-                    value: _currency,
+                    initialValue: _currency,
                     isExpanded: true,
                     decoration: const InputDecoration(
                       labelText: 'Currency',
@@ -317,7 +317,7 @@ class _AttachExternalInvoiceDialogState
                       SizedBox(
                         width: 120,
                         child: DropdownButtonFormField<String>(
-                          value: _currency,
+                          initialValue: _currency,
                           isExpanded: true,
                           decoration: const InputDecoration(
                             labelText: 'Currency',
@@ -361,7 +361,7 @@ class _AttachExternalInvoiceDialogState
                 ),
                 const SizedBox(height: 6),
                 DropdownButtonFormField<int?>(
-                  value: _selectedFolderId,
+                  initialValue: _selectedFolderId,
                   isExpanded: true, // ✅ helps avoid overflow with long names
                   decoration: const InputDecoration(
                     labelText: 'Select existing folder',
