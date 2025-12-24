@@ -1,4 +1,5 @@
 // lib/details/widgets/price_history_chart.dart
+// Collectr + PriceCharting on same graph (2 series).
 // DefaultTabController-based, no SingleTickerProviderStateMixin anywhere.
 
 // ignore_for_file: deprecated_member_use
@@ -31,8 +32,13 @@ class _PriceHistoryTabsState extends State<PriceHistoryTabs> {
   bool _loading = true;
   String? _error;
 
-  List<_Point> _raw = const [];
-  List<_Point> _psa = const [];
+  // Collectr
+  List<_Point> _rawCollectr = const [];
+  List<_Point> _psaCollectr = const [];
+
+  // PriceCharting
+  List<_Point> _rawPc = const [];
+  List<_Point> _psaPc = const [];
 
   @override
   void initState() {
@@ -54,8 +60,10 @@ class _PriceHistoryTabsState extends State<PriceHistoryTabs> {
     setState(() {
       _loading = true;
       _error = null;
-      _raw = const [];
-      _psa = const [];
+      _rawCollectr = const [];
+      _psaCollectr = const [];
+      _rawPc = const [];
+      _psaPc = const [];
     });
 
     if (pid == null) {
@@ -66,31 +74,49 @@ class _PriceHistoryTabsState extends State<PriceHistoryTabs> {
     try {
       final rows = await _sb
           .from('price_history')
-          .select('grade, price, fetched_at')
+          .select('source, grade, price, fetched_at')
           .eq('product_id', pid)
-          .eq('source', 'collectr')
-          .order('fetched_at', ascending: true);
+          // IMPORTANT: load both sources
+          .inFilter('source', ['collectr', 'pricecharting']).order('fetched_at',
+              ascending: true);
 
-      final raw = <_Point>[];
-      final psa = <_Point>[];
+      final rawCollectr = <_Point>[];
+      final psaCollectr = <_Point>[];
+      final rawPc = <_Point>[];
+      final psaPc = <_Point>[];
 
       for (final r in (rows as List)) {
         final m = r as Map<String, dynamic>;
+
+        final source = (m['source'] ?? '').toString().toLowerCase();
         final grade = (m['grade'] ?? '').toString().toLowerCase();
         final price = (m['price'] as num?)?.toDouble();
         final atIso = m['fetched_at']?.toString();
+
         if (price == null || price <= 0 || atIso == null) continue;
+
         final at = DateTime.tryParse(atIso);
         if (at == null) continue;
 
-        final p = _Point(at, price);
-        if (grade == 'raw') raw.add(p);
-        if (grade == 'psa') psa.add(p);
+        final p = _Point(at.toLocal(), price);
+
+        final isCollectr = source == 'collectr';
+        final isPc = source == 'pricecharting';
+
+        if (grade == 'raw') {
+          if (isCollectr) rawCollectr.add(p);
+          if (isPc) rawPc.add(p);
+        } else if (grade == 'psa') {
+          if (isCollectr) psaCollectr.add(p);
+          if (isPc) psaPc.add(p);
+        }
       }
 
       setState(() {
-        _raw = raw;
-        _psa = psa;
+        _rawCollectr = rawCollectr;
+        _psaCollectr = psaCollectr;
+        _rawPc = rawPc;
+        _psaPc = psaPc;
         _loading = false;
       });
     } catch (e) {
@@ -103,17 +129,23 @@ class _PriceHistoryTabsState extends State<PriceHistoryTabs> {
 
   @override
   Widget build(BuildContext context) {
-    // Determine tabs: always RAW; add PSA tab only when single.
     final tabConfs = <_TabConf>[
       _TabConf('Raw', _SeriesKind.raw),
       if (widget.isSingle) _TabConf('Graded (PSA 10)', _SeriesKind.psa),
     ];
-    final tabCount = max(1, tabConfs.length); // never 0
+    final tabCount = max(1, tabConfs.length);
 
-    // No tabs? (shouldn’t happen due to max(1, ...)), show empty card anyway.
     if (tabCount == 0) {
       return const _CardShell(child: _EmptyState(label: 'No data'));
     }
+
+    // Colors: keep your Collectr colors, add a distinct PriceCharting color.
+    // Raw: Collectr teal, PriceCharting orange
+    // PSA: Collectr indigo, PriceCharting purple-ish
+    const collectrRawColor = Color(0xFF0FA3B1);
+    const collectrPsaColor = Color(0xFF5B5BD6);
+    const pcRawColor = Color(0xFFF39C12);
+    const pcPsaColor = Color(0xFF9B59B6);
 
     return _CardShell(
       child: DefaultTabController(
@@ -141,7 +173,7 @@ class _PriceHistoryTabsState extends State<PriceHistoryTabs> {
                 const SizedBox(width: 10),
                 Expanded(
                   child: Text(
-                    'Price history (Collectr)',
+                    'Price history (Collectr + PriceCharting)',
                     style: Theme.of(context)
                         .textTheme
                         .titleMedium
@@ -178,21 +210,28 @@ class _PriceHistoryTabsState extends State<PriceHistoryTabs> {
             const SizedBox(height: 8),
 
             SizedBox(
-              height: 300, // plus grand pour respirer
+              height: 300,
               child: _loading
                   ? const Center(child: CircularProgressIndicator())
                   : (_error != null
                       ? _ErrorBox(message: _error!)
                       : TabBarView(
                           children: tabConfs.take(tabCount).map((t) {
-                            final series =
-                                (t.kind == _SeriesKind.raw) ? _raw : _psa;
-                            return _HistorySeries(
-                              points: series,
+                            final isRaw = t.kind == _SeriesKind.raw;
+
+                            final collectr =
+                                isRaw ? _rawCollectr : _psaCollectr;
+                            final pc = isRaw ? _rawPc : _psaPc;
+
+                            return _HistorySeriesDual(
+                              primaryName: 'Collectr',
+                              secondaryName: 'PriceCharting',
+                              primary: collectr,
+                              secondary: pc,
                               currency: widget.currency,
-                              color: (t.kind == _SeriesKind.raw)
-                                  ? const Color(0xFF0FA3B1)
-                                  : const Color(0xFF5B5BD6),
+                              primaryColor:
+                                  isRaw ? collectrRawColor : collectrPsaColor,
+                              secondaryColor: isRaw ? pcRawColor : pcPsaColor,
                             );
                           }).toList(),
                         )),
@@ -210,7 +249,6 @@ class _CardShell extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Wrap in Material Card (gives proper InkFeatures ancestor).
     return Card(
       elevation: 2,
       clipBehavior: Clip.antiAlias,
@@ -222,35 +260,55 @@ class _CardShell extends StatelessWidget {
   }
 }
 
-class _HistorySeries extends StatelessWidget {
-  const _HistorySeries({
-    required this.points,
+class _HistorySeriesDual extends StatelessWidget {
+  const _HistorySeriesDual({
+    required this.primaryName,
+    required this.secondaryName,
+    required this.primary,
+    required this.secondary,
     required this.currency,
-    required this.color,
+    required this.primaryColor,
+    required this.secondaryColor,
   });
 
-  final List<_Point> points;
+  final String primaryName;
+  final String secondaryName;
+
+  final List<_Point> primary;
+  final List<_Point> secondary;
+
   final String currency;
-  final Color color;
+
+  final Color primaryColor;
+  final Color secondaryColor;
 
   @override
   Widget build(BuildContext context) {
-    if (points.isEmpty) {
+    if (primary.isEmpty && secondary.isEmpty) {
       return const _EmptyState(label: 'No data to display');
     }
 
-    // Toujours trier pour être tranquille
-    final data = [...points]..sort((a, b) => a.at.compareTo(b.at));
+    // Sort both
+    final pData = [...primary]..sort((a, b) => a.at.compareTo(b.at));
+    final sData = [...secondary]..sort((a, b) => a.at.compareTo(b.at));
 
-    final minDate = data.first.at;
-    final maxDate = data.last.at;
+    // Axis bounds should consider BOTH series
+    final allDates = <DateTime>[
+      ...pData.map((e) => e.at),
+      ...sData.map((e) => e.at),
+    ]..sort();
 
-    final values = data.map((e) => e.value).toList();
-    final minValue = values.reduce(min);
-    final maxValue = values.reduce(max);
+    final minDate = allDates.first;
+    final maxDate = allDates.last;
+
+    final allValues = <double>[
+      ...pData.map((e) => e.value),
+      ...sData.map((e) => e.value),
+    ];
+    final minValue = allValues.reduce(min);
+    final maxValue = allValues.reduce(max);
     final range = (maxValue - minValue).abs();
 
-    // Padding vertical pour ne pas "couper" le graph
     final pad = range == 0 ? max(1.0, maxValue * 0.25) : range * 0.15;
     final double axisMin = max(0, minValue - pad).toDouble();
     final double axisMax = (maxValue + pad).toDouble();
@@ -260,22 +318,6 @@ class _HistorySeries extends StatelessWidget {
     final divider = theme.dividerColor.withOpacity(0.35);
     final locale = Localizations.localeOf(context).toString();
 
-    // Petit résumé en haut à droite : dernier prix + % vs premier
-    final lastPoint = data.last;
-    final firstPoint = data.first;
-    final lastValue = lastPoint.value;
-    final firstValue = firstPoint.value;
-    final diff = lastValue - firstValue;
-    final pct = firstValue == 0 ? null : (diff / firstValue) * 100;
-
-    final isUp = (pct ?? 0) > 0;
-    final isDown = (pct ?? 0) < 0;
-    final changeColor = isUp
-        ? Colors.green.shade600
-        : isDown
-            ? Colors.red.shade600
-            : theme.colorScheme.outline;
-
     final numberFormatCompact = NumberFormat.compact(locale: locale);
     final numberFormatFull = NumberFormat.currency(
       locale: locale,
@@ -283,21 +325,58 @@ class _HistorySeries extends StatelessWidget {
       decimalDigits: 2,
     );
 
-    String changeText() {
-      if (pct == null) return '';
-      final sign = isUp ? '+' : '';
-      return '$sign${pct.toStringAsFixed(1)} %';
+    // Legend (simple, matches your style)
+    Widget legendItem(Color c, String name, List<_Point> data) {
+      final last = data.isNotEmpty ? data.last.value : null;
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+        decoration: BoxDecoration(
+          color: theme.colorScheme.surfaceVariant.withOpacity(0.75),
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(
+            color: theme.colorScheme.outlineVariant.withOpacity(0.6),
+            width: 0.7,
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 10,
+              height: 10,
+              decoration: BoxDecoration(
+                color: c,
+                borderRadius: BorderRadius.circular(999),
+              ),
+            ),
+            const SizedBox(width: 6),
+            Text(
+              name,
+              style: theme.textTheme.bodySmall?.copyWith(
+                fontWeight: FontWeight.w800,
+                color: onSurface,
+              ),
+            ),
+            const SizedBox(width: 8),
+            Text(
+              last != null ? numberFormatFull.format(last) : '—',
+              style: theme.textTheme.bodySmall?.copyWith(
+                fontWeight: FontWeight.w700,
+                color: onSurface,
+              ),
+            ),
+          ],
+        ),
+      );
     }
 
-    // Trackball : permet de voir le point le plus proche de la souris,
-    // même si on n'est pas pile sur la courbe.
     final trackball = TrackballBehavior(
       enable: true,
       activationMode: ActivationMode.singleTap,
       lineType: TrackballLineType.vertical,
-      lineColor: color.withOpacity(0.8),
+      lineColor: theme.colorScheme.outline.withOpacity(0.5),
       lineWidth: 1.2,
-      tooltipDisplayMode: TrackballDisplayMode.nearestPoint,
+      tooltipDisplayMode: TrackballDisplayMode.groupAllPoints,
       tooltipSettings: InteractiveTooltip(
         enable: true,
         borderWidth: 0,
@@ -306,8 +385,9 @@ class _HistorySeries extends StatelessWidget {
           fontWeight: FontWeight.w700,
           color: theme.colorScheme.onSurface,
         ),
-        // Exemple : 14/11/2024\n125.00 €
-        format: 'point.x\npoint.y $currency',
+        // For groupAllPoints, Syncfusion repeats format per series point.
+        // We include series name and value; date is shown at top automatically.
+        format: 'series.name\npoint.y $currency',
       ),
       markerSettings: TrackballMarkerSettings(
         markerVisibility: TrackballVisibilityMode.visible,
@@ -315,7 +395,7 @@ class _HistorySeries extends StatelessWidget {
         width: 8,
         borderWidth: 2,
         borderColor: theme.colorScheme.surface,
-        color: color,
+        color: theme.colorScheme.primary,
       ),
     );
 
@@ -324,51 +404,15 @@ class _HistorySeries extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // Chip dernier prix + variation
           Align(
             alignment: Alignment.centerRight,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-              decoration: BoxDecoration(
-                color: theme.colorScheme.surfaceVariant.withOpacity(0.9),
-                borderRadius: BorderRadius.circular(999),
-                border: Border.all(
-                  color: theme.colorScheme.outlineVariant.withOpacity(0.6),
-                  width: 0.7,
-                ),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    numberFormatFull.format(lastValue),
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      fontWeight: FontWeight.w700,
-                      color: onSurface,
-                    ),
-                  ),
-                  if (pct != null) ...[
-                    const SizedBox(width: 6),
-                    Icon(
-                      isUp
-                          ? Icons.trending_up_rounded
-                          : isDown
-                              ? Icons.trending_down_rounded
-                              : Icons.horizontal_rule_rounded,
-                      size: 14,
-                      color: changeColor,
-                    ),
-                    const SizedBox(width: 2),
-                    Text(
-                      changeText(),
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        fontWeight: FontWeight.w600,
-                        color: changeColor,
-                      ),
-                    ),
-                  ],
-                ],
-              ),
+            child: Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                legendItem(primaryColor, primaryName, pData),
+                legendItem(secondaryColor, secondaryName, sData),
+              ],
             ),
           ),
           const SizedBox(height: 6),
@@ -411,25 +455,39 @@ class _HistorySeries extends StatelessWidget {
                 ),
                 numberFormat: numberFormatCompact,
               ),
-              series: <SplineAreaSeries<_Point, DateTime>>[
-                SplineAreaSeries<_Point, DateTime>(
-                  dataSource: data,
-                  xValueMapper: (_Point p, _) => p.at,
-                  yValueMapper: (_Point p, _) => p.value,
-                  borderColor: color,
-                  borderWidth: 2.4,
-                  splineType: SplineType.natural,
-                  gradient: LinearGradient(
-                    colors: [
-                      color.withOpacity(0.28),
-                      color.withOpacity(0.03),
-                    ],
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
+              series: <CartesianSeries<_Point, DateTime>>[
+                if (pData.isNotEmpty)
+                  SplineAreaSeries<_Point, DateTime>(
+                    name: primaryName,
+                    dataSource: pData,
+                    xValueMapper: (_Point p, _) => p.at,
+                    yValueMapper: (_Point p, _) => p.value,
+                    borderColor: primaryColor,
+                    borderWidth: 2.4,
+                    splineType: SplineType.natural,
+                    gradient: LinearGradient(
+                      colors: [
+                        primaryColor.withOpacity(0.28),
+                        primaryColor.withOpacity(0.03),
+                      ],
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                    ),
+                    animationDuration: 700,
+                    markerSettings: const MarkerSettings(isVisible: false),
                   ),
-                  animationDuration: 700,
-                  markerSettings: const MarkerSettings(isVisible: false),
-                ),
+                if (sData.isNotEmpty)
+                  SplineSeries<_Point, DateTime>(
+                    name: secondaryName,
+                    dataSource: sData,
+                    xValueMapper: (_Point p, _) => p.at,
+                    yValueMapper: (_Point p, _) => p.value,
+                    color: secondaryColor,
+                    width: 2.2,
+                    splineType: SplineType.natural,
+                    animationDuration: 700,
+                    markerSettings: const MarkerSettings(isVisible: false),
+                  ),
               ],
             ),
           ),

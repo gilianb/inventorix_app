@@ -52,6 +52,16 @@ class InvoiceService {
     return 'USD';
   }
 
+  /// Safe parse date from Supabase row field.
+  DateTime? _parseDate(dynamic raw) {
+    if (raw == null) return null;
+    try {
+      return DateTime.parse(raw.toString());
+    } catch (_) {
+      return null;
+    }
+  }
+
   // ---------------------------------------------------------------------------
   // Folders
   // ---------------------------------------------------------------------------
@@ -195,7 +205,6 @@ class InvoiceService {
         .insert(invoice.toInsertMap())
         .select()
         .single();
-
     return Invoice.fromMap(data as Map<String, dynamic>);
   }
 
@@ -206,7 +215,6 @@ class InvoiceService {
         .insert(line.toInsertMap())
         .select()
         .single();
-
     return InvoiceLine.fromMap(data);
   }
 
@@ -269,16 +277,21 @@ class InvoiceService {
     String? paymentTerms,
     String? notes,
   }) async {
-    // 1. Fetch the item and product name (+ sale_currency)
+    // 1. Fetch the item and product name (+ sale_currency + sale_date)
     final itemRow = await client
         .from('item')
         .select(
-            '*, sale_currency, currency, buyer_infos, sale_price, unit_cost, product:product(name)')
+          '*, sale_date, sale_currency, currency, buyer_infos, sale_price, unit_cost, product:product(name)',
+        )
         .eq('id', itemId)
         .single();
 
     final productName =
         (itemRow['product'] as Map)['name']?.toString() ?? 'Item';
+
+    // ✅ Issue date: sale_date si renseignée, sinon date du jour
+    final DateTime issueDate =
+        _parseDate(itemRow['sale_date']) ?? DateTime.now();
 
     // ✅ Invoice currency = sale_currency (fallback currency, fallback param)
     final String invoiceCurrency = _saleCurrencyOfRow(
@@ -308,10 +321,9 @@ class InvoiceService {
 
     // Totaux pour 1 item
     final double totalExcl = unitPriceExcl;
-    final double totalIncl =
-        (taxRate > 0 && salePriceRaw != null) // cas "TTC en entrée"
-            ? unitPriceIncl
-            : _round2(unitPriceExcl * (1 + taxRate / 100.0));
+    final double totalIncl = (taxRate > 0 && salePriceRaw != null)
+        ? unitPriceIncl
+        : _round2(unitPriceExcl * (1 + taxRate / 100.0));
     final double totalTax = _round2(totalIncl - totalExcl);
     // ---------- FIN LOGIQUE PRIX / TVA ----------
 
@@ -335,7 +347,7 @@ class InvoiceService {
       type: InvoiceType.sale,
       status: InvoiceStatus.sent,
       invoiceNumber: invoiceNumber,
-      issueDate: DateTime.now(),
+      issueDate: issueDate, // ✅
       dueDate: dueDate,
       currency: invoiceCurrency,
 
@@ -440,11 +452,11 @@ class InvoiceService {
       throw ArgumentError('itemIds cannot be empty for multi-item invoice.');
     }
 
-    // 1. Fetch all items + product names (+ sale_currency)
+    // 1. Fetch all items + product names (+ sale_currency + sale_date)
     final rows = await client
         .from('item')
         .select(
-          'id, sale_price, sale_currency, unit_cost, currency, buyer_infos, product:product(name)',
+          'id, sale_date, sale_price, sale_currency, unit_cost, currency, buyer_infos, product:product(name)',
         )
         .inFilter('id', itemIds);
 
@@ -457,6 +469,31 @@ class InvoiceService {
           (e) => Map<String, dynamic>.from(e as Map),
         )
         .toList();
+
+    // ✅ Issue date (multi): on exige la même sale_date si présente
+    final parsedSaleDates = items
+        .map((r) => _parseDate(r['sale_date']))
+        .whereType<DateTime>()
+        .toList();
+
+    final DateTime issueDate;
+    if (parsedSaleDates.isEmpty) {
+      issueDate = DateTime.now();
+    } else {
+      final first = parsedSaleDates.first;
+      final allSame = parsedSaleDates.every(
+        (d) =>
+            d.year == first.year &&
+            d.month == first.month &&
+            d.day == first.day,
+      );
+      if (!allSame) {
+        throw Exception(
+          'All selected items must share the same sale_date to generate one invoice.',
+        );
+      }
+      issueDate = first;
+    }
 
     String computeBuyerName(Map<String, dynamic> r) {
       final itemBuyerInfos = (r['buyer_infos'] as String?)?.trim();
@@ -494,7 +531,7 @@ class InvoiceService {
       type: InvoiceType.sale,
       status: InvoiceStatus.sent,
       invoiceNumber: invoiceNumber,
-      issueDate: DateTime.now(),
+      issueDate: issueDate, // ✅
       dueDate: dueDate,
       currency: firstSaleCurrency,
 
