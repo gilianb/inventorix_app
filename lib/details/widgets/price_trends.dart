@@ -1,8 +1,8 @@
 // lib/details/widgets/price_trends.dart
-// 2 lignes (Collectr / CardTrader) — pas de graph.
-// Collectr: passe par CollectrEdgeService.ensureFreshAndPersist (TTL 24h côté DB,
-// n'écrase jamais les prix avec null).
-// CardTrader: cache mémoire TTL 24h. Aucun appel à l’ouverture; uniquement au clic “Rafraîchir”.
+// ✅ UI: 3 compact tiles (Collectr / PriceCharting / CardTrader)
+// ✅ PriceCharting: reads latest from price_history (no network here)
+// Collectr: via CollectrEdgeService.ensureFreshAndPersist (TTL 24h DB, never overwrites with null)
+// CardTrader: memory cache TTL 24h. No call on open; only on "Refresh".
 
 // ignore_for_file: deprecated_member_use
 
@@ -10,9 +10,9 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../services/cardtrader_service.dart';
-import '../services/collectr_api.dart'; // <--- service sécurisé Collectr
+import '../services/collectr_api.dart';
 
-//icons
+// icons
 import 'package:iconify_flutter/iconify_flutter.dart';
 import 'package:iconify_flutter/icons/mdi.dart';
 
@@ -27,7 +27,7 @@ class PriceTrendsCard extends StatefulWidget {
     required this.productType, // 'single' | 'sealed'
     required this.currency, // 'USD'
     this.photoUrl,
-    this.tcgPlayerId, // utile si collectr_id absent (géré par l'EF via service)
+    this.tcgPlayerId, // (not used here, handled by CollectrEdgeService internally)
     this.blueprintId, // CardTrader
     this.reloadTick,
   });
@@ -52,6 +52,12 @@ class _PriceTrendsCardState extends State<PriceTrendsCard> {
   double? _collectrPsa10;
   DateTime? _lastUpdate;
 
+  // ---------------- PRICECHARTING (latest from price_history) ----------------
+  bool _loadingPc = false;
+  String? _errPc;
+  double? _pcRaw;
+  double? _pcPsa10;
+
   // ---------------- CARDTRADER (client) ----------------
   bool _loadingCtRaw = false;
   String? _errCtRaw;
@@ -70,9 +76,11 @@ class _PriceTrendsCardState extends State<PriceTrendsCard> {
   void initState() {
     super.initState();
     // Au premier affichage :
-    // - Collectr passe par le service (respect TTL DB, pas d’écrasement avec null)
+    // - Collectr passe par le service (TTL DB, pas d’écrasement avec null)
+    // - PriceCharting: lit la dernière valeur depuis price_history (DB)
     // - CardTrader ne fait PAS d’appel réseau (hydrate depuis cache mémoire uniquement)
     _loadCollectrWithTTL();
+    _loadPriceChartingLatest();
     _hydrateCtFromCache();
   }
 
@@ -85,15 +93,17 @@ class _PriceTrendsCardState extends State<PriceTrendsCard> {
         oldWidget.productType != widget.productType;
 
     if (changed) {
-      _loadCollectrWithTTL(); // TTL côté DB, no-spam
-      _hydrateCtFromCache(); // pas de réseau ici
+      _loadCollectrWithTTL();
+      _loadPriceChartingLatest();
+      _hydrateCtFromCache();
     }
   }
 
   Future<void> _onRefreshPressed() async {
     await Future.wait([
-      _loadCollectrWithTTL(), // respecte TTL DB Collectr
-      _fetchCardTraderRawWithTtl(),
+      _loadCollectrWithTTL(), // TTL DB Collectr
+      _loadPriceChartingLatest(), // latest DB
+      _fetchCardTraderRawWithTtl(), // network only on refresh
       if (widget.productType.toLowerCase() == 'single')
         _fetchCardTraderGradedWithTtl(),
     ]);
@@ -112,12 +122,9 @@ class _PriceTrendsCardState extends State<PriceTrendsCard> {
     final sb = Supabase.instance.client;
 
     try {
-      // 1) Service: vérifie TTL, résout ID si besoin, appelle EF si nécessaire,
-      //    et met à jour la DB sans jamais écraser avec null.
       final svc = CollectrEdgeService(sb);
       await svc.ensureFreshAndPersist(pid);
 
-      // 2) Re-lire la ligne produit actualisée pour alimenter l’UI
       final product = await sb
           .from('product')
           .select('type, price_raw, price_graded, last_update')
@@ -139,6 +146,55 @@ class _PriceTrendsCardState extends State<PriceTrendsCard> {
       setState(() => _errCollectr = e.toString());
     } finally {
       if (mounted) setState(() => _loadingCollectr = false);
+    }
+  }
+
+  // ---- PriceCharting: latest from price_history (DB) ----
+  Future<void> _loadPriceChartingLatest() async {
+    final pid = widget.productId;
+    if (pid == null) return;
+
+    setState(() {
+      _loadingPc = true;
+      _errPc = null;
+    });
+
+    try {
+      final sb = Supabase.instance.client;
+
+      final rawRow = await sb
+          .from('price_history')
+          .select('price')
+          .eq('product_id', pid)
+          .eq('source', 'pricecharting')
+          .eq('grade', 'raw')
+          .order('fetched_at', ascending: false)
+          .limit(1)
+          .maybeSingle();
+
+      Map<String, dynamic>? psaRow;
+      if (widget.productType.toLowerCase() == 'single') {
+        psaRow = await sb
+            .from('price_history')
+            .select('price')
+            .eq('product_id', pid)
+            .eq('source', 'pricecharting')
+            .eq('grade', 'psa')
+            .order('fetched_at', ascending: false)
+            .limit(1)
+            .maybeSingle();
+      }
+
+      setState(() {
+        _pcRaw = (rawRow?['price'] as num?)?.toDouble();
+        _pcPsa10 = (widget.productType.toLowerCase() == 'single')
+            ? (psaRow?['price'] as num?)?.toDouble()
+            : null;
+      });
+    } catch (e) {
+      setState(() => _errPc = e.toString());
+    } finally {
+      if (mounted) setState(() => _loadingPc = false);
     }
   }
 
@@ -176,7 +232,7 @@ class _PriceTrendsCardState extends State<PriceTrendsCard> {
       });
       return;
     }
-    // TTL check
+
     final now = DateTime.now();
     final cached = _ctRawCache[bp];
     if (cached != null && now.difference(cached.at) < _ctTtl) {
@@ -217,6 +273,7 @@ class _PriceTrendsCardState extends State<PriceTrendsCard> {
       });
       return;
     }
+
     final now = DateTime.now();
     final cached = _ctGradedCache[bp];
     if (cached != null && now.difference(cached.at) < _ctTtl) {
@@ -250,18 +307,15 @@ class _PriceTrendsCardState extends State<PriceTrendsCard> {
   @override
   Widget build(BuildContext context) {
     final isSingle = widget.productType.toLowerCase() == 'single';
-    final refreshing = _loadingCollectr || _loadingCtRaw || _loadingCtGraded;
-
-    // Couleurs d’accent (accessibles en dark & light)
-    final collectrAccent = const Color(0xFF0FA3B1); // teal-600
-    final ctAccent = const Color(0xFF5B5BD6); // indigo-500
+    final refreshing =
+        _loadingCollectr || _loadingPc || _loadingCtRaw || _loadingCtGraded;
 
     return Card(
       elevation: 2,
       clipBehavior: Clip.antiAlias,
       child: Column(
         children: [
-          // Entête
+          // Header
           ListTile(
             leading: (widget.photoUrl?.isNotEmpty ?? false)
                 ? ClipRRect(
@@ -287,48 +341,84 @@ class _PriceTrendsCardState extends State<PriceTrendsCard> {
               ),
             ),
             trailing: IconButton.filledTonal(
-              tooltip: 'Refresh (Collectr DB TTL + CardTrader memory TTL)',
+              tooltip:
+                  'Refresh (Collectr DB TTL + PriceCharting DB + CardTrader TTL)',
               onPressed: refreshing ? null : _onRefreshPressed,
               icon: refreshing
                   ? const SizedBox(
                       width: 18,
                       height: 18,
-                      child: CircularProgressIndicator(strokeWidth: 2))
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
                   : const Iconify(Mdi.refresh),
             ),
           ),
           const Divider(height: 1),
 
-          // LIGNE COLLECTR
-          _SourceRow(
-            icon: Icons.stacked_line_chart,
-            title: 'Collectr (reliable)',
-            caption: 'TTL 24h — DB source (no overwriting if price missing)',
-            loading: _loadingCollectr,
-            error: _errCollectr,
-            accent: collectrAccent,
-            chips: [
-              _Metric(label: 'Raw', valueUSD: _collectrRaw),
-              if (isSingle) _Metric(label: 'PSA 10', valueUSD: _collectrPsa10),
-            ],
-          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
+            child: LayoutBuilder(
+              builder: (context, c) {
+                final isNarrow = c.maxWidth < 420;
 
-          // LIGNE CARDTRADER
-          _SourceRow(
-            icon: Icons.store_rounded,
-            title: 'CardTrader (indicative)',
-            caption: 'Marketplace medians — TTL 24h (memory) • Manual refresh',
-            loading: _loadingCtRaw || (isSingle && _loadingCtGraded),
-            error: _errCtRaw ?? (isSingle ? _errCtGraded : null),
-            accent: ctAccent,
-            chips: [
-              _Metric(label: 'Raw (med.)', valueUSD: _ctMedianRaw),
-              if (isSingle)
-                _Metric(label: 'Graded (med.)', valueUSD: _ctMedianGraded),
-            ],
-          ),
+                final tiles = <Widget>[
+                  _PriceMiniTile(
+                    title: 'Collectr',
+                    loading: _loadingCollectr,
+                    error: _errCollectr,
+                    raw: _collectrRaw,
+                    psa10: isSingle ? _collectrPsa10 : null,
+                    accent: const Color(0xFF0FA3B1),
+                    currency: widget.currency,
+                  ),
+                  _PriceMiniTile(
+                    title: 'PriceCharting',
+                    loading: _loadingPc,
+                    error: _errPc,
+                    raw: _pcRaw,
+                    psa10: isSingle ? _pcPsa10 : null,
+                    accent: const Color(0xFFF39C12),
+                    currency: widget.currency,
+                  ),
+                  _PriceMiniTile(
+                    title: 'CardTrader',
+                    loading: _loadingCtRaw || (isSingle && _loadingCtGraded),
+                    error: _errCtRaw ?? (isSingle ? _errCtGraded : null),
+                    raw: _ctMedianRaw,
+                    psa10: isSingle ? _ctMedianGraded : null,
+                    accent: const Color(0xFF5B5BD6),
+                    currency: widget.currency,
+                  ),
+                ];
 
-          const SizedBox(height: 8),
+                if (isNarrow) {
+                  return Column(
+                    children: [
+                      Row(
+                        children: [
+                          Expanded(child: tiles[0]),
+                          const SizedBox(width: 10),
+                          Expanded(child: tiles[1]),
+                        ],
+                      ),
+                      const SizedBox(height: 10),
+                      Row(children: [Expanded(child: tiles[2])]),
+                    ],
+                  );
+                }
+
+                return Row(
+                  children: [
+                    Expanded(child: tiles[0]),
+                    const SizedBox(width: 10),
+                    Expanded(child: tiles[1]),
+                    const SizedBox(width: 10),
+                    Expanded(child: tiles[2]),
+                  ],
+                );
+              },
+            ),
+          ),
         ],
       ),
     );
@@ -347,7 +437,6 @@ class _CtCacheEntry {
   _CtCacheEntry({required this.value, required this.at});
 }
 
-/// Petite pastille d’icône ronde pour l’entête
 class _CircleIcon extends StatelessWidget {
   const _CircleIcon({required this.icon});
   final IconData icon;
@@ -369,121 +458,26 @@ class _CircleIcon extends StatelessWidget {
   }
 }
 
-class _Metric {
-  final String label;
-  final double? valueUSD;
-  const _Metric({required this.label, required this.valueUSD});
-}
-
-class _SourceRow extends StatelessWidget {
-  const _SourceRow({
-    required this.icon,
+class _PriceMiniTile extends StatelessWidget {
+  const _PriceMiniTile({
     required this.title,
-    required this.caption,
     required this.loading,
     required this.error,
-    required this.chips,
+    required this.raw,
+    required this.psa10,
     required this.accent,
+    required this.currency,
   });
 
-  final IconData icon;
   final String title;
-  final String caption;
   final bool loading;
   final String? error;
-  final List<_Metric> chips;
+  final double? raw;
+  final double? psa10;
   final Color accent;
+  final String currency;
 
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final hasError = (error != null && error!.isNotEmpty);
-
-    final bg = accent.withOpacity(0.08);
-    final border = accent.withOpacity(0.22);
-    final iconBg = accent.withOpacity(0.15);
-    final iconFg = accent;
-
-    return Container(
-      margin: const EdgeInsets.fromLTRB(12, 10, 12, 6),
-      padding: const EdgeInsets.fromLTRB(12, 12, 12, 10),
-      decoration: BoxDecoration(
-        color: bg,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: border),
-      ),
-      child: Column(
-        children: [
-          Row(
-            children: [
-              Container(
-                width: 28,
-                height: 28,
-                decoration: BoxDecoration(
-                  color: iconBg,
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Icon(icon, size: 18, color: iconFg),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(title,
-                        style: theme.textTheme.titleMedium?.copyWith(
-                          fontWeight: FontWeight.w800,
-                          color: theme.colorScheme.onSurface,
-                        )),
-                    const SizedBox(height: 2),
-                    Text(
-                      caption,
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        color: theme.colorScheme.onSurface.withOpacity(0.65),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              if (loading)
-                const SizedBox(
-                  width: 18,
-                  height: 18,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          Wrap(
-            spacing: 10,
-            runSpacing: 10,
-            children: chips
-                .map((m) => _MetricChip(
-                      label: m.label,
-                      valueUSD: m.valueUSD,
-                      accent: accent,
-                      error: hasError ? error : null,
-                    ))
-                .toList(),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _MetricChip extends StatelessWidget {
-  const _MetricChip({
-    required this.label,
-    required this.valueUSD,
-    required this.accent,
-    this.error,
-  });
-
-  final String label;
-  final double? valueUSD;
-  final String? error;
-  final Color accent;
+  String _fmt(double? v) => (v == null) ? '—' : v.toStringAsFixed(2);
 
   @override
   Widget build(BuildContext context) {
@@ -491,72 +485,89 @@ class _MetricChip extends StatelessWidget {
     final hasError = error != null && error!.isNotEmpty;
 
     final bg = hasError
-        ? theme.colorScheme.errorContainer.withOpacity(0.30)
-        : Colors.white.withOpacity(
-            Theme.of(context).brightness == Brightness.dark ? 0.06 : 0.9);
+        ? theme.colorScheme.errorContainer.withOpacity(0.25)
+        : accent.withOpacity(0.08);
+
     final border = hasError
         ? theme.colorScheme.error.withOpacity(0.55)
-        : accent.withOpacity(0.35);
-    final labelColor = hasError
-        ? theme.colorScheme.error
-        : theme.colorScheme.onSurface.withOpacity(0.85);
+        : accent.withOpacity(0.25);
+
+    final titleColor = theme.colorScheme.onSurface.withOpacity(0.85);
     final valueColor = hasError ? theme.colorScheme.error : accent;
 
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: BoxDecoration(
-        color: bg,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: border),
-        boxShadow: [
-          BoxShadow(
-            color: accent.withOpacity(0.10),
-            blurRadius: 12,
-            offset: const Offset(0, 6),
+    Widget valueLine(String label, double? v, {bool big = false}) {
+      return Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(
+            label,
+            style: theme.textTheme.bodySmall?.copyWith(
+              fontWeight: FontWeight.w700,
+              color: titleColor.withOpacity(0.75),
+            ),
+          ),
+          Text(
+            '${_fmt(v)} $currency',
+            style: theme.textTheme.bodySmall?.copyWith(
+              fontWeight: big ? FontWeight.w900 : FontWeight.w800,
+              fontSize: big ? 14 : 12,
+              color: valueColor,
+            ),
           ),
         ],
+      );
+    }
+
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: border),
       ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(label,
-              style: TextStyle(
-                fontWeight: FontWeight.w700,
-                fontSize: 12,
-                color: labelColor,
-                letterSpacing: 0.2,
-              )),
-          const SizedBox(width: 10),
-          if (hasError)
-            Tooltip(
-              message: error!,
-              child: Icon(Icons.error_outline, size: 18, color: valueColor),
-            )
-          else
-            RichText(
-              text: TextSpan(
-                children: [
-                  TextSpan(
-                    text: valueUSD != null ? valueUSD!.toStringAsFixed(2) : '—',
-                    style: TextStyle(
-                      fontWeight: FontWeight.w900,
-                      fontSize: 18, // valeur bien visible
-                      color: valueColor,
-                      fontFeatures: const [FontFeature.tabularFigures()],
-                    ),
-                  ),
-                  TextSpan(
-                    text: '  USD',
-                    style: TextStyle(
-                      fontWeight: FontWeight.w700,
-                      fontSize: 12,
-                      color: labelColor,
-                      letterSpacing: 0.4,
-                    ),
-                  ),
-                ],
+          Row(
+            children: [
+              Container(
+                width: 10,
+                height: 10,
+                decoration: BoxDecoration(
+                  color: accent,
+                  borderRadius: BorderRadius.circular(999),
+                ),
               ),
-            ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  title,
+                  style: theme.textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.w900,
+                    color: titleColor,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              if (loading)
+                const SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+              if (!loading && hasError)
+                Tooltip(
+                  message: error!,
+                  child: Icon(Icons.error_outline, size: 18, color: valueColor),
+                ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          valueLine('Raw', raw, big: true),
+          if (psa10 != null) ...[
+            const SizedBox(height: 6),
+            valueLine('PSA 10', psa10),
+          ],
         ],
       ),
     );

@@ -1,5 +1,8 @@
 // lib/details/widgets/price_history_chart.dart
 // Collectr + PriceCharting on same graph (2 series).
+// ✅ FIX: forward-fill per series until today (no holes when one source misses a day).
+// ✅ Design: PriceCharting curve now uses SAME style as Collectr (SplineArea + gradient),
+//           only color differs.
 // DefaultTabController-based, no SingleTickerProviderStateMixin anywhere.
 
 // ignore_for_file: deprecated_member_use
@@ -76,7 +79,6 @@ class _PriceHistoryTabsState extends State<PriceHistoryTabs> {
           .from('price_history')
           .select('source, grade, price, fetched_at')
           .eq('product_id', pid)
-          // IMPORTANT: load both sources
           .inFilter('source', ['collectr', 'pricecharting']).order('fetched_at',
               ascending: true);
 
@@ -139,7 +141,6 @@ class _PriceHistoryTabsState extends State<PriceHistoryTabs> {
       return const _CardShell(child: _EmptyState(label: 'No data'));
     }
 
-    // Colors: keep your Collectr colors, add a distinct PriceCharting color.
     // Raw: Collectr teal, PriceCharting orange
     // PSA: Collectr indigo, PriceCharting purple-ish
     const collectrRawColor = Color(0xFF0FA3B1);
@@ -194,7 +195,6 @@ class _PriceHistoryTabsState extends State<PriceHistoryTabs> {
               ],
             ),
             const SizedBox(height: 8),
-
             Align(
               alignment: Alignment.centerLeft,
               child: TabBar(
@@ -208,7 +208,6 @@ class _PriceHistoryTabsState extends State<PriceHistoryTabs> {
               ),
             ),
             const SizedBox(height: 8),
-
             SizedBox(
               height: 300,
               child: _loading
@@ -282,31 +281,82 @@ class _HistorySeriesDual extends StatelessWidget {
   final Color primaryColor;
   final Color secondaryColor;
 
+  DateTime _dateOnly(DateTime d) => DateTime(d.year, d.month, d.day);
+
+  List<_Point> _forwardFillOnTimeline({
+    required List<_Point> src,
+    required List<DateTime> timeline,
+  }) {
+    if (src.isEmpty) return const [];
+
+    final byDay = <DateTime, double>{};
+    for (final p in src) {
+      byDay[_dateOnly(p.at)] = p.value;
+    }
+
+    final firstDay = byDay.keys.reduce((a, b) => a.isBefore(b) ? a : b);
+
+    double? last;
+    bool started = false;
+    final out = <_Point>[];
+
+    for (final day in timeline) {
+      if (day.isBefore(firstDay)) continue;
+
+      final v = byDay[day];
+      if (v != null) {
+        last = v;
+        started = true;
+      }
+      if (started && last != null) {
+        out.add(_Point(day, last));
+      }
+    }
+
+    return out;
+  }
+
   @override
   Widget build(BuildContext context) {
     if (primary.isEmpty && secondary.isEmpty) {
       return const _EmptyState(label: 'No data to display');
     }
 
-    // Sort both
     final pData = [...primary]..sort((a, b) => a.at.compareTo(b.at));
     final sData = [...secondary]..sort((a, b) => a.at.compareTo(b.at));
 
-    // Axis bounds should consider BOTH series
+    final datesSet = <DateTime>{};
+    for (final p in pData) {
+      datesSet.add(_dateOnly(p.at));
+    }
+    for (final p in sData) {
+      datesSet.add(_dateOnly(p.at));
+    }
+    datesSet.add(_dateOnly(DateTime.now()));
+
+    final timeline = datesSet.toList()..sort((a, b) => a.compareTo(b));
+
+    // ✅ forward-fill each series on the shared timeline (no holes)
+    final pFilled = _forwardFillOnTimeline(src: pData, timeline: timeline);
+    final sFilled = _forwardFillOnTimeline(src: sData, timeline: timeline);
+
     final allDates = <DateTime>[
-      ...pData.map((e) => e.at),
-      ...sData.map((e) => e.at),
+      ...pFilled.map((e) => e.at),
+      ...sFilled.map((e) => e.at),
     ]..sort();
 
-    final minDate = allDates.first;
-    final maxDate = allDates.last;
+    final minDate =
+        allDates.isNotEmpty ? allDates.first : _dateOnly(DateTime.now());
+    final maxDate =
+        allDates.isNotEmpty ? allDates.last : _dateOnly(DateTime.now());
 
     final allValues = <double>[
-      ...pData.map((e) => e.value),
-      ...sData.map((e) => e.value),
+      ...pFilled.map((e) => e.value),
+      ...sFilled.map((e) => e.value),
     ];
-    final minValue = allValues.reduce(min);
-    final maxValue = allValues.reduce(max);
+
+    final minValue = allValues.isNotEmpty ? allValues.reduce(min) : 0.0;
+    final maxValue = allValues.isNotEmpty ? allValues.reduce(max) : 1.0;
     final range = (maxValue - minValue).abs();
 
     final pad = range == 0 ? max(1.0, maxValue * 0.25) : range * 0.15;
@@ -325,7 +375,6 @@ class _HistorySeriesDual extends StatelessWidget {
       decimalDigits: 2,
     );
 
-    // Legend (simple, matches your style)
     Widget legendItem(Color c, String name, List<_Point> data) {
       final last = data.isNotEmpty ? data.last.value : null;
       return Container(
@@ -385,8 +434,6 @@ class _HistorySeriesDual extends StatelessWidget {
           fontWeight: FontWeight.w700,
           color: theme.colorScheme.onSurface,
         ),
-        // For groupAllPoints, Syncfusion repeats format per series point.
-        // We include series name and value; date is shown at top automatically.
         format: 'series.name\npoint.y $currency',
       ),
       markerSettings: TrackballMarkerSettings(
@@ -410,8 +457,8 @@ class _HistorySeriesDual extends StatelessWidget {
               spacing: 8,
               runSpacing: 8,
               children: [
-                legendItem(primaryColor, primaryName, pData),
-                legendItem(secondaryColor, secondaryName, sData),
+                legendItem(primaryColor, primaryName, pFilled),
+                legendItem(secondaryColor, secondaryName, sFilled),
               ],
             ),
           ),
@@ -456,10 +503,11 @@ class _HistorySeriesDual extends StatelessWidget {
                 numberFormat: numberFormatCompact,
               ),
               series: <CartesianSeries<_Point, DateTime>>[
-                if (pData.isNotEmpty)
+                // Collectr (area)
+                if (pFilled.isNotEmpty)
                   SplineAreaSeries<_Point, DateTime>(
                     name: primaryName,
-                    dataSource: pData,
+                    dataSource: pFilled,
                     xValueMapper: (_Point p, _) => p.at,
                     yValueMapper: (_Point p, _) => p.value,
                     borderColor: primaryColor,
@@ -476,15 +524,25 @@ class _HistorySeriesDual extends StatelessWidget {
                     animationDuration: 700,
                     markerSettings: const MarkerSettings(isVisible: false),
                   ),
-                if (sData.isNotEmpty)
-                  SplineSeries<_Point, DateTime>(
+
+                // ✅ PriceCharting (same design as Collectr: area + gradient, different color)
+                if (sFilled.isNotEmpty)
+                  SplineAreaSeries<_Point, DateTime>(
                     name: secondaryName,
-                    dataSource: sData,
+                    dataSource: sFilled,
                     xValueMapper: (_Point p, _) => p.at,
                     yValueMapper: (_Point p, _) => p.value,
-                    color: secondaryColor,
-                    width: 2.2,
+                    borderColor: secondaryColor,
+                    borderWidth: 2.4,
                     splineType: SplineType.natural,
+                    gradient: LinearGradient(
+                      colors: [
+                        secondaryColor.withOpacity(0.22),
+                        secondaryColor.withOpacity(0.03),
+                      ],
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                    ),
                     animationDuration: 700,
                     markerSettings: const MarkerSettings(isVisible: false),
                   ),
