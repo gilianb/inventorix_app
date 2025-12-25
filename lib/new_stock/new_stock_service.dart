@@ -7,7 +7,12 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 class NewStockService {
   // Charge la table games
   static Future<List<Map<String, dynamic>>> loadGames(SupabaseClient sb) async {
-    final raw = await sb.from('games').select('id, code, label').order('label');
+    final raw = await sb
+        .from('games')
+        .select('id, code, label, sort_order')
+        .order('sort_order', ascending: true, nullsFirst: false)
+        .order('label', ascending: true);
+
     return raw
         .map<Map<String, dynamic>>((e) => Map<String, dynamic>.from(e as Map))
         .toList();

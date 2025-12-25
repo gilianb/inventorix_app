@@ -285,8 +285,11 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
 
   Future<void> _loadGames() async {
     try {
-      final raw =
-          await _sb.from('games').select('id, code, label').order('label');
+      final raw = await _sb
+          .from('games')
+          .select('id, code, label, sort_order')
+          .order('sort_order', ascending: true, nullsFirst: false)
+          .order('label', ascending: true);
       setState(() {
         final list = raw
             .map<Map<String, dynamic>>(
