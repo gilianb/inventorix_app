@@ -314,27 +314,25 @@ class _ProductSummaryCard extends StatelessWidget {
                     : null,
               ),
               padding: const EdgeInsets.all(12),
-
-              // ✅ Permet la sélection/copie des textes dans la card (desktop/web)
-              child: SelectionArea(
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    _Thumb(
-                      url: summary.photoUrl,
-                      badgeText: 'Qty ${summary.totalQty}',
-                      expanded: expanded,
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          // Title row
-                          Row(
-                            children: [
-                              Expanded(
-                                // ✅ Tooltip au survol si le nom est coupé (ellipsis)
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _Thumb(
+                    url: summary.photoUrl,
+                    badgeText: 'Qty ${summary.totalQty}',
+                    expanded: expanded,
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        // Title row
+                        Row(
+                          children: [
+                            Expanded(
+                              // ✅ Sélectionnable + tooltip si overflow
+                              child: SelectionArea(
                                 child: _OverflowTooltipText(
                                   text: summary.productName,
                                   maxLines: 1,
@@ -344,8 +342,14 @@ class _ProductSummaryCard extends StatelessWidget {
                                       ?.copyWith(fontWeight: FontWeight.w800),
                                 ),
                               ),
-                              const SizedBox(width: 8),
-                              AnimatedRotation(
+                            ),
+                            const SizedBox(width: 8),
+
+                            // ✅ Toujours cliquable pour expand/collapse
+                            IconButton(
+                              tooltip: expanded ? 'Collapse' : 'Expand',
+                              onPressed: onToggle,
+                              icon: AnimatedRotation(
                                 turns: expanded ? 0.5 : 0.0,
                                 duration: const Duration(milliseconds: 180),
                                 child: Icon(
@@ -353,11 +357,14 @@ class _ProductSummaryCard extends StatelessWidget {
                                   color: cs.onSurfaceVariant,
                                 ),
                               ),
-                            ],
-                          ),
+                            ),
+                          ],
+                        ),
 
-                          const SizedBox(height: 2),
-                          _OverflowTooltipText(
+                        const SizedBox(height: 2),
+                        // ✅ Sélectionnable + tooltip si overflow
+                        SelectionArea(
+                          child: _OverflowTooltipText(
                             text: subtitle.isEmpty ? '—' : subtitle,
                             maxLines: 1,
                             style: Theme.of(context)
@@ -365,35 +372,35 @@ class _ProductSummaryCard extends StatelessWidget {
                                 .bodySmall
                                 ?.copyWith(color: cs.onSurfaceVariant),
                           ),
+                        ),
 
-                          const SizedBox(height: 10),
+                        const SizedBox(height: 10),
 
-                          // Status chips + metrics
-                          Wrap(
-                            spacing: 6,
-                            runSpacing: 6,
-                            children: [
-                              ...chips,
-                              if (showUnitCosts && summary.avgBuyUnit != null)
-                                _MetricChip(
-                                  icon: Icons.shopping_cart_outlined,
-                                  label:
-                                      'Avg buy ${money(summary.avgBuyUnit)} ${summary.currencyDisplay}',
-                                ),
-                              if (showEstimated &&
-                                  summary.avgEstimatedUnit != null)
-                                _MetricChip(
-                                  icon: Icons.insights_outlined,
-                                  label:
-                                      'Avg est ${money(summary.avgEstimatedUnit)} ${summary.currencyDisplay}',
-                                ),
-                            ],
-                          ),
-                        ],
-                      ),
+                        // Status chips + metrics
+                        Wrap(
+                          spacing: 6,
+                          runSpacing: 6,
+                          children: [
+                            ...chips,
+                            if (showUnitCosts && summary.avgBuyUnit != null)
+                              _MetricChip(
+                                icon: Icons.shopping_cart_outlined,
+                                label:
+                                    'Avg buy ${money(summary.avgBuyUnit)} ${summary.currencyDisplay}',
+                              ),
+                            if (showEstimated &&
+                                summary.avgEstimatedUnit != null)
+                              _MetricChip(
+                                icon: Icons.insights_outlined,
+                                label:
+                                    'Avg est ${money(summary.avgEstimatedUnit)} ${summary.currencyDisplay}',
+                              ),
+                          ],
+                        ),
+                      ],
                     ),
-                  ],
-                ),
+                  ),
+                ],
               ),
             ),
           ),
