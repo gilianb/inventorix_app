@@ -16,7 +16,7 @@ subprojects { subproject ->
 }
 
 subprojects {
-    pr2oject.evaluationDependsOn(":app")
+    project.evaluationDependsOn(":app")
 }
 
 tasks.register("clean", Delete) {

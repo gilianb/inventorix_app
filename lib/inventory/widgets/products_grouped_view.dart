@@ -314,83 +314,86 @@ class _ProductSummaryCard extends StatelessWidget {
                     : null,
               ),
               padding: const EdgeInsets.all(12),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _Thumb(
-                    url: summary.photoUrl,
-                    badgeText: 'Qty ${summary.totalQty}',
-                    expanded: expanded,
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        // Title row
-                        Row(
-                          children: [
-                            Expanded(
-                              child: Text(
-                                summary.productName,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: Theme.of(context)
-                                    .textTheme
-                                    .titleMedium
-                                    ?.copyWith(fontWeight: FontWeight.w800),
-                              ),
-                            ),
-                            const SizedBox(width: 8),
-                            AnimatedRotation(
-                              turns: expanded ? 0.5 : 0.0,
-                              duration: const Duration(milliseconds: 180),
-                              child: Icon(
-                                Icons.expand_more,
-                                color: cs.onSurfaceVariant,
-                              ),
-                            ),
-                          ],
-                        ),
 
-                        const SizedBox(height: 2),
-                        Text(
-                          subtitle.isEmpty ? '—' : subtitle,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: Theme.of(context)
-                              .textTheme
-                              .bodySmall
-                              ?.copyWith(color: cs.onSurfaceVariant),
-                        ),
-
-                        const SizedBox(height: 10),
-
-                        // Status chips + metrics
-                        Wrap(
-                          spacing: 6,
-                          runSpacing: 6,
-                          children: [
-                            ...chips,
-                            if (showUnitCosts && summary.avgBuyUnit != null)
-                              _MetricChip(
-                                icon: Icons.shopping_cart_outlined,
-                                label:
-                                    'Avg buy ${money(summary.avgBuyUnit)} ${summary.currencyDisplay}',
-                              ),
-                            if (showEstimated &&
-                                summary.avgEstimatedUnit != null)
-                              _MetricChip(
-                                icon: Icons.insights_outlined,
-                                label:
-                                    'Avg est ${money(summary.avgEstimatedUnit)} ${summary.currencyDisplay}',
-                              ),
-                          ],
-                        ),
-                      ],
+              // ✅ Permet la sélection/copie des textes dans la card (desktop/web)
+              child: SelectionArea(
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _Thumb(
+                      url: summary.photoUrl,
+                      badgeText: 'Qty ${summary.totalQty}',
+                      expanded: expanded,
                     ),
-                  ),
-                ],
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          // Title row
+                          Row(
+                            children: [
+                              Expanded(
+                                // ✅ Tooltip au survol si le nom est coupé (ellipsis)
+                                child: _OverflowTooltipText(
+                                  text: summary.productName,
+                                  maxLines: 1,
+                                  style: Theme.of(context)
+                                      .textTheme
+                                      .titleMedium
+                                      ?.copyWith(fontWeight: FontWeight.w800),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              AnimatedRotation(
+                                turns: expanded ? 0.5 : 0.0,
+                                duration: const Duration(milliseconds: 180),
+                                child: Icon(
+                                  Icons.expand_more,
+                                  color: cs.onSurfaceVariant,
+                                ),
+                              ),
+                            ],
+                          ),
+
+                          const SizedBox(height: 2),
+                          _OverflowTooltipText(
+                            text: subtitle.isEmpty ? '—' : subtitle,
+                            maxLines: 1,
+                            style: Theme.of(context)
+                                .textTheme
+                                .bodySmall
+                                ?.copyWith(color: cs.onSurfaceVariant),
+                          ),
+
+                          const SizedBox(height: 10),
+
+                          // Status chips + metrics
+                          Wrap(
+                            spacing: 6,
+                            runSpacing: 6,
+                            children: [
+                              ...chips,
+                              if (showUnitCosts && summary.avgBuyUnit != null)
+                                _MetricChip(
+                                  icon: Icons.shopping_cart_outlined,
+                                  label:
+                                      'Avg buy ${money(summary.avgBuyUnit)} ${summary.currencyDisplay}',
+                                ),
+                              if (showEstimated &&
+                                  summary.avgEstimatedUnit != null)
+                                _MetricChip(
+                                  icon: Icons.insights_outlined,
+                                  label:
+                                      'Avg est ${money(summary.avgEstimatedUnit)} ${summary.currencyDisplay}',
+                                ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
           ),
@@ -526,6 +529,60 @@ class _Thumb extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+/// ✅ Text qui:
+/// - reste en `Text` (donc sélectionnable via SelectionArea)
+/// - affiche un Tooltip uniquement si le texte est réellement coupé (ellipsis)
+class _OverflowTooltipText extends StatelessWidget {
+  const _OverflowTooltipText({
+    required this.text,
+    required this.maxLines,
+    this.style,
+  });
+
+  final String text;
+  final int maxLines;
+  final TextStyle? style;
+
+  @override
+  Widget build(BuildContext context) {
+    final effectiveStyle = style ?? DefaultTextStyle.of(context).style;
+    final scale = MediaQuery.textScaleFactorOf(context);
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final painter = TextPainter(
+          text: TextSpan(text: text, style: effectiveStyle),
+          maxLines: maxLines,
+          textDirection: Directionality.of(context),
+          textScaleFactor: scale,
+          ellipsis: '…',
+        )..layout(maxWidth: constraints.maxWidth);
+
+        final isOverflowing = painter.didExceedMaxLines;
+
+        final textWidget = MouseRegion(
+          cursor: SystemMouseCursors.text,
+          child: Text(
+            text,
+            maxLines: maxLines,
+            overflow: TextOverflow.ellipsis,
+            style: effectiveStyle,
+          ),
+        );
+
+        if (!isOverflowing) return textWidget;
+
+        return Tooltip(
+          message: text,
+          waitDuration: const Duration(milliseconds: 250),
+          showDuration: const Duration(seconds: 6),
+          child: textWidget,
+        );
+      },
     );
   }
 }
