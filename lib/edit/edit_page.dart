@@ -98,7 +98,7 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
   DateTime? _saleDate;
   final _itemLocationCtrl = TextEditingController();
   final _trackingCtrl = TextEditingController();
-  final _channelIdCtrl = TextEditingController();
+  final _channelIdCtrl = TextEditingController(); // gardé pour compat / debug
   final _buyerCompanyCtrl = TextEditingController();
   final _supplierNameCtrl = TextEditingController();
   final _notesCtrl = TextEditingController();
@@ -132,6 +132,10 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
   // Jeux pour dropdown
   List<Map<String, dynamic>> _games = const [];
 
+  // Channels pour dropdown
+  List<Map<String, dynamic>> _channels = const [];
+  int? _selectedChannelId; // null = aucun channel
+
   bool _saving = false;
 
   static const langs = ['EN', 'FR', 'JP'];
@@ -159,7 +163,11 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
     _saleDate = _parseDate(s['sale_date']);
     _itemLocationCtrl.text = (s['item_location'] ?? '').toString();
     _trackingCtrl.text = (s['tracking'] ?? '').toString();
+
+    final sampleChannelId = _asInt(s['channel_id']);
+    _selectedChannelId = sampleChannelId;
     _channelIdCtrl.text = _numToIntText(s['channel_id']);
+
     _buyerCompanyCtrl.text = (s['buyer_company'] ?? '').toString();
     _supplierNameCtrl.text = (s['supplier_name'] ?? '').toString();
     _notesCtrl.text = (s['notes'] ?? '').toString();
@@ -183,6 +191,7 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
 
     await _loadRole();
     await _loadGames();
+    await _loadChannels();
     await _hydrateFromDb();
 
     if (mounted) setState(() {});
@@ -310,6 +319,38 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
         }
       });
     } catch (_) {}
+  }
+
+  Future<void> _loadChannels() async {
+    try {
+      final raw = await _sb
+          .from('channel')
+          .select('id, code, label')
+          .order('label', ascending: true);
+
+      final list = raw
+          .map<Map<String, dynamic>>((e) => Map<String, dynamic>.from(e as Map))
+          .toList();
+
+      final sampleChannelId = _asInt(_sample['channel_id']);
+      if (sampleChannelId != null &&
+          !list.any((c) => c['id'] == sampleChannelId)) {
+        list.insert(0, {
+          'id': sampleChannelId,
+          'code': '—',
+          'label': 'Channel #$sampleChannelId',
+        });
+      }
+
+      if (!mounted) return;
+      setState(() {
+        _channels = list;
+        _selectedChannelId ??= sampleChannelId;
+        _channelIdCtrl.text = _selectedChannelId?.toString() ?? '';
+      });
+    } catch (_) {
+      // ignore
+    }
   }
 
   int? _asInt(dynamic v) {
@@ -459,7 +500,15 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
     fillIfEmpty(_salePriceCtrl, firstNonNull('sale_price'));
     fillIfEmpty(_itemLocationCtrl, firstNonNull('item_location'));
     fillIfEmpty(_trackingCtrl, firstNonNull('tracking'));
-    fillIfEmpty(_channelIdCtrl, firstNonNull('channel_id'), intCast: true);
+
+    // channel: hydrate sur _selectedChannelId (et sync ctrl)
+    final dbChannel = firstNonNull('channel_id');
+    if (_selectedChannelId == null && dbChannel != null) {
+      final cid = _asInt(dbChannel);
+      _selectedChannelId = cid;
+      _channelIdCtrl.text = cid?.toString() ?? '';
+    }
+
     fillIfEmpty(_buyerCompanyCtrl, firstNonNull('buyer_company'));
     fillIfEmpty(_supplierNameCtrl, firstNonNull('supplier_name'));
     fillIfEmpty(_notesCtrl, firstNonNull('notes'));
@@ -551,12 +600,6 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
     return num.tryParse(t);
   }
 
-  int? _tryInt(String s) {
-    final t = s.trim();
-    if (t.isEmpty) return null;
-    return int.tryParse(t);
-  }
-
   // === Helpers de comparaison "changement" ===
   bool _changedText(String key, String current) {
     final old = (_sample[key]?.toString() ?? '');
@@ -567,13 +610,6 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
     final oldRaw = _sample[key];
     final old = oldRaw == null ? null : num.tryParse(oldRaw.toString());
     final cur = _tryNum(currentText);
-    return old != cur;
-  }
-
-  bool _changedInt(String key, String currentText) {
-    final oldRaw = _sample[key];
-    final old = oldRaw == null ? null : int.tryParse(oldRaw.toString());
-    final cur = _tryInt(currentText);
     return old != cur;
   }
 
@@ -608,19 +644,19 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
       }
     }
 
-    void putInt(String key, TextEditingController c) {
-      if (_changedInt(key, c.text)) {
-        m[key] = _tryInt(c.text);
-      }
-    }
-
     putText('grade_id', _gradeIdCtrl);
     putText('grading_note', _gradingNoteCtrl);
     putNum('grading_fees', _gradingFeesCtrl);
     putNum('estimated_price', _estimatedPriceCtrl);
     putText('item_location', _itemLocationCtrl);
     putText('tracking', _trackingCtrl);
-    putInt('channel_id', _channelIdCtrl);
+
+    // ✅ channel via dropdown
+    final oldChannelId = _asInt(_sample['channel_id']);
+    if (oldChannelId != _selectedChannelId) {
+      m['channel_id'] = _selectedChannelId; // peut être null
+    }
+
     putText('buyer_company', _buyerCompanyCtrl);
     putText('supplier_name', _supplierNameCtrl);
     putText('notes', _notesCtrl);
@@ -1329,15 +1365,39 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
                       child: text(_trackingCtrl,
                           hint: 'e.g.: UPS 1Z... / DHL *****...'),
                     ),
+
+                    // ✅ Channel dropdown
                     LabeledField(
-                      label: 'Sale location (Channel ID)',
-                      child: text(
-                        _channelIdCtrl,
-                        hint: 'e.g.: 12',
-                        keyboardType: const TextInputType.numberWithOptions(
-                            decimal: false),
+                      label: 'Sale channel',
+                      child: DropdownButtonFormField<int?>(
+                        value: _selectedChannelId,
+                        isExpanded: true,
+                        items: [
+                          const DropdownMenuItem<int?>(
+                            value: null,
+                            child: Text('— None —'),
+                          ),
+                          ..._channels.map((c) {
+                            final id = c['id'] as int;
+                            final code = (c['code'] ?? '').toString();
+                            final label = (c['label'] ?? '').toString();
+                            final txt =
+                                code.isNotEmpty ? '$label ($code)' : label;
+                            return DropdownMenuItem<int?>(
+                              value: id,
+                              child: Text(txt, overflow: TextOverflow.ellipsis),
+                            );
+                          }),
+                        ],
+                        onChanged: (v) => setState(() {
+                          _selectedChannelId = v;
+                          _channelIdCtrl.text = v?.toString() ?? '';
+                        }),
+                        decoration:
+                            const InputDecoration(hintText: 'Choose a channel'),
                       ),
                     ),
+
                     LabeledField(
                       label: 'Buyer company',
                       child: text(_buyerCompanyCtrl, hint: 'Buyer company'),
