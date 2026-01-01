@@ -430,7 +430,7 @@ class _TopSoldPageState extends State<TopSoldPage> {
       if (productIds.isNotEmpty) {
         final List<dynamic> prods = await _sb
             .from('product')
-            .select('id, name, sku, language, org_id')
+            .select('id, name, sku, language')
             .filter('id', 'in', '(${productIds.join(",")})');
         productById = {
           for (final p in prods.map((e) => Map<String, dynamic>.from(e as Map)))

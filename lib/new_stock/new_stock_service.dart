@@ -1,6 +1,13 @@
 /*Logique data/Supabase. Charge games, crée/retourne un product
-depuis un blueprint, insère les items (save via blueprint) et fallback
-RPC (création libre). Fournit aussi buildFullDisplay().*/
+depuis un blueprint (GLOBAL, sans org_id), insère les items (save via blueprint)
+et fallback RPC (création libre). Fournit aussi buildFullDisplay().
+
+✅ Fix important:
+- product est GLOBAL => on ne filtre plus par orgId
+- éviter "JSON object requested..." : on ne fait plus maybeSingle() sans garantie d'unicité
+  => on filtre par (blueprint_id + language + sku_norm) et on met limit(1)
+- sku normalisé: '' si null (pour matcher ton index unique global)
+*/
 
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -45,10 +52,9 @@ class NewStockService {
     return '$name — ${parts.join(' — ')}';
   }
 
-  // Crée/retourne product depuis blueprint (scopé par org)
+  // Crée/retourne product depuis blueprint (GLOBAL)
   static Future<int> _ensureProductFromBlueprint({
     required SupabaseClient sb,
-    required String orgId,
     required Map<String, dynamic> bp,
     required int gameId,
     required String type,
@@ -57,11 +63,20 @@ class NewStockService {
   }) async {
     final blueprintId = (bp['id'] as num).toInt();
 
+    // sku normalisé: on aligne avec l'index global (blueprint_id, language, sku)
+    final String skuNorm = (bp['sku'] as String?)?.trim().isNotEmpty == true
+        ? (bp['sku'] as String).trim()
+        : '';
+
+    // IMPORTANT: éviter maybeSingle() sur un critère non unique
+    // => on scope + limit(1)
     final existing = await sb
         .from('product')
         .select('id')
         .eq('blueprint_id', blueprintId)
-        .eq('org_id', orgId)
+        .eq('language', language)
+        .eq('sku', skuNorm)
+        .limit(1)
         .maybeSingle();
 
     if (existing != null && existing['id'] != null) {
@@ -73,12 +88,14 @@ class NewStockService {
             ? (bp['image_url'] as String)
             : (overridePhoto?.trim().isNotEmpty == true ? overridePhoto : null);
 
+    // Insert + select id (single), ok car INSERT renvoie 1 ligne
     final inserted = await sb
         .from('product')
         .insert({
           'type': type,
           'name': buildFullDisplay(bp),
           'language': language,
+          'sku': skuNorm,
           'game_id': gameId,
           'blueprint_id': blueprintId,
           'version': bp['version'],
@@ -94,7 +111,6 @@ class NewStockService {
           'fixed_properties': bp['fixed_properties'],
           'editable_properties': bp['editable_properties'],
           'data': bp['data'],
-          'org_id': orgId,
         })
         .select('id')
         .single();
@@ -105,8 +121,8 @@ class NewStockService {
   /// Sauvegarde depuis blueprint sélectionné
   ///
   /// ✅ Multi-devise sale_price:
-  /// - currency = devise "legacy" (coûts/estimations dans ton app actuelle)
-  /// - saleCurrency = devise de vente pour sale_price (stockée dans item.sale_currency)
+  /// - currency = devise "legacy" (coûts/estimations)
+  /// - saleCurrency = devise de vente (item.sale_currency)
   static Future<void> saveWithExternalCard({
     required SupabaseClient sb,
     required String orgId,
@@ -126,7 +142,7 @@ class NewStockService {
     String? gradeId,
     String? gradingNote,
     double? salePrice,
-    String? saleCurrency, // ✅ NEW
+    String? saleCurrency,
     String? tracking,
     String? photoUrl,
     String? documentUrl,
@@ -143,7 +159,6 @@ class NewStockService {
 
     final productId = await _ensureProductFromBlueprint(
       sb: sb,
-      orgId: orgId,
       bp: bp,
       gameId: selectedGameId,
       type: type,
@@ -159,7 +174,7 @@ class NewStockService {
         'language': lang,
         'status': initStatus,
         'purchase_date': purchaseDate.toIso8601String().substring(0, 10),
-        'currency': currency, // ✅ devise legacy (coûts)
+        'currency': currency,
         'supplier_name': supplierName,
         'buyer_company': buyerCompany,
         'unit_cost': perUnitCost,
@@ -186,7 +201,6 @@ class NewStockService {
         'org_id': orgId,
       };
 
-      // ✅ sale_currency uniquement si fourni (évite de casser si null)
       if (saleCurrency != null && saleCurrency.trim().isNotEmpty) {
         m['sale_currency'] = saleCurrency.trim().toUpperCase();
       }
@@ -195,7 +209,7 @@ class NewStockService {
 
     final items = List.generate(qty, (_) => buildItem());
 
-    // ✅ Robust: si la colonne n'existe pas encore côté DB, on retry sans sale_currency
+    // Robust: si la colonne n'existe pas encore côté DB, retry sans sale_currency
     try {
       await sb.from('item').insert(items);
     } on PostgrestException catch (e) {
@@ -236,7 +250,7 @@ class NewStockService {
     required double totalCost,
     required double fees,
     required String initStatus,
-    required String currency, // ✅ devise legacy
+    required String currency,
     String? tracking,
     String? photoUrl,
     String? documentUrl,
@@ -251,7 +265,7 @@ class NewStockService {
     String? paymentType,
     String? buyerInfos,
     double? salePrice,
-    String? saleCurrency, // ✅ NEW
+    String? saleCurrency,
   }) async {
     final baseParams = <String, dynamic>{
       'p_org_id': orgId,
@@ -264,7 +278,7 @@ class NewStockService {
       'p_buyer_company':
           (buyerCompany?.isNotEmpty == true) ? buyerCompany : null,
       'p_purchase_date': purchaseDate.toIso8601String().substring(0, 10),
-      'p_currency': currency, // ✅ plus hardcodé USD
+      'p_currency': currency,
       'p_qty': qty,
       'p_total_cost': totalCost,
       'p_fees': fees,
@@ -287,7 +301,6 @@ class NewStockService {
       'p_sale_price': salePrice,
     };
 
-    // 1) Tentative avec sale_currency si fourni
     if (saleCurrency != null && saleCurrency.trim().isNotEmpty) {
       final withSaleCur = Map<String, dynamic>.from(baseParams)
         ..['p_sale_currency'] = saleCurrency.trim().toUpperCase();
@@ -296,7 +309,6 @@ class NewStockService {
         await sb.rpc('fn_create_product_and_items', params: withSaleCur);
         return;
       } on PostgrestException catch (e) {
-        // Si la fonction DB n'a pas encore ce param, on retry sans.
         final msg = e.message.toLowerCase();
         final looksLikeSignatureMismatch =
             msg.contains('fn_create_product_and_items') &&
@@ -308,7 +320,6 @@ class NewStockService {
       }
     }
 
-    // 2) Fallback sans sale_currency (compat ancienne DB)
     await sb.rpc('fn_create_product_and_items', params: baseParams);
   }
 }
