@@ -259,7 +259,7 @@ class _InvoiceSelectItemsDialogState extends State<InvoiceSelectItemsDialog> {
           .eq('org_id', widget.orgId)
           .eq('status', 'finalized')
           .order('sale_date', ascending: false)
-          .limit(500);
+          .limit(5000);
 
       final items = List<Map<String, dynamic>>.from(
         (rows as List).map((e) => Map<String, dynamic>.from(e as Map)),

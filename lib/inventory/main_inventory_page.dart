@@ -549,7 +549,7 @@ class _MainInventoryPageState extends State<MainInventoryPage>
     if (maxPrice != null) query = query.lte('estimated_price', maxPrice);
 
     final List<dynamic> raw =
-        await query.order(orderColumn, ascending: false).limit(500);
+        await query.order(orderColumn, ascending: false).limit(5000);
 
     var rows = raw
         .map<Map<String, dynamic>>((e) => Map<String, dynamic>.from(e as Map))
