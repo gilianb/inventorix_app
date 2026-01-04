@@ -128,6 +128,43 @@ class _InventoryTableByStatusState extends State<InventoryTableByStatus> {
   /// Largeurs actuelles des colonnes
   List<double>? columnWidths;
 
+  // ============================================================
+  // ✅ NEW: Inline edit support (auto-widen column while editing)
+  // ============================================================
+  final Map<int, double> _editPrevWidths = <int, double>{};
+
+  /// Called by _EditableTextCell.onBeginEdit (see tbs_build_and_logic.dart)
+  void beginEditColumn(int col, {double minWidth = 240}) {
+    if (columnWidths == null) return;
+    if (col < 0 || col >= columnWidths!.length) return;
+
+    // Already widened/managed
+    if (_editPrevWidths.containsKey(col)) return;
+
+    final prev = columnWidths![col];
+    _editPrevWidths[col] = prev;
+
+    final target = minWidth.clamp(minColWidth, maxColWidth);
+    if (prev < target) {
+      setState(() {
+        columnWidths![col] = target;
+      });
+    }
+  }
+
+  /// Called by _EditableTextCell.onEndEdit
+  void endEditColumn(int col) {
+    if (columnWidths == null) return;
+    if (col < 0 || col >= columnWidths!.length) return;
+
+    final prev = _editPrevWidths.remove(col);
+    if (prev == null) return;
+
+    setState(() {
+      columnWidths![col] = prev.clamp(minColWidth, maxColWidth);
+    });
+  }
+
   @override
   void initState() {
     super.initState();
@@ -146,6 +183,9 @@ class _InventoryTableByStatusState extends State<InventoryTableByStatus> {
 
     if (columnsChanged) {
       columnWidths = null;
+
+      // Safety: clear any edit-resize state when columns layout changes
+      _editPrevWidths.clear();
     }
 
     if (oldWidget.lines != widget.lines) {

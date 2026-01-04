@@ -389,7 +389,6 @@ extension _TbsLogic on _InventoryTableByStatusState {
 
       final priceText = market == null ? '—' : '${money(market)} $currency';
 
-      // ✅ overflow-proof
       return Tooltip(
         message: 'Market: $mk',
         child: Row(
@@ -484,10 +483,45 @@ extension _TbsLogic on _InventoryTableByStatusState {
 
     final bg = rowBg(context, r, selected: selected, hovered: hovered);
 
-    final cells = <DataCell>[
-      DataCell(
-          _FileCell(url: r['photo_url']?.toString(), isImagePreferred: true)),
-      DataCell(Text(txt(r['grading_note']))),
+    // ✅ IMPORTANT: track real column index so we can auto-widen the right column
+    final cells = <DataCell>[];
+    int col = 0;
+
+    void addCell(DataCell c) {
+      cells.add(c);
+      col++;
+    }
+
+    void addEditableTextCell({
+      required String initialText,
+      required Future<void> Function(String t) onSaved,
+      String? placeholder,
+      String? displaySuffix,
+      bool formatMoney = false,
+      double minWidth = 260,
+    }) {
+      final myCol = col;
+      addCell(
+        DataCell(
+          _EditableTextCell(
+            initialText: initialText,
+            placeholder: placeholder,
+            displaySuffix: displaySuffix,
+            formatMoney: formatMoney,
+            // ✅ these are implemented on the State (table_by_status.dart)
+            onBeginEdit: () => beginEditColumn(myCol, minWidth: minWidth),
+            onEndEdit: () => endEditColumn(myCol),
+            onSaved: onSaved,
+          ),
+        ),
+      );
+    }
+
+    // Base columns
+    addCell(DataCell(
+        _FileCell(url: r['photo_url']?.toString(), isImagePreferred: true)));
+    addCell(DataCell(Text(txt(r['grading_note']))));
+    addCell(
       DataCell(
         Tooltip(
           message: r['product_name']?.toString() ?? '',
@@ -503,10 +537,12 @@ extension _TbsLogic on _InventoryTableByStatusState {
           ),
         ),
       ),
-      DataCell(Text(r['language']?.toString() ?? '')),
-      DataCell(Text(r['game_label']?.toString() ?? '—')),
-      DataCell(Text(r['purchase_date']?.toString() ?? '')),
-      DataCell(Text('$q')),
+    );
+    addCell(DataCell(Text(r['language']?.toString() ?? '')));
+    addCell(DataCell(Text(r['game_label']?.toString() ?? '—')));
+    addCell(DataCell(Text(r['purchase_date']?.toString() ?? '')));
+    addCell(DataCell(Text('$q')));
+    addCell(
       DataCell(
         _EditableStatusCell(
           enabled: !widget.groupMode,
@@ -520,97 +556,88 @@ extension _TbsLogic on _InventoryTableByStatusState {
           },
         ),
       ),
-    ];
+    );
 
+    // Optional cost columns
     if (widget.showUnitCosts) {
-      cells.addAll([
-        DataCell(Text('${money(unit)} $currency')),
-        DataCell(Text('${money(sumUnitTotal)} $currency')),
-      ]);
+      addCell(DataCell(Text('${money(unit)} $currency')));
+      addCell(DataCell(Text('${money(sumUnitTotal)} $currency')));
     }
 
+    // Estimated
     if (widget.showEstimated) {
-      cells.add(
-        DataCell(
-          _EditableTextCell(
-            initialText: est == null ? '' : est.toString(),
-            placeholder: '—',
-            onSaved: (t) async =>
-                widget.onInlineUpdate(r, 'estimated_price', t),
-          ),
-        ),
+      addEditableTextCell(
+        initialText: est == null ? '' : est.toString(),
+        placeholder: '—',
+        minWidth: 220,
+        onSaved: (t) async => widget.onInlineUpdate(r, 'estimated_price', t),
       );
     }
 
-    cells.addAll([
-      DataCell(
-        _EditableTextCell(
-          initialText: txt(r['supplier_name']) == '—'
-              ? ''
-              : r['supplier_name'].toString(),
-          onSaved: (t) async => widget.onInlineUpdate(r, 'supplier_name', t),
-        ),
-      ),
-      DataCell(
-        _EditableTextCell(
-          initialText: txt(r['buyer_company']) == '—'
-              ? ''
-              : r['buyer_company'].toString(),
-          onSaved: (t) async => widget.onInlineUpdate(r, 'buyer_company', t),
-        ),
-      ),
-      DataCell(
-        _EditableTextCell(
-          initialText: txt(r['item_location']) == '—'
-              ? ''
-              : r['item_location'].toString(),
-          onSaved: (t) async => widget.onInlineUpdate(r, 'item_location', t),
-        ),
-      ),
-      DataCell(
-        _EditableTextCell(
-          initialText:
-              txt(r['grade_id']) == '—' ? '' : r['grade_id'].toString(),
-          onSaved: (t) async => widget.onInlineUpdate(r, 'grade_id', t),
-        ),
-      ),
-      DataCell(
-        _EditableTextCell(
-          initialText:
-              txt(r['sale_date']) == '—' ? '' : r['sale_date'].toString(),
-          placeholder: 'YYYY-MM-DD',
-          onSaved: (t) async => widget.onInlineUpdate(r, 'sale_date', t),
-        ),
-      ),
-    ]);
+    // Supplier
+    addEditableTextCell(
+      initialText:
+          txt(r['supplier_name']) == '—' ? '' : r['supplier_name'].toString(),
+      minWidth: 260,
+      onSaved: (t) async => widget.onInlineUpdate(r, 'supplier_name', t),
+    );
 
+    // Buyer
+    addEditableTextCell(
+      initialText:
+          txt(r['buyer_company']) == '—' ? '' : r['buyer_company'].toString(),
+      minWidth: 260,
+      onSaved: (t) async => widget.onInlineUpdate(r, 'buyer_company', t),
+    );
+
+    // Item location
+    addEditableTextCell(
+      initialText:
+          txt(r['item_location']) == '—' ? '' : r['item_location'].toString(),
+      minWidth: 260,
+      onSaved: (t) async => widget.onInlineUpdate(r, 'item_location', t),
+    );
+
+    // Grade ID
+    addEditableTextCell(
+      initialText: txt(r['grade_id']) == '—' ? '' : r['grade_id'].toString(),
+      minWidth: 200,
+      onSaved: (t) async => widget.onInlineUpdate(r, 'grade_id', t),
+    );
+
+    // Sale date
+    addEditableTextCell(
+      initialText: txt(r['sale_date']) == '—' ? '' : r['sale_date'].toString(),
+      placeholder: 'YYYY-MM-DD',
+      minWidth: 220,
+      onSaved: (t) async => widget.onInlineUpdate(r, 'sale_date', t),
+    );
+
+    // Revenue (sale price)
     if (widget.showRevenue) {
       final sale = r['sale_price'];
       final saleCur = saleCurrency(r);
-      cells.add(
-        DataCell(
-          _EditableTextCell(
-            initialText: sale == null ? '' : sale.toString(),
-            placeholder: '—',
-            displaySuffix: sale == null ? null : ' $saleCur',
-            formatMoney: true,
-            onSaved: (t) async => widget.onInlineUpdate(r, 'sale_price', t),
-          ),
-        ),
+
+      addEditableTextCell(
+        initialText: sale == null ? '' : sale.toString(),
+        placeholder: '—',
+        displaySuffix: sale == null ? null : ' $saleCur',
+        formatMoney: true,
+        minWidth: 220,
+        onSaved: (t) async => widget.onInlineUpdate(r, 'sale_price', t),
       );
     }
 
-    cells.add(
-      DataCell(
-        _EditableTextCell(
-          initialText:
-              txt(r['buyer_infos']) == '—' ? '' : r['buyer_infos'].toString(),
-          onSaved: (t) async => widget.onInlineUpdate(r, 'buyer_infos', t),
-        ),
-      ),
+    // Buyer infos
+    addEditableTextCell(
+      initialText:
+          txt(r['buyer_infos']) == '—' ? '' : r['buyer_infos'].toString(),
+      minWidth: 320,
+      onSaved: (t) async => widget.onInlineUpdate(r, 'buyer_infos', t),
     );
 
-    cells.add(DataCell(_FileCell(url: r['document_url']?.toString())));
+    // Doc
+    addCell(DataCell(_FileCell(url: r['document_url']?.toString())));
 
     return DataRow(
       color: MaterialStateProperty.all(bg),
