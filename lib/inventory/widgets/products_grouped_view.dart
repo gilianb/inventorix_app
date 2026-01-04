@@ -236,7 +236,9 @@ class InventoryProductsGroupedList extends StatelessWidget {
   }
 }
 
-class _ProductSummaryCard extends StatelessWidget {
+/// ✅ Card cliquable partout même sur le texte sélectionnable,
+/// tout en laissant la sélection de texte (drag / long press) fonctionner.
+class _ProductSummaryCard extends StatefulWidget {
   const _ProductSummaryCard({
     required this.summary,
     required this.expanded,
@@ -252,25 +254,85 @@ class _ProductSummaryCard extends StatelessWidget {
   final bool showEstimated;
 
   @override
+  State<_ProductSummaryCard> createState() => _ProductSummaryCardState();
+}
+
+class _ProductSummaryCardState extends State<_ProductSummaryCard> {
+  static const double _tapSlop = 6.0;
+  static const int _longPressMs = 350;
+
+  final GlobalKey _iconKey = GlobalKey();
+
+  Offset? _downPos;
+  DateTime? _downTime;
+  bool _moved = false;
+  bool _downOnIcon = false;
+
+  bool _isPointerInsideKey(GlobalKey key, Offset globalPos) {
+    final ctx = key.currentContext;
+    if (ctx == null) return false;
+    final ro = ctx.findRenderObject();
+    if (ro is! RenderBox) return false;
+
+    final topLeft = ro.localToGlobal(Offset.zero);
+    final rect = topLeft & ro.size;
+    return rect.contains(globalPos);
+  }
+
+  void _handlePointerDown(PointerDownEvent e) {
+    _downPos = e.position;
+    _downTime = DateTime.now();
+    _moved = false;
+    _downOnIcon = _isPointerInsideKey(_iconKey, e.position);
+  }
+
+  void _handlePointerMove(PointerMoveEvent e) {
+    final p = _downPos;
+    if (p == null) return;
+    if (!_moved && (e.position - p).distance > _tapSlop) {
+      _moved = true; // probablement sélection de texte (drag)
+    }
+  }
+
+  void _handlePointerUp(PointerUpEvent e) {
+    // si click sur le bouton expand => c'est lui qui gère
+    if (_downOnIcon) return;
+
+    // si on a bougé => sélection de texte => ne pas toggle
+    if (_moved) return;
+
+    // si appui long => souvent sélection (mobile/desktop) => ne pas toggle
+    final t = _downTime;
+    if (t != null &&
+        DateTime.now().difference(t).inMilliseconds > _longPressMs) {
+      return;
+    }
+
+    widget.onToggle();
+  }
+
+  @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
 
     final subtitleParts = <String>[
-      if ((summary.gameLabel ?? '').trim().isNotEmpty)
-        summary.gameLabel!.trim(),
-      if ((summary.language ?? '').trim().isNotEmpty) summary.language!.trim(),
-      summary.type,
-      if (summary.currencyDisplay.trim().isNotEmpty) summary.currencyDisplay,
+      if ((widget.summary.gameLabel ?? '').trim().isNotEmpty)
+        widget.summary.gameLabel!.trim(),
+      if ((widget.summary.language ?? '').trim().isNotEmpty)
+        widget.summary.language!.trim(),
+      widget.summary.type,
+      if (widget.summary.currencyDisplay.trim().isNotEmpty)
+        widget.summary.currencyDisplay,
     ];
     final subtitle = subtitleParts.join(' • ');
 
-    final chips = _buildStatusChips(context, summary.qtyByStatus);
+    final chips = _buildStatusChips(context, widget.summary.qtyByStatus);
 
     final border = Border.all(
-      color: expanded
+      color: widget.expanded
           ? cs.primary.withOpacity(.35)
           : cs.outlineVariant.withOpacity(.55),
-      width: expanded ? 1.2 : 0.8,
+      width: widget.expanded ? 1.2 : 0.8,
     );
 
     return Padding(
@@ -281,7 +343,7 @@ class _ProductSummaryCard extends StatelessWidget {
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(16),
           boxShadow: [
-            if (expanded)
+            if (widget.expanded)
               BoxShadow(
                 blurRadius: 18,
                 spreadRadius: 0,
@@ -290,117 +352,125 @@ class _ProductSummaryCard extends StatelessWidget {
               ),
           ],
         ),
-        child: Material(
-          color: cs.surface,
-          borderRadius: BorderRadius.circular(16),
-          child: InkWell(
+        child: Listener(
+          behavior: HitTestBehavior.translucent,
+          onPointerDown: _handlePointerDown,
+          onPointerMove: _handlePointerMove,
+          onPointerUp: _handlePointerUp,
+          child: Material(
+            color: cs.surface,
             borderRadius: BorderRadius.circular(16),
-            hoverColor: cs.primary.withOpacity(.06),
-            splashColor: cs.primary.withOpacity(.10),
-            onTap: onToggle,
-            child: Container(
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(16),
-                border: border,
-                gradient: expanded
-                    ? LinearGradient(
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
-                        colors: [
-                          cs.primary.withOpacity(.06),
-                          cs.surface,
-                        ],
-                      )
-                    : null,
-              ),
-              padding: const EdgeInsets.all(12),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _Thumb(
-                    url: summary.photoUrl,
-                    badgeText: 'Qty ${summary.totalQty}',
-                    expanded: expanded,
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        // Title row
-                        Row(
-                          children: [
-                            Expanded(
-                              // ✅ Sélectionnable + tooltip si overflow
-                              child: SelectionArea(
-                                child: _OverflowTooltipText(
-                                  text: summary.productName,
-                                  maxLines: 1,
-                                  style: Theme.of(context)
-                                      .textTheme
-                                      .titleMedium
-                                      ?.copyWith(fontWeight: FontWeight.w800),
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: 8),
-
-                            // ✅ Toujours cliquable pour expand/collapse
-                            IconButton(
-                              tooltip: expanded ? 'Collapse' : 'Expand',
-                              onPressed: onToggle,
-                              icon: AnimatedRotation(
-                                turns: expanded ? 0.5 : 0.0,
-                                duration: const Duration(milliseconds: 180),
-                                child: Icon(
-                                  Icons.expand_more,
-                                  color: cs.onSurfaceVariant,
-                                ),
-                              ),
-                            ),
+            child: InkWell(
+              // On garde les effets Ink, mais on ne toggle pas ici
+              onTap: () {},
+              borderRadius: BorderRadius.circular(16),
+              hoverColor: cs.primary.withOpacity(.06),
+              splashColor: cs.primary.withOpacity(.10),
+              child: Container(
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(16),
+                  border: border,
+                  gradient: widget.expanded
+                      ? LinearGradient(
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                          colors: [
+                            cs.primary.withOpacity(.06),
+                            cs.surface,
                           ],
-                        ),
-
-                        const SizedBox(height: 2),
-                        // ✅ Sélectionnable + tooltip si overflow
-                        SelectionArea(
-                          child: _OverflowTooltipText(
-                            text: subtitle.isEmpty ? '—' : subtitle,
-                            maxLines: 1,
-                            style: Theme.of(context)
-                                .textTheme
-                                .bodySmall
-                                ?.copyWith(color: cs.onSurfaceVariant),
-                          ),
-                        ),
-
-                        const SizedBox(height: 10),
-
-                        // Status chips + metrics
-                        Wrap(
-                          spacing: 6,
-                          runSpacing: 6,
-                          children: [
-                            ...chips,
-                            if (showUnitCosts && summary.avgBuyUnit != null)
-                              _MetricChip(
-                                icon: Icons.shopping_cart_outlined,
-                                label:
-                                    'Avg buy ${money(summary.avgBuyUnit)} ${summary.currencyDisplay}',
-                              ),
-                            if (showEstimated &&
-                                summary.avgEstimatedUnit != null)
-                              _MetricChip(
-                                icon: Icons.insights_outlined,
-                                label:
-                                    'Avg est ${money(summary.avgEstimatedUnit)} ${summary.currencyDisplay}',
-                              ),
-                          ],
-                        ),
-                      ],
+                        )
+                      : null,
+                ),
+                padding: const EdgeInsets.all(12),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _Thumb(
+                      url: widget.summary.photoUrl,
+                      badgeText: 'Qty ${widget.summary.totalQty}',
+                      expanded: widget.expanded,
                     ),
-                  ),
-                ],
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          // Title row
+                          Row(
+                            children: [
+                              Expanded(
+                                child: SelectionArea(
+                                  child: _OverflowTooltipText(
+                                    text: widget.summary.productName,
+                                    maxLines: 1,
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .titleMedium
+                                        ?.copyWith(fontWeight: FontWeight.w800),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+
+                              // bouton expand/collapse (exclu du toggle global)
+                              IconButton(
+                                key: _iconKey,
+                                tooltip:
+                                    widget.expanded ? 'Collapse' : 'Expand',
+                                onPressed: widget.onToggle,
+                                icon: AnimatedRotation(
+                                  turns: widget.expanded ? 0.5 : 0.0,
+                                  duration: const Duration(milliseconds: 180),
+                                  child: Icon(
+                                    Icons.expand_more,
+                                    color: cs.onSurfaceVariant,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+
+                          const SizedBox(height: 2),
+                          SelectionArea(
+                            child: _OverflowTooltipText(
+                              text: subtitle.isEmpty ? '—' : subtitle,
+                              maxLines: 1,
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .bodySmall
+                                  ?.copyWith(color: cs.onSurfaceVariant),
+                            ),
+                          ),
+
+                          const SizedBox(height: 10),
+
+                          // Status chips + metrics
+                          Wrap(
+                            spacing: 6,
+                            runSpacing: 6,
+                            children: [
+                              ...chips,
+                              if (widget.showUnitCosts &&
+                                  widget.summary.avgBuyUnit != null)
+                                _MetricChip(
+                                  icon: Icons.shopping_cart_outlined,
+                                  label:
+                                      'Avg buy ${money(widget.summary.avgBuyUnit)} ${widget.summary.currencyDisplay}',
+                                ),
+                              if (widget.showEstimated &&
+                                  widget.summary.avgEstimatedUnit != null)
+                                _MetricChip(
+                                  icon: Icons.insights_outlined,
+                                  label:
+                                      'Avg est ${money(widget.summary.avgEstimatedUnit)} ${widget.summary.currencyDisplay}',
+                                ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
           ),
@@ -413,7 +483,6 @@ class _ProductSummaryCard extends StatelessWidget {
     BuildContext context,
     Map<String, int> qtyByStatus,
   ) {
-    // show up to 4 meaningful statuses, following your kStatusOrder
     final entries = <MapEntry<String, int>>[];
     for (final s in kStatusOrder) {
       final q = qtyByStatus[s] ?? 0;
