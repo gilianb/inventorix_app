@@ -450,6 +450,11 @@ extension _TbsLogic on _InventoryTableByStatusState {
               .where((x) => x != 'vault')
               .toList(),
           color: statusColor(context, s),
+
+          // ✅ NEW: widen status col (vault => fixed index 7)
+          onBeginEdit: () => beginEditColumn(7, minWidth: 220),
+          onEndEdit: () => endEditColumn(7),
+
           onSaved: (val) async {
             if (val != null && val.isNotEmpty && val != s) {
               await widget.onInlineUpdate(r, 'status', val);
@@ -508,7 +513,6 @@ extension _TbsLogic on _InventoryTableByStatusState {
             placeholder: placeholder,
             displaySuffix: displaySuffix,
             formatMoney: formatMoney,
-            // ✅ these are implemented on the State (table_by_status.dart)
             onBeginEdit: () => beginEditColumn(myCol, minWidth: minWidth),
             onEndEdit: () => endEditColumn(myCol),
             onSaved: onSaved,
@@ -542,6 +546,9 @@ extension _TbsLogic on _InventoryTableByStatusState {
     addCell(DataCell(Text(r['game_label']?.toString() ?? '—')));
     addCell(DataCell(Text(r['purchase_date']?.toString() ?? '')));
     addCell(DataCell(Text('$q')));
+
+    // ✅ Status (auto-widen + restore)
+    final statusCol = col;
     addCell(
       DataCell(
         _EditableStatusCell(
@@ -549,6 +556,8 @@ extension _TbsLogic on _InventoryTableByStatusState {
           value: s,
           statuses: _InventoryTableByStatusState.allStatuses.toList(),
           color: statusColor(context, s),
+          onBeginEdit: () => beginEditColumn(statusCol, minWidth: 220),
+          onEndEdit: () => endEditColumn(statusCol),
           onSaved: (val) async {
             if (val != null && val.isNotEmpty && val != s) {
               await widget.onInlineUpdate(r, 'status', val);

@@ -10,7 +10,7 @@ class _EditableTextCell extends StatefulWidget {
     this.displaySuffix,
     this.formatMoney = false,
 
-    // ✅ NEW: allow table to auto-widen the column while editing
+    // ✅ allow table to auto-widen the column while editing
     this.onBeginEdit,
     this.onEndEdit,
   });
@@ -136,9 +136,6 @@ class _EditableTextCellState extends State<_EditableTextCell> {
       );
     }
 
-    // ✅ IMPORTANT:
-    // - Tap outside cancels
-    // - Tap on ✅ doesn't get interpreted as "outside", so it won't cancel
     return TapRegion(
       onTapOutside: (_) {
         if (!_saving) _cancel();
@@ -176,7 +173,6 @@ class _EditableTextCellState extends State<_EditableTextCell> {
                   )
                 : Row(
                     children: [
-                      // ✅ do not steal focus (prevents weird focus races on desktop)
                       ExcludeFocus(
                         child: IconButton(
                           tooltip: 'Cancel',
@@ -208,6 +204,10 @@ class _EditableStatusCell extends StatefulWidget {
     required this.color,
     required this.onSaved,
     this.enabled = true,
+
+    // ✅ allow table to auto-widen the column while editing
+    this.onBeginEdit,
+    this.onEndEdit,
   });
 
   final String value;
@@ -215,6 +215,9 @@ class _EditableStatusCell extends StatefulWidget {
   final Color color;
   final Future<void> Function(String? newValue) onSaved;
   final bool enabled;
+
+  final VoidCallback? onBeginEdit;
+  final VoidCallback? onEndEdit;
 
   @override
   State<_EditableStatusCell> createState() => _EditableStatusCellState();
@@ -227,6 +230,11 @@ class _EditableStatusCellState extends State<_EditableStatusCell> {
 
   String? _original;
 
+  // ✅ dropdown menu opens in an overlay; protect tapOutside while it's open
+  bool _menuOpen = false;
+
+  String _label(String s) => s.replaceAll('_', ' ').toUpperCase();
+
   @override
   void initState() {
     super.initState();
@@ -236,33 +244,76 @@ class _EditableStatusCellState extends State<_EditableStatusCell> {
   @override
   void didUpdateWidget(covariant _EditableStatusCell oldWidget) {
     super.didUpdateWidget(oldWidget);
+
     if (!_editing && oldWidget.value != widget.value) {
       _value = widget.value;
     }
-    if (!widget.enabled && _editing) {
-      setState(() {
-        _value = _original;
-        _editing = false;
-      });
-    }
-  }
 
-  Future<void> _save() async {
-    if (_saving) return;
-    setState(() => _saving = true);
-    try {
-      await widget.onSaved(_value);
-      if (!mounted) return;
+    if (!widget.enabled && _editing) {
+      _value = _original;
+      _menuOpen = false;
+      widget.onEndEdit?.call();
       setState(() => _editing = false);
-    } finally {
-      if (mounted) setState(() => _saving = false);
     }
   }
 
   void _startEdit() {
     if (!widget.enabled) return;
     _original = _value;
+    _menuOpen = false;
+
+    widget.onBeginEdit?.call();
     setState(() => _editing = true);
+  }
+
+  void _endEditUi() {
+    _menuOpen = false;
+    widget.onEndEdit?.call();
+    setState(() => _editing = false);
+  }
+
+  void _cancel() {
+    setState(() => _value = _original);
+    _endEditUi();
+  }
+
+  Future<void> _save() async {
+    if (_saving) return;
+    setState(() => _saving = true);
+
+    try {
+      await widget.onSaved(_value);
+      if (!mounted) return;
+      _endEditUi();
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  Widget _statusRow(BuildContext ctx, String s) {
+    final c = statusColor(ctx, s);
+    return Row(
+      children: [
+        Container(
+          width: 10,
+          height: 10,
+          decoration: BoxDecoration(color: c, shape: BoxShape.circle),
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(
+            _label(s),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis, // ✅ FIX overflow
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+              color: c,
+            ),
+          ),
+        ),
+      ],
+    );
   }
 
   @override
@@ -270,7 +321,7 @@ class _EditableStatusCellState extends State<_EditableStatusCell> {
     final chip = Chip(
       visualDensity: VisualDensity.compact,
       labelPadding: const EdgeInsets.symmetric(horizontal: 6),
-      label: Text((widget.value).toUpperCase()),
+      label: Text(_label(widget.value)),
       backgroundColor: widget.color.withOpacity(0.15),
       side: BorderSide(color: widget.color.withOpacity(0.6)),
     );
@@ -288,101 +339,75 @@ class _EditableStatusCellState extends State<_EditableStatusCell> {
     return TapRegion(
       onTapOutside: (_) {
         if (_saving) return;
-        setState(() {
-          _value = _original;
-          _editing = false;
-        });
+
+        // if dropdown overlay is open, don't cancel (selection clicks happen outside)
+        if (_menuOpen) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) setState(() => _menuOpen = false);
+          });
+          return;
+        }
+
+        _cancel();
       },
       child: RawKeyboardListener(
         focusNode: FocusNode(),
         onKey: (evt) {
           if (evt.isKeyPressed(LogicalKeyboardKey.escape)) {
-            setState(() {
-              _value = _original;
-              _editing = false;
-            });
+            _cancel();
           }
         },
         child: Row(
           children: [
             Expanded(
-              child: DropdownButtonHideUnderline(
-                child: DropdownButtonFormField<String>(
-                  isExpanded: true,
-                  value: _value,
-                  icon: const Icon(Icons.arrow_drop_down),
-                  items: widget.statuses.map((s) {
-                    final c = statusColor(context, s);
-                    return DropdownMenuItem<String>(
-                      value: s,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                          vertical: 4,
-                          horizontal: 6,
-                        ),
-                        decoration: BoxDecoration(
-                          color: c.withOpacity(0.16),
-                          borderRadius: BorderRadius.circular(6),
-                          border: Border.all(color: c.withOpacity(0.7)),
-                        ),
-                        child: Row(
-                          children: [
-                            Container(
-                              width: 10,
-                              height: 10,
-                              decoration: BoxDecoration(
-                                color: c,
-                                shape: BoxShape.circle,
-                              ),
-                            ),
-                            const SizedBox(width: 8),
-                            Text(
-                              s.toUpperCase(),
-                              style: TextStyle(
-                                fontSize: 13,
-                                fontWeight: FontWeight.w500,
-                                color: c,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    );
-                  }).toList(),
-                  selectedItemBuilder: (ctx) {
-                    return widget.statuses.map((s) {
-                      final c = statusColor(ctx, s);
-                      return Row(
-                        children: [
-                          Container(
-                            width: 10,
-                            height: 10,
-                            decoration: BoxDecoration(
-                              color: c,
-                              shape: BoxShape.circle,
-                            ),
+              child: GestureDetector(
+                behavior: HitTestBehavior.translucent,
+                onTapDown: (_) {
+                  if (!_menuOpen) setState(() => _menuOpen = true);
+                },
+                child: DropdownButtonHideUnderline(
+                  child: DropdownButtonFormField<String>(
+                    isExpanded: true,
+                    value: _value,
+                    icon: const Icon(Icons.arrow_drop_down),
+                    items: widget.statuses.map((s) {
+                      final c = statusColor(context, s);
+                      return DropdownMenuItem<String>(
+                        value: s,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            vertical: 6,
+                            horizontal: 8,
                           ),
-                          const SizedBox(width: 8),
-                          Text(
-                            s.toUpperCase(),
-                            style: TextStyle(
-                              fontSize: 13,
-                              fontWeight: FontWeight.w500,
-                              color: c,
-                            ),
+                          decoration: BoxDecoration(
+                            color: c.withOpacity(0.16),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: c.withOpacity(0.7)),
                           ),
-                        ],
+                          child: _statusRow(context, s), // ✅ overflow-safe row
+                        ),
                       );
-                    }).toList();
-                  },
-                  focusColor:
-                      _value == null ? null : statusColor(context, _value!),
-                  onChanged: (v) => setState(() => _value = v),
-                  decoration: const InputDecoration(
-                    isDense: true,
-                    border: OutlineInputBorder(),
-                    contentPadding:
-                        EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+                    }).toList(),
+                    selectedItemBuilder: (ctx) {
+                      return widget.statuses.map((s) {
+                        // ✅ also overflow-safe inside the button
+                        return _statusRow(ctx, s);
+                      }).toList();
+                    },
+                    focusColor:
+                        _value == null ? null : statusColor(context, _value!),
+                    onChanged: (v) {
+                      setState(() {
+                        _value = v;
+                        _menuOpen = false;
+                      });
+                    },
+                    decoration: const InputDecoration(
+                      isDense: true,
+                      border: OutlineInputBorder(),
+                      contentPadding:
+                          EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+                    ),
                   ),
                 ),
               ),
@@ -401,12 +426,7 @@ class _EditableStatusCellState extends State<_EditableStatusCell> {
                           tooltip: 'Cancel',
                           icon:
                               const Icon(Icons.close, color: Colors.redAccent),
-                          onPressed: () {
-                            setState(() {
-                              _value = _original;
-                              _editing = false;
-                            });
-                          },
+                          onPressed: _cancel,
                         ),
                       ),
                       ExcludeFocus(
