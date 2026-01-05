@@ -1,12 +1,13 @@
-// Taken as-is from your page (minor import added)
 // ignore_for_file: use_build_context_synchronously
 
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-/* Generic autocomplete field wired to a Supabase table (name).
-  Also allows adding a value if absent. */
-
+/// Generic autocomplete field wired to a Supabase table (column: name).
+/// Supports:
+/// - optional filtering by org_id (multi-tenant)
+/// - optional filtering by active=true (if the table has the column)
+/// - adding a value if absent
 class LookupAutocompleteField extends StatefulWidget {
   const LookupAutocompleteField({
     super.key,
@@ -18,6 +19,7 @@ class LookupAutocompleteField extends StatefulWidget {
     this.whereActiveOnly = true,
     this.maxOptions = 10,
     this.autoAddOnEnter = true,
+    this.orgId, // ✅ NEW
   });
 
   final String tableName;
@@ -28,6 +30,10 @@ class LookupAutocompleteField extends StatefulWidget {
   final bool whereActiveOnly;
   final int maxOptions;
   final bool autoAddOnEnter;
+
+  /// If provided, queries will be scoped by org_id and inserts will include org_id.
+  /// Only pass this for tables that actually have org_id (fournisseur, society, channel, etc).
+  final String? orgId; // ✅ NEW
 
   @override
   State<LookupAutocompleteField> createState() =>
@@ -48,6 +54,17 @@ class _LookupAutocompleteFieldState extends State<LookupAutocompleteField> {
   }
 
   @override
+  void didUpdateWidget(covariant LookupAutocompleteField oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // Si l'org change (ou tableName change), on reload les options
+    if (oldWidget.orgId != widget.orgId ||
+        oldWidget.tableName != widget.tableName ||
+        oldWidget.whereActiveOnly != widget.whereActiveOnly) {
+      _load();
+    }
+  }
+
+  @override
   void dispose() {
     _focusNode.dispose();
     super.dispose();
@@ -55,21 +72,30 @@ class _LookupAutocompleteFieldState extends State<LookupAutocompleteField> {
 
   Future<void> _load() async {
     setState(() => _loading = true);
+
     try {
-      final base = _sb.from(widget.tableName).select('name');
+      var query = _sb.from(widget.tableName).select('name');
+
+      // ✅ Scope org_id si demandé
+      if (widget.orgId != null && widget.orgId!.trim().isNotEmpty) {
+        query = query.eq('org_id', widget.orgId as Object);
+      }
+
+      // ✅ Active only: si la colonne n'existe pas, on catch et on retry sans
       List<dynamic> data;
       if (widget.whereActiveOnly) {
         try {
-          data = await base.eq('active', true).order('name');
+          data = await query.eq('active', true).order('name');
         } on PostgrestException {
-          data = await base.order('name');
+          data = await query.order('name');
         }
       } else {
-        data = await base.order('name');
+        data = await query.order('name');
       }
+
       _all = data
           .map<String>((e) => (e as Map)['name']?.toString() ?? '')
-          .where((s) => s.isNotEmpty)
+          .where((s) => s.trim().isNotEmpty)
           .toList();
     } catch (_) {
       _all = [];
@@ -96,42 +122,41 @@ class _LookupAutocompleteFieldState extends State<LookupAutocompleteField> {
 
     if (_all.any((x) => x.toLowerCase() == n.toLowerCase())) {
       widget.controller.text = n;
-      if (context.mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Already present: "$n"')));
-      }
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('Already present: "$n"')));
       return;
     }
 
     try {
+      final payload = <String, dynamic>{'name': n};
+
+      // ✅ Insert org_id si demandé
+      if (widget.orgId != null && widget.orgId!.trim().isNotEmpty) {
+        payload['org_id'] = widget.orgId;
+      }
+
       final inserted = await _sb
           .from(widget.tableName)
-          .insert({'name': n})
+          .insert(payload)
           .select('id, name')
           .single();
-      if ((inserted['id'] != null)) {
+
+      if (inserted['id'] != null) {
         await _load();
         widget.controller.text = n;
-        if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('Added: "${inserted['name']}"')));
-        }
+        ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Added: "${inserted['name']}"')));
       } else {
-        if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('Insertion not confirmed.')));
-        }
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Insertion not confirmed.')),
+        );
       }
     } on PostgrestException catch (e) {
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('INSERT error: ${e.message}')));
-      }
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('INSERT error: ${e.message}')));
     } catch (e) {
-      if (context.mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Unknown error: $e')));
-      }
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('Unknown error: $e')));
     }
   }
 
@@ -161,8 +186,9 @@ class _LookupAutocompleteFieldState extends State<LookupAutocompleteField> {
       return InputDecorator(
         decoration: InputDecoration(labelText: label),
         child: const SizedBox(
-            height: 48,
-            child: Center(child: CircularProgressIndicator(strokeWidth: 2))),
+          height: 48,
+          child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
+        ),
       );
     }
 
@@ -195,6 +221,7 @@ class _LookupAutocompleteFieldState extends State<LookupAutocompleteField> {
                   final v = merged[i];
                   final isAdd = v.startsWith('___ADD___');
                   final text = isAdd ? v.substring(9) : v;
+
                   return ListTile(
                     dense: true,
                     title: isAdd

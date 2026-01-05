@@ -3,7 +3,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../inventory/widgets/storage_upload_tile.dart';
 import 'widgets/product_section.dart';
-import 'widgets/searchbar.dart'; // ← ton picker existant
+import 'widgets/searchbar.dart';
 
 import 'new_stock_service.dart';
 import 'widgets/purchase_section.dart';
@@ -138,7 +138,7 @@ class _NewStockPageState extends State<NewStockPage> {
     _buyerInfosCtrl.dispose();
     _gradingNoteCtrl.dispose();
     _gradingFeesCtrl.dispose();
-    _saleCurrencyCtrl.dispose(); // ✅ NEW
+    _saleCurrencyCtrl.dispose();
     super.dispose();
   }
 
@@ -226,7 +226,6 @@ class _NewStockPageState extends State<NewStockPage> {
     setState(() => _saving = true);
     try {
       if (_selectedBlueprintId != null && _selectedCatalogCard != null) {
-        // Cas A : carte sélectionnée dans le catalogue
         await NewStockService.saveWithExternalCard(
           sb: _sb,
           orgId: widget.orgId,
@@ -236,10 +235,7 @@ class _NewStockPageState extends State<NewStockPage> {
           lang: _lang,
           initStatus: _initStatus,
           purchaseDate: _purchaseDate,
-
-          // ✅ devise legacy (coûts)
           currency: _currency,
-
           supplierName: _supplierNameCtrl.text.trim().isEmpty
               ? null
               : _supplierNameCtrl.text.trim(),
@@ -256,11 +252,8 @@ class _NewStockPageState extends State<NewStockPage> {
           gradingNote: _gradingNoteCtrl.text.trim().isEmpty
               ? null
               : _gradingNoteCtrl.text.trim(),
-
-          // ✅ NEW: sale_currency + sale_price
           salePrice: salePrice,
           saleCurrency: saleCurrency,
-
           tracking: _trackingCtrl.text.trim().isEmpty
               ? null
               : _trackingCtrl.text.trim(),
@@ -273,8 +266,6 @@ class _NewStockPageState extends State<NewStockPage> {
           itemLocation: _itemLocationCtrl.text.trim().isEmpty
               ? null
               : _itemLocationCtrl.text.trim(),
-
-          // ⬇️ on passe la valeur PAR UNITÉ
           shippingFees: shippingPerUnit,
           commissionFees: commissionPerUnit,
           paymentType: _paymentTypeCtrl.text.trim().isEmpty
@@ -286,7 +277,6 @@ class _NewStockPageState extends State<NewStockPage> {
           gradingFees: _num(_gradingFeesCtrl),
         );
       } else if (_nameCtrl.text.trim().isNotEmpty) {
-        // Cas B : saisie libre (pas de blueprint sélectionné)
         await NewStockService.saveFallbackRpc(
           sb: _sb,
           orgId: widget.orgId,
@@ -301,10 +291,7 @@ class _NewStockPageState extends State<NewStockPage> {
           totalCost: totalCost,
           fees: _num(_feesCtrl) ?? 0,
           initStatus: _initStatus,
-
-          // ✅ devise legacy (coûts)
           currency: _currency,
-
           tracking: _trackingCtrl.text.trim(),
           photoUrl: _photoUrlCtrl.text.trim(),
           documentUrl: _docUrlCtrl.text.trim(),
@@ -314,19 +301,14 @@ class _NewStockPageState extends State<NewStockPage> {
           gradingNote: _gradingNoteCtrl.text.trim(),
           gradingFees: _num(_gradingFeesCtrl),
           itemLocation: _itemLocationCtrl.text.trim(),
-
-          // ⬇️ on passe la valeur PAR UNITÉ
           shippingFees: shippingPerUnit,
           commissionFees: commissionPerUnit,
           paymentType: _paymentTypeCtrl.text.trim(),
           buyerInfos: _buyerInfosCtrl.text.trim(),
-
-          // ✅ NEW: sale_currency + sale_price
           salePrice: salePrice,
           saleCurrency: saleCurrency,
         );
       } else {
-        // Cas C : ni blueprint ni nom → on informe l’utilisateur
         _snack('Enter a product name or select a catalog entry.');
         setState(() => _saving = false);
         return;
@@ -439,17 +421,20 @@ class _NewStockPageState extends State<NewStockPage> {
 
                 // ——— Achat ———
                 PurchaseSection(
+                  currency: _currency, // ✅ NEW
                   supplierField: LookupAutocompleteField(
                     tableName: 'fournisseur',
                     label: 'Supplier (optional)',
                     controller: _supplierNameCtrl,
                     addDialogTitle: 'New supplier',
+                    orgId: widget.orgId, // ✅ NEW
                   ),
                   buyerField: LookupAutocompleteField(
                     tableName: 'society',
                     label: 'Buyer company (optional)',
                     controller: _buyerCompanyCtrl,
                     addDialogTitle: 'New buyer company',
+                    orgId: widget.orgId, // ✅ NEW
                   ),
                   totalCostCtrl: _totalCostCtrl,
                   qtyCtrl: _qtyCtrl,
@@ -480,7 +465,7 @@ class _NewStockPageState extends State<NewStockPage> {
 
                 if (_showMore)
                   OptionsSection(
-                    currency: _currency, // ✅ labels dynamiques (coûts)
+                    currency: _currency,
                     gradeIdCtrl: _gradeIdCtrl,
                     gradingNoteCtrl: _gradingNoteCtrl,
                     gradingFeesCtrl: _gradingFeesCtrl,
@@ -489,6 +474,7 @@ class _NewStockPageState extends State<NewStockPage> {
                       label: 'Item Location',
                       controller: _itemLocationCtrl,
                       addDialogTitle: 'New location',
+                      // ❗ item_location est global (pas d'org_id) => ne pas passer orgId
                     ),
                     trackingCtrl: _trackingCtrl,
                     photoTile: StorageUploadTile(
@@ -516,10 +502,7 @@ class _NewStockPageState extends State<NewStockPage> {
                     shippingFeesCtrl: _shippingFeesCtrl,
                     commissionFeesCtrl: _commissionFeesCtrl,
                     salePriceCtrl: _salePriceCtrl,
-
-                    // ✅ NEW: champ sale_currency
                     saleCurrencyCtrl: _saleCurrencyCtrl,
-
                     paymentTypeCtrl: _paymentTypeCtrl,
                     buyerInfosCtrl: _buyerInfosCtrl,
                   ),
@@ -536,7 +519,8 @@ class _NewStockPageState extends State<NewStockPage> {
                         ? const SizedBox(
                             width: 18,
                             height: 18,
-                            child: CircularProgressIndicator(strokeWidth: 2))
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
                         : const Iconify(Mdi.content_save),
                     label: const Text('Create stock'),
                   ),
@@ -557,7 +541,7 @@ class _NewStockPageState extends State<NewStockPage> {
         content: Text(message),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(ctx), child: const Text('OK'))
+              onPressed: () => Navigator.pop(ctx), child: const Text('OK')),
         ],
       ),
     );

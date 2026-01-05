@@ -138,7 +138,7 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
 
   bool _saving = false;
 
-  static const langs = ['EN', 'FR', 'JP'];
+  static const langs = ['EN', 'FR', 'JP', 'CN', 'DE', 'ES', 'IT'];
   static const itemTypes = ['single', 'sealed'];
 
   Map<String, dynamic> get _sample => (widget.initialSample ?? const {});
