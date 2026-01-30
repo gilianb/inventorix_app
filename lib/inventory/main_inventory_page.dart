@@ -1,8 +1,16 @@
 // ignore_for_file: deprecated_member_use, use_build_context_synchronously
 
 import 'dart:async';
+import 'dart:typed_data';
+
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+
+// ✅ PDF export
+import 'package:file_saver/file_saver.dart';
+import 'package:printing/printing.dart';
+import '../../inventory/utils/inventory_pdf_export.dart';
 
 import '../../inventory/widgets/status_breakdown_panel.dart';
 import '../../inventory/widgets/table_by_status.dart';
@@ -10,13 +18,13 @@ import '../../inventory/utils/status_utils.dart';
 import '../edit/edit_page.dart';
 import '../../inventory/widgets/finance_overview.dart';
 
-// ✅ NEW: Grouped products view (C)
+// ✅ Grouped products view (C)
 import '../../inventory/widgets/products_grouped_view.dart';
 
 // ✅ FX constants (sale_price multi-devise -> USD)
 import '../../inventory/utils/fx_to_usd.dart';
 
-// ✅ NEW: UI-only “short main file”
+// ✅ UI-only “short main file”
 import '../../inventory/models/inventory_view_mode.dart';
 import '../../inventory/widgets/inventory_controls_card.dart';
 import '../../inventory/widgets/inventory_list_meta_bar.dart';
@@ -91,8 +99,8 @@ class _MainInventoryPageState extends State<MainInventoryPage>
   // UI state
   final _searchCtrl = TextEditingController();
   String? _gameFilter;
-  String? _languageFilter; // NEW: filtre langue
-  String _priceBand = 'any'; // NEW: 'any' | 'p1' | 'p2' | 'p3' | 'p4'
+  String? _languageFilter; // filtre langue
+  String _priceBand = 'any'; // 'any' | 'p1' | 'p2' | 'p3' | 'p4'
 
   bool _loading = true;
   bool _breakdownExpanded = false;
@@ -116,7 +124,7 @@ class _MainInventoryPageState extends State<MainInventoryPage>
 
   // 🔐 Rôle courant & permissions
   OrgRole _role = OrgRole.viewer; // par défaut prudent
-  bool _roleLoaded = false; // tant que false, on affiche un loader
+  bool _roleLoaded = false;
   RolePermissions get _perm => kRoleMatrix[_role]!;
   bool get _isOwner => _role == OrgRole.owner;
 
@@ -141,6 +149,9 @@ class _MainInventoryPageState extends State<MainInventoryPage>
   final ScrollController _invScrollCtrl = ScrollController();
   final ScrollController _finalizedScrollCtrl = ScrollController();
   DateTime? _lastAutoLoadMoreAt;
+
+  // ✅ PDF exporting state
+  bool _exportingPdf = false;
 
   String _viewKey(String? forceStatus) => forceStatus ?? '__main__';
 
@@ -208,29 +219,42 @@ class _MainInventoryPageState extends State<MainInventoryPage>
 
   Future<void> _init() async {
     await _loadRole();
-    _recreateTabController(); // crée le TabController en fonction du rôle
+    _recreateTabController();
     await _refresh();
   }
 
   /// Liste des Tabs selon rôle
   List<Tab> _tabs() => <Tab>[
         const Tab(
-            icon: Iconify(Mdi.package_variant,
-                color: Color.fromARGB(255, 2, 35, 61)),
-            text: 'Inventaire'),
+          icon: Iconify(
+            Mdi.package_variant,
+            color: Color.fromARGB(255, 2, 35, 61),
+          ),
+          text: 'Inventaire',
+        ),
         if (_isOwner)
           const Tab(
-              icon: Iconify(Mdi.trending_up,
-                  color: Color.fromARGB(255, 2, 35, 61)),
-              text: 'Top Sold'),
+            icon: Iconify(
+              Mdi.trending_up,
+              color: Color.fromARGB(255, 2, 35, 61),
+            ),
+            text: 'Top Sold',
+          ),
         if (_isOwner)
           const Tab(
-              icon: Iconify(Mdi.safe, color: Color.fromARGB(255, 2, 35, 61)),
-              text: 'The Vault'),
+            icon: Iconify(
+              Mdi.safe,
+              color: Color.fromARGB(255, 2, 35, 61),
+            ),
+            text: 'The Vault',
+          ),
         const Tab(
-            icon: Iconify(Mdi.check_circle,
-                color: Color.fromARGB(255, 2, 35, 61)),
-            text: 'Finalized'),
+          icon: Iconify(
+            Mdi.check_circle,
+            color: Color.fromARGB(255, 2, 35, 61),
+          ),
+          text: 'Finalized',
+        ),
       ];
 
   /// Pages correspondantes
@@ -441,7 +465,11 @@ class _MainInventoryPageState extends State<MainInventoryPage>
     }
   }
 
-  Future<List<Map<String, dynamic>>> _fetchGroupedFromView() async {
+  // ✅ UPDATED: allow type override (for PDF export)
+  Future<List<Map<String, dynamic>>> _fetchGroupedFromView(
+      {String? typeOverride}) async {
+    final type = typeOverride ?? _typeFilter;
+
     final baseCols = <String>[
       'product_id',
       'game_id',
@@ -507,7 +535,7 @@ class _MainInventoryPageState extends State<MainInventoryPage>
     var query = _sb
         .from('v_items_by_status_masked')
         .select(cols)
-        .eq('type', _typeFilter)
+        .eq('type', type)
         .eq('org_id', widget.orgId);
 
     final after = _dateRangeStart();
@@ -679,6 +707,35 @@ class _MainInventoryPageState extends State<MainInventoryPage>
     return out.where((e) => e['status'] != 'finalized').toList();
   }
 
+  // ✅ explode lines from arbitrary groups (used for PDF export)
+  List<Map<String, dynamic>> _explodeLinesFromGroups(
+    List<Map<String, dynamic>> groups, {
+    String? overrideFilter,
+  }) {
+    final out = <Map<String, dynamic>>[];
+    for (final r in groups) {
+      for (final s in kStatusOrder) {
+        if (s == 'vault') continue;
+        final q = (r['qty_$s'] as int?) ?? 0;
+        if (q > 0) out.add({...r, 'status': s, 'qty_status': q});
+      }
+    }
+
+    final effectiveFilter = (overrideFilter ?? _statusFilter)?.toString() ?? '';
+    if (effectiveFilter.isNotEmpty) {
+      final grouped = kGroupToStatuses[effectiveFilter];
+      if (grouped != null) {
+        return out
+            .where((e) => grouped.contains(e['status'] as String))
+            .toList();
+      }
+      return out.where((e) => e['status'] == effectiveFilter).toList();
+    }
+
+    // same default as UI: exclude finalized by default
+    return out.where((e) => e['status'] != 'finalized').toList();
+  }
+
   String _lineKey(Map<String, dynamic> r) {
     String pick(String k) =>
         (r[k] == null || (r[k] is String && r[k].toString().trim().isEmpty))
@@ -701,6 +758,107 @@ class _MainInventoryPageState extends State<MainInventoryPage>
       pick('status'),
     ];
     return parts.join('|');
+  }
+
+  // ✅ PDF filename stamp
+  String _pdfStamp(DateTime dt) {
+    String two(int v) => v.toString().padLeft(2, '0');
+    return '${dt.year}${two(dt.month)}${two(dt.day)}_${two(dt.hour)}${two(dt.minute)}';
+  }
+
+  Future<void> _savePdfDirectly({
+    required Uint8List bytes,
+    required String baseName, // without ".pdf"
+  }) async {
+    // Objectif:
+    // - Web: download direct
+    // - Mobile/Desktop: save file (ou save-as si nécessaire), sans écran d'impression
+    try {
+      if (kIsWeb) {
+        await FileSaver.instance.saveFile(
+          name: baseName,
+          bytes: bytes,
+          fileExtension: 'pdf',
+          mimeType: MimeType.pdf,
+        );
+        return;
+      }
+
+      // Sur mobile/desktop: essaye d'abord "Save As" (choix du dossier, plus “download-like”)
+      try {
+        await FileSaver.instance.saveAs(
+          name: baseName,
+          bytes: bytes,
+          fileExtension: 'pdf',
+          mimeType: MimeType.pdf,
+        );
+        return;
+      } catch (_) {
+        // fallback: saveFile
+        await FileSaver.instance.saveFile(
+          name: baseName,
+          bytes: bytes,
+          fileExtension: 'pdf',
+          mimeType: MimeType.pdf,
+        );
+        return;
+      }
+    } catch (_) {
+      // Dernier recours: share (permet "Enregistrer dans Fichiers" / "Save to Files")
+      await Printing.sharePdf(bytes: bytes, filename: '$baseName.pdf');
+    }
+  }
+
+  // ✅ Export PDF: Singles + Sealed (name + qty)
+  Future<void> _exportInventoryPdf() async {
+    if (_exportingPdf) return;
+
+    setState(() => _exportingPdf = true);
+
+    try {
+      final now = DateTime.now();
+
+      // 1) Fetch both types using current filters (game/lang/date/price/search)
+      final singleGroups = await _fetchGroupedFromView(typeOverride: 'single');
+      final sealedGroups = await _fetchGroupedFromView(typeOverride: 'sealed');
+
+      // 2) Explode all statuses (ignore statusFilter => export everything)
+      final singleLines =
+          _explodeLinesFromGroups(singleGroups, overrideFilter: '');
+      final sealedLines =
+          _explodeLinesFromGroups(sealedGroups, overrideFilter: '');
+
+      // 3) Same grouping as product grouped view
+      final singleProducts = buildProductSummaries(
+        lines: singleLines,
+        canSeeUnitCosts: false,
+        showEstimated: false,
+      );
+      final sealedProducts = buildProductSummaries(
+        lines: sealedLines,
+        canSeeUnitCosts: false,
+        showEstimated: false,
+      );
+
+      // 4) Build PDF bytes
+      final bytes = await buildInventoryExportPdfBytes(
+        orgId: widget.orgId,
+        generatedAt: now,
+        singles: singleProducts,
+        sealed: sealedProducts,
+      );
+
+      final baseName = 'inventorix_inventory_${_pdfStamp(now)}';
+
+      // 5) Save/Download directly (no print dialog)
+      await _savePdfDirectly(bytes: bytes, baseName: baseName);
+
+      _snack('PDF exported: $baseName.pdf');
+    } catch (e) {
+      _snack('PDF export error: $e');
+    } finally {
+      if (mounted) setState(() => _exportingPdf = false);
+    }
   }
 
   Widget _buildInventoryBody({String? forceStatus}) {
@@ -841,7 +999,6 @@ class _MainInventoryPageState extends State<MainInventoryPage>
         controller: isFinalizedView ? _finalizedScrollCtrl : _invScrollCtrl,
         padding: const EdgeInsets.only(bottom: 24),
         children: [
-          // ✅ SHORT: one widget instead of huge inline UI
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
             child: InventoryControlsCard(
@@ -906,9 +1063,7 @@ class _MainInventoryPageState extends State<MainInventoryPage>
               },
             ),
           ),
-
           const SizedBox(height: 10),
-
           if (_groups.isNotEmpty) ...[
             const SizedBox(height: 8),
             if (showFinanceOverview)
@@ -975,8 +1130,6 @@ class _MainInventoryPageState extends State<MainInventoryPage>
               ),
             if (forceStatus == null) const SizedBox(height: 12),
           ],
-
-          // ✅ SHORT: meta bar widget
           InventoryListMetaBar(
             viewMode: _viewMode,
             visibleLines: visibleLines.length,
@@ -984,10 +1137,7 @@ class _MainInventoryPageState extends State<MainInventoryPage>
             visibleProducts: visibleProducts.length,
             totalProducts: allProducts.length,
           ),
-
           const SizedBox(height: 8),
-
-          // ✅ SHORT: group edit widget
           InventoryGroupEditPanel(
             enabled: !isFinalizedView &&
                 _viewMode == InventoryListViewMode.lines &&
@@ -1015,9 +1165,7 @@ class _MainInventoryPageState extends State<MainInventoryPage>
             applying: _applyingGroup,
             onApply: applyGroupStatusToSelection,
           ),
-
           const SizedBox(height: 8),
-
           if (_viewMode == InventoryListViewMode.lines)
             InventoryTableByStatus(
               lines: visibleLines,
@@ -1072,7 +1220,6 @@ class _MainInventoryPageState extends State<MainInventoryPage>
               showEstimated: showFinanceOverview,
               onInlineUpdate: _applyInlineUpdate,
             ),
-
           const SizedBox(height: 48),
         ],
       ),
@@ -1479,6 +1626,21 @@ class _MainInventoryPageState extends State<MainInventoryPage>
               data: const IconThemeData(opacity: 1.0),
               child: Row(
                 children: [
+                  // ✅ Export PDF button (download/save directly)
+                  IconButton(
+                    tooltip: _exportingPdf ? 'Exporting PDF...' : 'Export PDF',
+                    icon: _exportingPdf
+                        ? const SizedBox(
+                            width: 22,
+                            height: 22,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(
+                            Icons.picture_as_pdf_outlined,
+                            color: Color.fromARGB(255, 2, 35, 61),
+                          ),
+                    onPressed: _exportingPdf ? null : _exportInventoryPdf,
+                  ),
                   IconButton(
                     tooltip: 'Invoices',
                     icon: const Iconify(
