@@ -1,9 +1,15 @@
 // ignore_for_file: use_build_context_synchronously, deprecated_member_use
 
+import 'dart:typed_data';
+
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+
 import 'package:printing/printing.dart';
+import 'package:file_saver/file_saver.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../invoice_service.dart';
 import '../invoice_actions.dart';
@@ -17,9 +23,6 @@ import 'invoice_select_items_dialog.dart';
 
 // ✅ NEW: external invoice/document dialog
 import 'attach_external_invoice_dialog.dart';
-
-import 'package:flutter/foundation.dart' show kIsWeb;
-import 'package:url_launcher/url_launcher.dart';
 
 /// Internal tree node used only in this page to build a hierarchical folder view.
 class _FolderNode {
@@ -77,6 +80,79 @@ class _InvoiceManagementPageState extends State<InvoiceManagementPage> {
     super.initState();
     _invoiceService = InvoiceService(Supabase.instance.client);
     _loadData();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Helpers: download/save bytes (works on mobile + web)
+  // ---------------------------------------------------------------------------
+
+  MimeType _mimeFromExt(String ext) {
+    final e = ext.toLowerCase();
+    if (e == 'pdf') return MimeType.pdf;
+    if (e == 'png') return MimeType.png;
+    if (e == 'jpg' || e == 'jpeg') return MimeType.jpeg;
+    // fallback (best effort)
+    return MimeType.pdf;
+  }
+
+  Future<void> _saveBytesDirect({
+    required Uint8List bytes,
+    required String baseName, // without extension
+    required String ext, // e.g. "pdf"
+  }) async {
+    try {
+      // Web: triggers direct download
+      if (kIsWeb) {
+        await FileSaver.instance.saveFile(
+          name: baseName,
+          bytes: bytes,
+          fileExtension: ext,
+          mimeType: _mimeFromExt(ext),
+        );
+        return;
+      }
+
+      // Mobile/Desktop: try saveAs first (lets user choose location when possible)
+      try {
+        await FileSaver.instance.saveAs(
+          name: baseName,
+          bytes: bytes,
+          fileExtension: ext,
+          mimeType: _mimeFromExt(ext),
+        );
+        return;
+      } catch (_) {
+        await FileSaver.instance.saveFile(
+          name: baseName,
+          bytes: bytes,
+          fileExtension: ext,
+          mimeType: _mimeFromExt(ext),
+        );
+        return;
+      }
+    } catch (_) {
+      // last resort fallback
+      if (ext.toLowerCase() == 'pdf') {
+        await Printing.sharePdf(bytes: bytes, filename: '$baseName.$ext');
+      } else {
+        // for images/other, share sheet
+        await Printing.sharePdf(bytes: bytes, filename: '$baseName.$ext');
+      }
+    }
+  }
+
+  String _extFromPath(String pathInBucket) {
+    final lower = pathInBucket.toLowerCase();
+    if (lower.endsWith('.pdf')) return 'pdf';
+    if (lower.endsWith('.png')) return 'png';
+    if (lower.endsWith('.jpg')) return 'jpg';
+    if (lower.endsWith('.jpeg')) return 'jpeg';
+    return 'pdf';
+  }
+
+  String _safeFileBaseName(String raw) {
+    final s = raw.trim().replaceAll(RegExp(r'[^\w\-_\.]+'), '_');
+    return s.isEmpty ? 'invoice' : s;
   }
 
   // ---------------------------------------------------------------------------
@@ -342,10 +418,10 @@ class _InvoiceManagementPageState extends State<InvoiceManagementPage> {
   }
 
   // ---------------------------------------------------------------------------
-  // Invoice actions: view, move, attach/remove document, mark paid, delete
+  // Invoice actions: view, download, move, attach/remove document, mark paid, delete
   // ---------------------------------------------------------------------------
 
-  Future<void> _viewInvoicePdf(Invoice invoice) async {
+  Future<void> _downloadInvoiceDocument(Invoice invoice) async {
     if (invoice.documentUrl == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('No document attached to this invoice.')),
@@ -358,12 +434,47 @@ class _InvoiceManagementPageState extends State<InvoiceManagementPage> {
     // document_url stocké comme: 'invoices/<...path in bucket...>'
     final fullPath = invoice.documentUrl!;
     final pathInBucket = fullPath.replaceFirst('invoices/', '');
+
+    try {
+      final bytes =
+          await client.storage.from('invoices').download(pathInBucket);
+
+      final ext = _extFromPath(pathInBucket);
+      final baseName = _safeFileBaseName(
+          'invoice_${invoice.invoiceNumber}_$ext'.replaceAll('.$ext', ''));
+
+      await _saveBytesDirect(bytes: bytes, baseName: baseName, ext: ext);
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Downloaded: $baseName.$ext')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error while downloading document: $e')),
+      );
+    }
+  }
+
+  Future<void> _viewInvoicePdf(Invoice invoice) async {
+    if (invoice.documentUrl == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No document attached to this invoice.')),
+      );
+      return;
+    }
+
+    final client = Supabase.instance.client;
+
+    final fullPath = invoice.documentUrl!;
+    final pathInBucket = fullPath.replaceFirst('invoices/', '');
     final lower = pathInBucket.toLowerCase();
     final isPdf = lower.endsWith('.pdf');
 
     try {
       if (kIsWeb) {
-        // 🌐 WEB : URL signée + open
+        // 🌐 WEB : open in browser (and you also have "Download" in menu)
         final signedUrl = await client.storage
             .from('invoices')
             .createSignedUrl(pathInBucket, 60);
@@ -379,14 +490,13 @@ class _InvoiceManagementPageState extends State<InvoiceManagementPage> {
         return;
       }
 
-      // 📱/💻 Mobile & desktop : download bytes then preview
+      // 📱/💻 Mobile & desktop : preview
       final bytes =
           await client.storage.from('invoices').download(pathInBucket);
 
       if (isPdf) {
-        await Printing.layoutPdf(
-          onLayout: (_) async => bytes,
-        );
+        // Preview (may open print/preview UI depending on platform)
+        await Printing.layoutPdf(onLayout: (_) async => bytes);
       } else {
         if (!mounted) return;
         await showDialog<void>(
@@ -708,7 +818,6 @@ class _InvoiceManagementPageState extends State<InvoiceManagementPage> {
   // ---------------------------------------------------------------------------
 
   Future<void> _onAttachExternalInvoice() async {
-    // Devise par défaut (tu pourras la remplacer par un setting org)
     const defaultCurrency = 'AED';
 
     final result = await AttachExternalInvoiceDialog.show(
@@ -750,8 +859,8 @@ class _InvoiceManagementPageState extends State<InvoiceManagementPage> {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-            content:
-                Text('External document ${created.invoiceNumber} attached.')),
+          content: Text('External document ${created.invoiceNumber} attached.'),
+        ),
       );
 
       await _loadData();
@@ -865,7 +974,6 @@ class _InvoiceManagementPageState extends State<InvoiceManagementPage> {
   // ---------------------------------------------------------------------------
 
   Future<void> _onCreateSalesInvoiceFromManagement() async {
-    // Ouvre le dialog de sélection d’items + infos facture
     final result = await InvoiceSelectItemsDialog.show(
       context,
       orgId: widget.orgId,
@@ -1037,7 +1145,6 @@ class _InvoiceManagementPageState extends State<InvoiceManagementPage> {
 
   Widget _buildFolderMenuButton(_FolderNode node) {
     if (!node.hasRealFolder) {
-      // on ne propose pas de supprimer les "conteneurs" virtuels sans folderId
       return const SizedBox.shrink();
     }
 
@@ -1067,7 +1174,7 @@ class _InvoiceManagementPageState extends State<InvoiceManagementPage> {
     final bool isSelected = isSelectedLeaf || isSelectedPrefix;
 
     if (!node.hasChildren) {
-      // leaf: real folder only
+      // leaf
       return ListTile(
         dense: true,
         contentPadding: const EdgeInsets.symmetric(horizontal: 12),
@@ -1093,7 +1200,6 @@ class _InvoiceManagementPageState extends State<InvoiceManagementPage> {
       );
     }
 
-    // node with children: behaves like container + optional real folder
     return ExpansionTile(
       tilePadding: const EdgeInsets.only(left: 8, right: 8),
       leading: const Icon(Icons.folder),
@@ -1148,7 +1254,7 @@ class _InvoiceManagementPageState extends State<InvoiceManagementPage> {
     );
   }
 
-  // ----- TOP CHIPS (mobile) : flat list, simpler -----
+  // ----- TOP CHIPS (mobile) -----
 
   Widget _buildFolderChips() {
     return ListView(
@@ -1287,6 +1393,8 @@ class _InvoiceManagementPageState extends State<InvoiceManagementPage> {
                     onSelected: (value) async {
                       if (value == 'view') {
                         await _viewInvoicePdf(invoice);
+                      } else if (value == 'download') {
+                        await _downloadInvoiceDocument(invoice);
                       } else if (value == 'attach') {
                         await _attachOrReplacePdf(invoice);
                       } else if (value == 'detach') {
@@ -1312,6 +1420,15 @@ class _InvoiceManagementPageState extends State<InvoiceManagementPage> {
                           ),
                         ),
                       );
+
+                      if (hasDoc) {
+                        items.add(
+                          const PopupMenuItem(
+                            value: 'download',
+                            child: Text('Download document'),
+                          ),
+                        );
+                      }
 
                       items.add(
                         PopupMenuItem(
