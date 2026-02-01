@@ -20,6 +20,14 @@ class InventoryGroupEditPanel extends StatelessWidget {
     required this.commentCtrl,
     required this.applying,
     required this.onApply,
+
+    // ✅ NEW: grading batch fields
+    required this.gradingServices,
+    required this.selectedGradingServiceId,
+    required this.onGradingServiceChanged,
+    required this.atGraderDate,
+    required this.onPickAtGraderDate,
+    required this.onClearAtGraderDate,
   });
 
   final bool enabled;
@@ -38,10 +46,23 @@ class InventoryGroupEditPanel extends StatelessWidget {
   final bool applying;
   final VoidCallback onApply;
 
+  // ✅ NEW
+  final List<Map<String, dynamic>> gradingServices;
+  final int? selectedGradingServiceId;
+  final ValueChanged<int?> onGradingServiceChanged;
+  final DateTime? atGraderDate;
+  final VoidCallback onPickAtGraderDate;
+  final VoidCallback onClearAtGraderDate;
+
+  String _fmtDate(DateTime? d) =>
+      d == null ? '—' : d.toIso8601String().split('T').first;
+
   @override
   Widget build(BuildContext context) {
     if (!enabled) return const SizedBox.shrink();
     final cs = Theme.of(context).colorScheme;
+
+    final bool needsGradingFields = (newStatus == 'at_grader');
 
     return Padding(
       padding: IxSpace.page,
@@ -143,6 +164,91 @@ class InventoryGroupEditPanel extends StatelessWidget {
                                 ),
                               ),
                             ),
+
+                            // ✅ NEW: only when at_grader
+                            if (needsGradingFields) ...[
+                              SizedBox(
+                                width: 340,
+                                child: DropdownButtonFormField<int?>(
+                                  isExpanded: true,
+                                  value: selectedGradingServiceId,
+                                  items: [
+                                    const DropdownMenuItem<int?>(
+                                      value: null,
+                                      child: Text('— Grading service —'),
+                                    ),
+                                    ...gradingServices.map((gs) {
+                                      final id = gs['id'] as int;
+                                      final label =
+                                          (gs['label'] ?? '').toString();
+                                      final code =
+                                          (gs['code'] ?? '').toString();
+                                      final days = gs['expected_days'];
+                                      final fee = gs['default_fee'];
+                                      final meta = [
+                                        if (code.isNotEmpty) code,
+                                        if (days != null) '${days}d',
+                                        if (fee != null) '\$${fee.toString()}',
+                                      ].join(' • ');
+                                      return DropdownMenuItem<int?>(
+                                        value: id,
+                                        child: Text(
+                                          meta.isEmpty
+                                              ? label
+                                              : '$label ($meta)',
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                      );
+                                    }),
+                                  ],
+                                  onChanged: onGradingServiceChanged,
+                                  decoration: ixDecoration(
+                                    context,
+                                    labelText: 'Grading service',
+                                    hintText: 'Pick a service',
+                                    prefixIcon:
+                                        const Icon(Icons.verified_outlined),
+                                  ),
+                                ),
+                              ),
+                              SizedBox(
+                                width: 240,
+                                child: InkWell(
+                                  onTap: onPickAtGraderDate,
+                                  borderRadius: BorderRadius.circular(12),
+                                  child: InputDecorator(
+                                    decoration: ixDecoration(
+                                      context,
+                                      labelText: 'At grader date',
+                                      hintText: 'YYYY-MM-DD',
+                                      prefixIcon:
+                                          const Icon(Icons.date_range_outlined),
+                                    ),
+                                    child: Padding(
+                                      padding: const EdgeInsets.symmetric(
+                                          vertical: 4),
+                                      child: Row(
+                                        children: [
+                                          Expanded(
+                                            child: Text(
+                                              _fmtDate(atGraderDate),
+                                              style: const TextStyle(
+                                                  fontWeight: FontWeight.w800),
+                                            ),
+                                          ),
+                                          IconButton(
+                                            tooltip: 'Clear date',
+                                            onPressed: onClearAtGraderDate,
+                                            icon: const Icon(Icons.close),
+                                          )
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ],
+
                             SizedBox(
                               width: 360,
                               child: TextField(
@@ -181,7 +287,9 @@ class InventoryGroupEditPanel extends StatelessWidget {
                             const SizedBox(width: 8),
                             Expanded(
                               child: Text(
-                                'Only the status is modified. A log entry is saved for all affected items.',
+                                needsGradingFields
+                                    ? 'Status + grading service + date can be applied to all selected lines.'
+                                    : 'Only the status is modified. A log entry is saved for all affected items.',
                                 style: Theme.of(context)
                                     .textTheme
                                     .bodySmall

@@ -135,6 +135,12 @@ class _MainInventoryPageState extends State<MainInventoryPage>
   bool _groupMode = false;
   final Set<String> _selectedKeys = <String>{};
   String? _groupNewStatus;
+
+  // ✅ NEW: group grading controls
+  List<Map<String, dynamic>> _gradingServices = const [];
+  int? _groupGradingServiceId; // null = ne pas modifier
+  DateTime? _groupAtGraderDate; // appliqué quand newStatus == 'at_grader'
+
   final TextEditingController _groupCommentCtrl = TextEditingController();
   bool _applyingGroup = false;
 
@@ -339,6 +345,35 @@ class _MainInventoryPageState extends State<MainInventoryPage>
     }
   }
 
+  Future<void> _loadGradingServices() async {
+    try {
+      final raw = await _sb
+          .from('grading_service')
+          .select(
+              'id, code, label, expected_days, default_fee, sort_order, active')
+          .eq('org_id', widget.orgId)
+          .eq('active', true)
+          .order('sort_order', ascending: true, nullsFirst: false)
+          .order('label', ascending: true);
+
+      final list = raw
+          .map<Map<String, dynamic>>((e) => Map<String, dynamic>.from(e as Map))
+          .toList();
+
+      if (!mounted) return;
+      setState(() {
+        _gradingServices = list;
+        // Si l'id sélectionné n'existe plus -> reset
+        if (_groupGradingServiceId != null &&
+            !_gradingServices.any((s) => s['id'] == _groupGradingServiceId)) {
+          _groupGradingServiceId = null;
+        }
+      });
+    } catch (_) {
+      // ignore
+    }
+  }
+
   void _snack(String m) =>
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
 
@@ -410,6 +445,7 @@ class _MainInventoryPageState extends State<MainInventoryPage>
     _resetViewState('finalized');
 
     try {
+      await _loadGradingServices();
       _groups = await _fetchGroupedFromView();
       _kpiItems = await _fetchItemsForKpis();
       _finalizedInvestOverride = await _fetchFinalizedInvestAggregate();
@@ -422,6 +458,7 @@ class _MainInventoryPageState extends State<MainInventoryPage>
 
   Future<void> _refreshSilent() async {
     try {
+      await _loadGradingServices();
       final newGroups = await _fetchGroupedFromView();
       final newKpiItems = await _fetchItemsForKpis();
       final newFinalizedInvest = await _fetchFinalizedInvestAggregate();
@@ -497,6 +534,12 @@ class _MainInventoryPageState extends State<MainInventoryPage>
       'channel_id',
       'payment_type',
       'buyer_infos',
+
+      // ✅ NEW: grading service + dates (from view)
+      'grading_service_id',
+      'sent_to_grader_date',
+      'at_grader_date',
+
       'qty_total',
       'qty_ordered',
       'qty_paid',
@@ -756,6 +799,9 @@ class _MainInventoryPageState extends State<MainInventoryPage>
       pick('buyer_infos'),
       pick('currency'),
       pick('status'),
+
+      // ✅ NEW: make lines distinct by grading service (important for group edit)
+      pick('grading_service_id'),
     ];
     return parts.join('|');
   }
@@ -896,6 +942,8 @@ class _MainInventoryPageState extends State<MainInventoryPage>
     final List<String> allStatuses =
         kStatusOrder.where((s) => s != 'vault').toList();
 
+    String? dateToStr(DateTime? d) => d?.toIso8601String().split('T').first;
+
     Future<void> applyGroupStatusToSelection() async {
       if (_groupNewStatus == null || _groupNewStatus!.isEmpty) {
         _snack('Pick a status to apply.');
@@ -914,8 +962,8 @@ class _MainInventoryPageState extends State<MainInventoryPage>
             .where((r) => _selectedKeys.contains(_lineKey(r)))
             .toList(growable: false);
 
-        final Map<String, List<int>> idsByOldStatus = {};
         final List<int> allIds = [];
+        final List<_LogEntry> logEntries = [];
 
         for (final line in selectedLines) {
           final oldStatus = (line['status'] ?? '').toString();
@@ -925,7 +973,30 @@ class _MainInventoryPageState extends State<MainInventoryPage>
           if (ids.isEmpty) continue;
 
           allIds.addAll(ids);
-          idsByOldStatus.putIfAbsent(oldStatus, () => <int>[]).addAll(ids);
+
+          final changes = <String, Map<String, dynamic>>{
+            'status': {'old': oldStatus, 'new': newStatus},
+          };
+
+          // ✅ log grading changes if applicable
+          if ((newStatus == 'sent_to_grader' || newStatus == 'at_grader') &&
+              _groupGradingServiceId != null) {
+            changes['grading_service_id'] = {
+              'old': line['grading_service_id'],
+              'new': _groupGradingServiceId,
+            };
+          }
+          if (newStatus == 'at_grader' && _groupAtGraderDate != null) {
+            changes['at_grader_date'] = {
+              'old': line['at_grader_date'],
+              'new': dateToStr(_groupAtGraderDate),
+            };
+          }
+
+          logEntries.add(_LogEntry(
+            itemIds: ids,
+            changes: changes,
+          ));
         }
 
         if (allIds.isEmpty) {
@@ -935,27 +1006,32 @@ class _MainInventoryPageState extends State<MainInventoryPage>
 
         final idsCsv = '(${allIds.join(",")})';
 
-        await _sb.from('item').update({'status': newStatus}).filter(
-          'id',
-          'in',
-          idsCsv,
-        );
+        // ✅ Build bulk update
+        final updates = <String, dynamic>{
+          'status': newStatus,
+        };
+
+        // Apply grading service + date only when relevant
+        if (newStatus == 'sent_to_grader' || newStatus == 'at_grader') {
+          if (_groupGradingServiceId != null) {
+            updates['grading_service_id'] = _groupGradingServiceId;
+          }
+        }
+        if (newStatus == 'at_grader' && _groupAtGraderDate != null) {
+          updates['at_grader_date'] = dateToStr(_groupAtGraderDate);
+        }
+
+        await _sb.from('item').update(updates).filter('id', 'in', idsCsv);
 
         final comment = _groupCommentCtrl.text.trim();
         final String reason =
             comment.isEmpty ? 'group_status' : 'group_status: $comment';
 
-        for (final entry in idsByOldStatus.entries) {
-          final String oldStatus = entry.key;
-          final List<int> itemIds = entry.value;
-          if (itemIds.isEmpty) continue;
-
+        for (final e in logEntries) {
           await _logBatchEdit(
             orgId: widget.orgId,
-            itemIds: itemIds,
-            changes: {
-              'status': {'old': oldStatus, 'new': newStatus},
-            },
+            itemIds: e.itemIds,
+            changes: e.changes,
             reason: reason,
           );
         }
@@ -973,6 +1049,15 @@ class _MainInventoryPageState extends State<MainInventoryPage>
 
               g[oldKey] = ((g[oldKey] as int? ?? 0) - qty).clamp(0, 1 << 31);
               g[newKey] = (g[newKey] as int? ?? 0) + qty;
+
+              // Keep group-level display fields in sync (best-effort)
+              if (updates.containsKey('grading_service_id')) {
+                g['grading_service_id'] = updates['grading_service_id'];
+              }
+              if (updates.containsKey('at_grader_date')) {
+                g['at_grader_date'] = updates['at_grader_date'];
+              }
+
               _groups[gi] = g;
             }
           }
@@ -981,6 +1066,10 @@ class _MainInventoryPageState extends State<MainInventoryPage>
           _selectedKeys.clear();
           _groupNewStatus = null;
           _groupCommentCtrl.clear();
+
+          // ✅ reset grading controls after apply (optional but clean UX)
+          _groupGradingServiceId = null;
+          _groupAtGraderDate = null;
         });
 
         _snack('Status updated on ${allIds.length} item(s).');
@@ -1058,6 +1147,9 @@ class _MainInventoryPageState extends State<MainInventoryPage>
                     _selectedKeys.clear();
                     _groupNewStatus = null;
                     _groupCommentCtrl.clear();
+
+                    _groupGradingServiceId = null;
+                    _groupAtGraderDate = null;
                   }
                 });
               },
@@ -1154,6 +1246,9 @@ class _MainInventoryPageState extends State<MainInventoryPage>
                   _selectedKeys.clear();
                   _groupNewStatus = null;
                   _groupCommentCtrl.clear();
+
+                  _groupGradingServiceId = null;
+                  _groupAtGraderDate = null;
                 }
               });
             },
@@ -1161,6 +1256,25 @@ class _MainInventoryPageState extends State<MainInventoryPage>
             statuses: allStatuses,
             newStatus: _groupNewStatus,
             onNewStatusChanged: (v) => setState(() => _groupNewStatus = v),
+            gradingServices: _gradingServices,
+            selectedGradingServiceId: _groupGradingServiceId,
+            onGradingServiceChanged: (id) =>
+                setState(() => _groupGradingServiceId = id),
+            atGraderDate: _groupAtGraderDate,
+            onPickAtGraderDate: () async {
+              final now = DateTime.now();
+              final picked = await showDatePicker(
+                context: context,
+                initialDate: _groupAtGraderDate ?? now,
+                firstDate: DateTime(2000),
+                lastDate: DateTime(2100),
+              );
+              if (picked == null) return;
+              if (!mounted) return;
+              setState(() => _groupAtGraderDate = picked);
+            },
+            onClearAtGraderDate: () =>
+                setState(() => _groupAtGraderDate = null),
             commentCtrl: _groupCommentCtrl,
             applying: _applyingGroup,
             onApply: applyGroupStatusToSelection,
@@ -1230,6 +1344,7 @@ class _MainInventoryPageState extends State<MainInventoryPage>
     final String orgId = widget.orgId;
     final String status = (line['status'] ?? '').toString();
     final String? groupSig = line['group_sig']?.toString();
+    final int? gradingServiceId = line['grading_service_id'] as int?;
 
     if (groupSig == null || groupSig.isEmpty) {
       _snack('Missing group signature for this line.');
@@ -1243,15 +1358,19 @@ class _MainInventoryPageState extends State<MainInventoryPage>
     };
 
     try {
-      final anchor = await _sb
+      var q = _sb
           .from('item')
           .select('id')
           .eq('org_id', orgId)
           .eq('group_sig', groupSig)
-          .eq('status', status)
-          .order('id', ascending: true)
-          .limit(1)
-          .maybeSingle();
+          .eq('status', status);
+
+      if (gradingServiceId != null) {
+        q = q.eq('grading_service_id', gradingServiceId);
+      }
+
+      final anchor =
+          await q.order('id', ascending: true).limit(1).maybeSingle();
 
       if (anchor != null && anchor['id'] != null) payload['id'] = anchor['id'];
     } catch (_) {}
@@ -1319,16 +1438,22 @@ class _MainInventoryPageState extends State<MainInventoryPage>
   Future<List<int>> _collectItemIdsForLine(Map<String, dynamic> line) async {
     final String? groupSig = line['group_sig']?.toString();
     final String status = (line['status'] ?? '').toString();
+    final int? gradingServiceId = line['grading_service_id'] as int?;
 
     if (groupSig != null && groupSig.isNotEmpty && status.isNotEmpty) {
-      final raw = await _sb
+      var q = _sb
           .from('item')
           .select('id')
           .eq('org_id', widget.orgId)
           .eq('group_sig', groupSig)
-          .eq('status', status)
-          .order('id', ascending: true)
-          .limit(20000);
+          .eq('status', status);
+
+      // ✅ NEW: keep line specificity if UI splits by grading service
+      if (gradingServiceId != null) {
+        q = q.eq('grading_service_id', gradingServiceId);
+      }
+
+      final raw = await q.order('id', ascending: true).limit(20000);
 
       final ids = raw
           .map((e) => (e as Map)['id'])
@@ -1376,6 +1501,9 @@ class _MainInventoryPageState extends State<MainInventoryPage>
       'commission_fees',
       'payment_type',
       'buyer_infos',
+
+      // ✅ NEW: keep specificity if line is split by service
+      'grading_service_id',
     };
 
     Future<List<int>> runQuery(Set<String> keys) async {
@@ -1427,6 +1555,7 @@ class _MainInventoryPageState extends State<MainInventoryPage>
       'buyer_company',
       'item_location',
       'buyer_infos',
+      'grading_service_id',
     };
     ids = await runQuery(strongKeys);
     return ids;
@@ -1483,12 +1612,19 @@ class _MainInventoryPageState extends State<MainInventoryPage>
 
   int? _findGroupIndexForLine(Map<String, dynamic> line) {
     final String? lineGroupSig = line['group_sig']?.toString();
+    final int? lineGsId = line['grading_service_id'] as int?;
+
     if (lineGroupSig != null && lineGroupSig.isNotEmpty) {
       for (int i = 0; i < _groups.length; i++) {
         final g = _groups[i];
         final gSig = g['group_sig']?.toString() ?? '';
         final gOrg = g['org_id']?.toString() ?? '';
-        if (gSig == lineGroupSig && gOrg == widget.orgId) return i;
+        final gGsId = g['grading_service_id'] as int?;
+        if (gSig == lineGroupSig &&
+            gOrg == widget.orgId &&
+            (gGsId == lineGsId)) {
+          return i;
+        }
       }
     }
 
@@ -1501,7 +1637,8 @@ class _MainInventoryPageState extends State<MainInventoryPage>
           same(g['type'], line['type']) &&
           same(g['language'], line['language']) &&
           same(g['purchase_date'], line['purchase_date']) &&
-          same(g['currency'], line['currency'])) {
+          same(g['currency'], line['currency']) &&
+          same(g['grading_service_id'], line['grading_service_id'])) {
         return i;
       }
     }
@@ -1538,8 +1675,15 @@ class _MainInventoryPageState extends State<MainInventoryPage>
         break;
 
       case 'sale_date':
+      case 'sent_to_grader_date':
+      case 'at_grader_date':
         final t = (newValue ?? '').toString().trim();
         parsed = t.isEmpty ? null : t; // YYYY-MM-DD
+        break;
+
+      case 'grading_service_id':
+        final t = (newValue ?? '').toString().trim();
+        parsed = t.isEmpty ? null : int.tryParse(t);
         break;
 
       default:
@@ -1744,4 +1888,10 @@ class _MainInventoryPageState extends State<MainInventoryPage>
       ),
     );
   }
+}
+
+class _LogEntry {
+  const _LogEntry({required this.itemIds, required this.changes});
+  final List<int> itemIds;
+  final Map<String, Map<String, dynamic>> changes;
 }

@@ -21,6 +21,56 @@ extension _TbsLogic on _InventoryTableByStatusState {
     return DateTime.tryParse(s);
   }
 
+  // ✅ NEW: grading countdown badge for at_grader
+  Widget gradingCountdownBadge(BuildContext context, Map<String, dynamic> r) {
+    final s = (r['status'] ?? '').toString();
+    if (s != 'at_grader') return const SizedBox.shrink();
+
+    final at = parseDate(r['at_grader_date']);
+    if (at == null) return const SizedBox.shrink();
+
+    int? expected = r['grading_expected_days'] as int?;
+    expected ??= int.tryParse((r['grading_expected_days'] ?? '').toString());
+    if (expected == null || expected <= 0) return const SizedBox.shrink();
+
+    final now = DateTime.now();
+    final atD = DateTime(at.year, at.month, at.day);
+    final today = DateTime(now.year, now.month, now.day);
+
+    final spent = today.difference(atD).inDays;
+    final left = expected - spent;
+
+    final bool overdue = left < 0;
+    final int abs = overdue ? -left : left;
+
+    final Color c =
+        overdue ? Colors.redAccent : (left <= 5 ? Colors.orange : Colors.green);
+
+    final String text = overdue ? '+$abs d' : '$abs d';
+
+    return Tooltip(
+      message: overdue
+          ? 'Overdue by $abs day(s)'
+          : '$abs day(s) remaining (expected: $expected)',
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: c.withOpacity(0.14),
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: c.withOpacity(0.35)),
+        ),
+        child: Text(
+          text,
+          style: TextStyle(
+            color: c,
+            fontWeight: FontWeight.w900,
+            fontSize: 12,
+          ),
+        ),
+      ),
+    );
+  }
+
   void resetSortedLines() {
     sortedLines = List<Map<String, dynamic>>.from(widget.lines);
 
@@ -176,7 +226,7 @@ extension _TbsLogic on _InventoryTableByStatusState {
         110,
         110,
         60,
-        130,
+        160, // 👈 status a bit wider because badge
         110,
         150,
       ];
@@ -191,7 +241,7 @@ extension _TbsLogic on _InventoryTableByStatusState {
       110,
       110,
       60,
-      130,
+      170, // 👈 status wider because badge
       if (widget.showUnitCosts) 110,
       if (widget.showUnitCosts) 120,
       if (widget.showEstimated) 120,
@@ -347,7 +397,7 @@ extension _TbsLogic on _InventoryTableByStatusState {
 
     final extra = availableCenterWidth - baseTotal;
 
-    const weights = <double>[0.6, 1.1, 3.6, 1.0, 1.2, 1.2, 0.6, 1.2, 1.0, 1.3];
+    const weights = <double>[0.6, 1.1, 3.6, 1.0, 1.2, 1.2, 0.6, 1.4, 1.0, 1.3];
     final wSum = weights.fold<double>(0, (s, w) => s + w);
 
     final out = List<double>.from(base);
@@ -443,23 +493,29 @@ extension _TbsLogic on _InventoryTableByStatusState {
       DataCell(Text(r['purchase_date']?.toString() ?? '')),
       DataCell(Text('$q')),
       DataCell(
-        _EditableStatusCell(
-          enabled: !widget.groupMode,
-          value: s,
-          statuses: _InventoryTableByStatusState.allStatuses
-              .where((x) => x != 'vault')
-              .toList(),
-          color: statusColor(context, s),
-
-          // ✅ NEW: widen status col (vault => fixed index 7)
-          onBeginEdit: () => beginEditColumn(7, minWidth: 220),
-          onEndEdit: () => endEditColumn(7),
-
-          onSaved: (val) async {
-            if (val != null && val.isNotEmpty && val != s) {
-              await widget.onInlineUpdate(r, 'status', val);
-            }
-          },
+        Row(
+          children: [
+            Expanded(
+              child: _EditableStatusCell(
+                enabled: !widget.groupMode,
+                value: s,
+                statuses: _InventoryTableByStatusState.allStatuses
+                    .where((x) => x != 'vault')
+                    .toList(),
+                color: statusColor(context, s),
+                // ✅ NEW: widen status col (vault => fixed index 7)
+                onBeginEdit: () => beginEditColumn(7, minWidth: 220),
+                onEndEdit: () => endEditColumn(7),
+                onSaved: (val) async {
+                  if (val != null && val.isNotEmpty && val != s) {
+                    await widget.onInlineUpdate(r, 'status', val);
+                  }
+                },
+              ),
+            ),
+            const SizedBox(width: 8),
+            gradingCountdownBadge(context, r),
+          ],
         ),
       ),
       DataCell(Text('${money(unit)} $currency')),
@@ -547,22 +603,30 @@ extension _TbsLogic on _InventoryTableByStatusState {
     addCell(DataCell(Text(r['purchase_date']?.toString() ?? '')));
     addCell(DataCell(Text('$q')));
 
-    // ✅ Status (auto-widen + restore)
+    // ✅ Status (auto-widen + restore) + badge
     final statusCol = col;
     addCell(
       DataCell(
-        _EditableStatusCell(
-          enabled: !widget.groupMode,
-          value: s,
-          statuses: _InventoryTableByStatusState.allStatuses.toList(),
-          color: statusColor(context, s),
-          onBeginEdit: () => beginEditColumn(statusCol, minWidth: 220),
-          onEndEdit: () => endEditColumn(statusCol),
-          onSaved: (val) async {
-            if (val != null && val.isNotEmpty && val != s) {
-              await widget.onInlineUpdate(r, 'status', val);
-            }
-          },
+        Row(
+          children: [
+            Expanded(
+              child: _EditableStatusCell(
+                enabled: !widget.groupMode,
+                value: s,
+                statuses: _InventoryTableByStatusState.allStatuses.toList(),
+                color: statusColor(context, s),
+                onBeginEdit: () => beginEditColumn(statusCol, minWidth: 220),
+                onEndEdit: () => endEditColumn(statusCol),
+                onSaved: (val) async {
+                  if (val != null && val.isNotEmpty && val != s) {
+                    await widget.onInlineUpdate(r, 'status', val);
+                  }
+                },
+              ),
+            ),
+            const SizedBox(width: 8),
+            gradingCountdownBadge(context, r),
+          ],
         ),
       ),
     );

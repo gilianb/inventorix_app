@@ -106,6 +106,12 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
   final _documentUrlCtrl = TextEditingController();
   final _unitCostCtrl = TextEditingController();
 
+  // ✅ NEW grading service + dates
+  List<Map<String, dynamic>> _gradingServices = const [];
+  int? _gradingServiceId; // item.grading_service_id
+  DateTime? _sentToGraderDate; // item.sent_to_grader_date
+  DateTime? _atGraderDate; // item.at_grader_date
+
   // Nouveaux contrôleurs (tête produit / item)
   String _newType = 'single'; // 'single' | 'sealed'
   final _productNameCtrl = TextEditingController();
@@ -185,6 +191,11 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
     _paymentTypeCtrl.text = (s['payment_type'] ?? '').toString();
     _buyerInfosCtrl.text = (s['buyer_infos'] ?? '').toString();
 
+    // ✅ NEW fields from sample (may exist if your view already exposes them)
+    _gradingServiceId = _asInt(s['grading_service_id']);
+    _sentToGraderDate = _parseDate(s['sent_to_grader_date']);
+    _atGraderDate = _parseDate(s['at_grader_date']);
+
     final preSaleCur =
         (s['sale_currency'] ?? s['currency'] ?? 'USD').toString();
     _saleCurrency = _coerceString(preSaleCur, saleCurrencies, 'USD');
@@ -192,6 +203,7 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
     await _loadRole();
     await _loadGames();
     await _loadChannels();
+    await _loadGradingServices();
     await _hydrateFromDb();
 
     if (mounted) setState(() {});
@@ -353,6 +365,49 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
     }
   }
 
+  // ✅ NEW: grading service list (org-scoped, active)
+  Future<void> _loadGradingServices() async {
+    try {
+      final orgId = (_sample['org_id']?.toString().isNotEmpty ?? false)
+          ? _sample['org_id'].toString()
+          : null;
+      if (orgId == null) return;
+
+      final raw = await _sb
+          .from('grading_service')
+          .select(
+              'id, code, label, expected_days, default_fee, sort_order, active')
+          .eq('org_id', orgId)
+          .eq('active', true)
+          .order('sort_order', ascending: true, nullsFirst: false)
+          .order('label', ascending: true);
+
+      final list = raw
+          .map<Map<String, dynamic>>((e) => Map<String, dynamic>.from(e as Map))
+          .toList();
+
+      // Ensure sample service exists in dropdown
+      final sampleGsId = _asInt(_sample['grading_service_id']);
+      if (sampleGsId != null && !list.any((x) => x['id'] == sampleGsId)) {
+        list.insert(0, {
+          'id': sampleGsId,
+          'code': '—',
+          'label': 'Service #$sampleGsId',
+          'expected_days': 30,
+          'default_fee': 0,
+        });
+      }
+
+      if (!mounted) return;
+      setState(() {
+        _gradingServices = list;
+        _gradingServiceId ??= sampleGsId;
+      });
+    } catch (_) {
+      // ignore
+    }
+  }
+
   int? _asInt(dynamic v) {
     if (v == null) return null;
     if (v is int) return v;
@@ -409,6 +464,11 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
       'type',
       'language',
       'game_id',
+
+      // ✅ NEW
+      'grading_service_id',
+      'sent_to_grader_date',
+      'at_grader_date',
     ];
 
     List<Map<String, dynamic>> rows = const [];
@@ -550,6 +610,20 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
             : _saleCurrency);
     _saleCurrency = _coerceString(resolved, saleCurrencies, _saleCurrency);
 
+    // ✅ NEW: grading fields hydrate
+    final maybeGs = firstNonNull('grading_service_id');
+    if (_gradingServiceId == null && maybeGs != null) {
+      _gradingServiceId = _asInt(maybeGs);
+    }
+    final maybeSent = firstNonNull('sent_to_grader_date');
+    if (_sentToGraderDate == null && maybeSent != null) {
+      _sentToGraderDate = _parseDate(maybeSent);
+    }
+    final maybeAt = firstNonNull('at_grader_date');
+    if (_atGraderDate == null && maybeAt != null) {
+      _atGraderDate = _parseDate(maybeAt);
+    }
+
     if (_productNameCtrl.text.trim().isEmpty) {
       try {
         final prod = await _sb
@@ -651,6 +725,19 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
     putText('item_location', _itemLocationCtrl);
     putText('tracking', _trackingCtrl);
 
+    // ✅ NEW: grading service + dates
+    final oldGs = _asInt(_sample['grading_service_id']);
+    if (oldGs != _gradingServiceId) {
+      m['grading_service_id'] = _gradingServiceId;
+    }
+    if (_changedDate('sent_to_grader_date', _sentToGraderDate)) {
+      m['sent_to_grader_date'] =
+          _sentToGraderDate?.toIso8601String().substring(0, 10);
+    }
+    if (_changedDate('at_grader_date', _atGraderDate)) {
+      m['at_grader_date'] = _atGraderDate?.toIso8601String().substring(0, 10);
+    }
+
     // ✅ channel via dropdown
     final oldChannelId = _asInt(_sample['channel_id']);
     if (oldChannelId != _selectedChannelId) {
@@ -703,6 +790,10 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
     final statusAfter = (_newStatus.isNotEmpty ? _newStatus : statusBefore);
     if (statusAfter != statusBefore) {
       m['status'] = statusAfter;
+
+      // UX: si user passe en sent_to_grader / at_grader et n'a pas mis de date,
+      // on laisse NULL -> le trigger côté DB la remplira.
+      // (On ne force pas ici pour rester non destructif.)
     }
 
     return m;
@@ -974,6 +1065,55 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
     if (picked != null) setState(() => _saleDate = picked);
   }
 
+  Future<void> _pickSentToGraderDate() async {
+    final now = DateTime.now();
+    final picked = await showDatePicker(
+      context: context,
+      firstDate: DateTime(now.year - 10),
+      lastDate: DateTime(now.year + 5),
+      initialDate: _sentToGraderDate ?? now,
+    );
+    if (picked != null) setState(() => _sentToGraderDate = picked);
+  }
+
+  Future<void> _pickAtGraderDate() async {
+    final now = DateTime.now();
+    final picked = await showDatePicker(
+      context: context,
+      firstDate: DateTime(now.year - 10),
+      lastDate: DateTime(now.year + 5),
+      initialDate: _atGraderDate ?? now,
+    );
+    if (picked != null) setState(() => _atGraderDate = picked);
+  }
+
+  Map<String, dynamic>? _selectedGsRow() {
+    if (_gradingServiceId == null) return null;
+    for (final r in _gradingServices) {
+      if ((r['id'] as int?) == _gradingServiceId) return r;
+    }
+    return null;
+  }
+
+  int? _selectedExpectedDays() {
+    final r = _selectedGsRow();
+    if (r == null) return null;
+    final v = r['expected_days'];
+    if (v is int) return v;
+    return int.tryParse(v?.toString() ?? '');
+  }
+
+  num? _selectedDefaultFee() {
+    final r = _selectedGsRow();
+    if (r == null) return null;
+    final v = r['default_fee'];
+    if (v is num) return v;
+    return num.tryParse(v?.toString() ?? '');
+  }
+
+  String _fmtDate(DateTime? d) =>
+      d == null ? '—' : d.toIso8601String().substring(0, 10);
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -1094,6 +1234,23 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
           final currentStatus =
               (_newStatus.isNotEmpty ? _newStatus : widget.status);
           final statusList = _statusListWithExtra(current: currentStatus);
+
+          final bool isSingle = _newType == 'single';
+          final int? expectedDays = _selectedExpectedDays();
+          final DateTime? baseAt =
+              _atGraderDate; // on base l'ETA sur at_grader_date
+          DateTime? expectedBack;
+          int? daysLeft;
+          if (isSingle &&
+              baseAt != null &&
+              expectedDays != null &&
+              expectedDays > 0) {
+            expectedBack = DateTime(baseAt.year, baseAt.month, baseAt.day)
+                .add(Duration(days: expectedDays));
+            final now = DateTime.now();
+            final today = DateTime(now.year, now.month, now.day);
+            daysLeft = expectedBack.difference(today).inDays;
+          }
 
           return Column(
             children: [
@@ -1257,6 +1414,55 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
                 child: ResponsiveWrapFields(
                   maxWidth: cons.maxWidth,
                   children: [
+                    if (isSingle)
+                      LabeledField(
+                        label: 'Grading service',
+                        child: DropdownButtonFormField<int?>(
+                          value: _gradingServiceId,
+                          isExpanded: true,
+                          items: [
+                            const DropdownMenuItem<int?>(
+                              value: null,
+                              child: Text('— None —'),
+                            ),
+                            ..._gradingServices.map((gs) {
+                              final id = gs['id'] as int;
+                              final label = (gs['label'] ?? '').toString();
+                              final code = (gs['code'] ?? '').toString();
+                              final days = gs['expected_days'];
+                              final fee = gs['default_fee'];
+                              final meta = [
+                                if (code.isNotEmpty) code,
+                                if (days != null) '${days}d',
+                                if (fee != null) '\$${fee.toString()}',
+                              ].join(' • ');
+                              return DropdownMenuItem<int?>(
+                                value: id,
+                                child: Text(
+                                  meta.isEmpty ? label : '$label ($meta)',
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              );
+                            }),
+                          ],
+                          onChanged: (v) {
+                            setState(() {
+                              _gradingServiceId = v;
+
+                              // UX: auto-fill fees only if field empty
+                              if (_gradingFeesCtrl.text.trim().isEmpty &&
+                                  v != null) {
+                                final df = _selectedDefaultFee();
+                                if (df != null) {
+                                  _gradingFeesCtrl.text = df.toString();
+                                }
+                              }
+                            });
+                          },
+                          decoration: const InputDecoration(
+                              hintText: 'Choose a service'),
+                        ),
+                      ),
                     LabeledField(
                       label: 'Grade ID',
                       child:
@@ -1276,6 +1482,107 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
                       child:
                           text(_itemLocationCtrl, hint: 'e.g.: Paris / Dubai'),
                     ),
+
+                    // ✅ NEW dates
+                    if (isSingle)
+                      LabeledField(
+                        label: 'Sent to grader date',
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: InkWell(
+                                onTap: _pickSentToGraderDate,
+                                borderRadius: BorderRadius.circular(12),
+                                child: InputDecorator(
+                                  decoration: const InputDecoration(
+                                      hintText: 'YYYY-MM-DD'),
+                                  child: Padding(
+                                    padding: const EdgeInsets.symmetric(
+                                        vertical: 10),
+                                    child: Text(_fmtDate(_sentToGraderDate)),
+                                  ),
+                                ),
+                              ),
+                            ),
+                            IconButton(
+                              tooltip: 'Clear date',
+                              onPressed: () =>
+                                  setState(() => _sentToGraderDate = null),
+                              icon: const Iconify(Mdi.close),
+                            ),
+                          ],
+                        ),
+                      ),
+                    if (isSingle)
+                      LabeledField(
+                        label: 'At grader date',
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: InkWell(
+                                onTap: _pickAtGraderDate,
+                                borderRadius: BorderRadius.circular(12),
+                                child: InputDecorator(
+                                  decoration: const InputDecoration(
+                                      hintText: 'YYYY-MM-DD'),
+                                  child: Padding(
+                                    padding: const EdgeInsets.symmetric(
+                                        vertical: 10),
+                                    child: Text(_fmtDate(_atGraderDate)),
+                                  ),
+                                ),
+                              ),
+                            ),
+                            IconButton(
+                              tooltip: 'Clear date',
+                              onPressed: () =>
+                                  setState(() => _atGraderDate = null),
+                              icon: const Iconify(Mdi.close),
+                            ),
+                          ],
+                        ),
+                      ),
+
+                    // ✅ NEW: ETA display (read-only)
+                    if (isSingle)
+                      LabeledField(
+                        label: 'Estimated grading time',
+                        child: InputDecorator(
+                          decoration: const InputDecoration(
+                            hintText: '—',
+                          ),
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 8),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  expectedBack == null
+                                      ? 'Set "At grader date" + service to get ETA.'
+                                      : 'Expected back: ${_fmtDate(expectedBack)}',
+                                  style: const TextStyle(
+                                      fontWeight: FontWeight.w800),
+                                ),
+                                const SizedBox(height: 6),
+                                if (expectedBack != null && daysLeft != null)
+                                  Text(
+                                    daysLeft < 0
+                                        ? 'Overdue: ${-daysLeft} day(s)'
+                                        : 'Remaining: $daysLeft day(s)',
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.w800,
+                                      color: daysLeft < 0
+                                          ? Colors.redAccent
+                                          : (daysLeft <= 5
+                                              ? Colors.orange
+                                              : Colors.green),
+                                    ),
+                                  ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
                   ],
                 ),
               ),
