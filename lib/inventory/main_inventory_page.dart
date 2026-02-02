@@ -146,6 +146,10 @@ class _MainInventoryPageState extends State<MainInventoryPage>
 
   // ======== A + C (pagination + grouped view) ========
   static const int _kChunk = 50;
+
+  // ✅ KPI pagination (avoid 50k truncation)
+  static const int _kKpiPageSize = 1000;
+
   InventoryListViewMode _viewMode = InventoryListViewMode.products;
 
   final Map<String, int> _visibleLineLimitByView = {};
@@ -650,6 +654,54 @@ class _MainInventoryPageState extends State<MainInventoryPage>
     return rows;
   }
 
+  // ✅ Build KPI query (shared) + stable order for pagination
+  PostgrestTransformBuilder<PostgrestList> _buildKpiQuery({
+    required String cols,
+    required List<String> statuses,
+    int? gameId,
+  }) {
+    var q = _sb
+        .from('item_masked')
+        // ✅ include id for stable pagination/order
+        .select('id, $cols')
+        .eq('org_id', widget.orgId)
+        .eq('type', _typeFilter)
+        .inFilter('status', statuses);
+
+    final after = _dateRangeStart();
+    if (_dateBase == 'purchase') {
+      if (after != null) {
+        final d = after.toIso8601String().split('T').first;
+        q = q.gte('purchase_date', d);
+      }
+    } else {
+      q = q.not('sale_date', 'is', null);
+      if (after != null) {
+        final d = after.toIso8601String().split('T').first;
+        q = q.gte('sale_date', d);
+      }
+    }
+
+    if (gameId != null) {
+      q = q.eq('game_id', gameId);
+    }
+
+    if ((_languageFilter ?? '').isNotEmpty) {
+      q = q.eq('language', _languageFilter as Object);
+    }
+
+    final bounds = _priceBounds();
+    final minPrice = bounds['min'];
+    final maxPrice = bounds['max'];
+    if (minPrice != null) q = q.gte('estimated_price', minPrice);
+    if (maxPrice != null) q = q.lte('estimated_price', maxPrice);
+
+    // ✅ stable order for paging
+    return q.order('id', ascending: true);
+  }
+
+// ✅ KPI pagination (robust against server max_rows caps)
+
   Future<List<Map<String, dynamic>>> _fetchItemsForKpis() async {
     List<String> statuses;
     if ((_statusFilter ?? '').isNotEmpty) {
@@ -669,7 +721,7 @@ class _MainInventoryPageState extends State<MainInventoryPage>
       if (canSeeCosts) 'grading_fees',
       'estimated_price',
       if (_perm.canSeeRevenue) 'sale_price',
-      if (_perm.canSeeRevenue) 'sale_currency', // ✅ MULTI-DEVISE
+      if (_perm.canSeeRevenue) 'sale_currency',
       'game_id',
       'org_id',
       'type',
@@ -679,51 +731,41 @@ class _MainInventoryPageState extends State<MainInventoryPage>
       'sale_date',
     ].join(', ');
 
-    var q = _sb
-        .from('item_masked')
-        .select(cols)
-        .eq('org_id', widget.orgId)
-        .eq('type', _typeFilter)
-        .inFilter('status', statuses);
-
-    final after = _dateRangeStart();
-    if (_dateBase == 'purchase') {
-      if (after != null) {
-        final d = after.toIso8601String().split('T').first;
-        q = q.gte('purchase_date', d);
-      }
-    } else {
-      q = q.not('sale_date', 'is', null);
-      if (after != null) {
-        final d = after.toIso8601String().split('T').first;
-        q = q.gte('sale_date', d);
-      }
-    }
-
+    int? gameId;
     if ((_gameFilter ?? '').isNotEmpty) {
       final row = await _sb
           .from('games')
           .select('id,label')
           .eq('label', _gameFilter!)
           .maybeSingle();
-      final gid = (row?['id'] as int?);
-      if (gid != null) q = q.eq('game_id', gid);
+      gameId = (row?['id'] as int?);
     }
 
-    if ((_languageFilter ?? '').isNotEmpty) {
-      q = q.eq('language', _languageFilter as Object);
+    final out = <Map<String, dynamic>>[];
+
+    int offset = 0;
+    while (true) {
+      final q = _buildKpiQuery(cols: cols, statuses: statuses, gameId: gameId);
+
+      final List<dynamic> raw =
+          await q.range(offset, offset + _kKpiPageSize - 1);
+
+      if (raw.isEmpty) break;
+
+      final chunk = raw
+          .map<Map<String, dynamic>>((e) => Map<String, dynamic>.from(e as Map))
+          .toList(growable: false);
+
+      out.addAll(chunk);
+
+      // ✅ increment by what we actually received (handles server caps)
+      offset += chunk.length;
+
+      // Optional safety against infinite loops if something is off
+      if (chunk.isEmpty) break;
     }
 
-    final bounds = _priceBounds();
-    final minPrice = bounds['min'];
-    final maxPrice = bounds['max'];
-    if (minPrice != null) q = q.gte('estimated_price', minPrice);
-    if (maxPrice != null) q = q.lte('estimated_price', maxPrice);
-
-    final List<dynamic> raw = await q.limit(50000);
-    return raw
-        .map<Map<String, dynamic>>((e) => Map<String, dynamic>.from(e as Map))
-        .toList();
+    return out;
   }
 
   List<Map<String, dynamic>> _explodeLines({String? overrideFilter}) {
