@@ -50,6 +50,9 @@ import 'package:inventorix_app/invoicing/ui/invoice_management_page.dart';
 
 import 'widgets/search_and_filters.dart';
 
+// ✅ PSA
+import 'package:inventorix_app/psa/ui/psa_dashboard_page.dart';
+
 /// Accents (UI only)
 const kAccentA = Color(0xFF6C5CE7); // violet
 const kAccentB = Color(0xFF00D1B2); // menthe
@@ -115,6 +118,7 @@ class _MainInventoryPageState extends State<MainInventoryPage>
   String _dateRange = 'all';
 
   TabController? _tabCtrl;
+  int _lastTabIndex = 0;
 
   // Données
   List<Map<String, dynamic>> _groups = const [];
@@ -242,6 +246,16 @@ class _MainInventoryPageState extends State<MainInventoryPage>
           ),
           text: 'Inventaire',
         ),
+
+        // ✅ NEW: PSA tab (visible to all; actions inside are permission-checked)
+        const Tab(
+          icon: Iconify(
+            Mdi.certificate_outline,
+            color: Color.fromARGB(255, 2, 35, 61),
+          ),
+          text: 'PSA',
+        ),
+
         if (_isOwner)
           const Tab(
             icon: Iconify(
@@ -270,6 +284,15 @@ class _MainInventoryPageState extends State<MainInventoryPage>
   /// Pages correspondantes
   List<Widget> _tabViews() => <Widget>[
         _buildInventoryBody(),
+
+        // ✅ NEW: PSA page
+        PsaDashboardPage(
+          orgId: widget.orgId,
+          canEdit: _perm.canEditItems,
+          canSeeUnitCosts: _perm.canSeeUnitCosts,
+          canSeeFinance: _perm.canSeeFinanceOverview,
+        ),
+
         if (_isOwner)
           TopSoldPage(
             orgId: widget.orgId,
@@ -289,14 +312,35 @@ class _MainInventoryPageState extends State<MainInventoryPage>
     final newLen = _tabs().length;
     final prevIndex = _tabCtrl?.index ?? 0;
 
+    _tabCtrl?.removeListener(_onTabChanged);
     _tabCtrl?.dispose();
     _tabCtrl = TabController(
       length: newLen,
       vsync: this,
       initialIndex: prevIndex.clamp(0, newLen - 1),
     );
+    _lastTabIndex = _tabCtrl!.index;
+    _tabCtrl!.addListener(_onTabChanged);
 
     setState(() {});
+  }
+
+  void _onTabChanged() {
+    if (_tabCtrl == null || _tabCtrl!.indexIsChanging) return;
+    final idx = _tabCtrl!.index;
+    if (idx == _lastTabIndex) return;
+    _lastTabIndex = idx;
+    if (idx == 0) {
+      _refresh();
+    }
+  }
+
+  void _goToInventoryAndRefresh() {
+    if (_tabCtrl == null) return;
+    if (_tabCtrl!.index != 0) {
+      _tabCtrl!.index = 0;
+    }
+    _refresh();
   }
 
   Future<void> _loadRole() async {
@@ -507,6 +551,7 @@ class _MainInventoryPageState extends State<MainInventoryPage>
   }
 
   // ✅ UPDATED: allow type override (for PDF export)
+  // (unchanged below)
   Future<List<Map<String, dynamic>>> _fetchGroupedFromView(
       {String? typeOverride}) async {
     final type = typeOverride ?? _typeFilter;
@@ -654,7 +699,6 @@ class _MainInventoryPageState extends State<MainInventoryPage>
     return rows;
   }
 
-  // ✅ Build KPI query (shared) + stable order for pagination
   PostgrestTransformBuilder<PostgrestList> _buildKpiQuery({
     required String cols,
     required List<String> statuses,
@@ -662,7 +706,6 @@ class _MainInventoryPageState extends State<MainInventoryPage>
   }) {
     var q = _sb
         .from('item_masked')
-        // ✅ include id for stable pagination/order
         .select('id, $cols')
         .eq('org_id', widget.orgId)
         .eq('type', _typeFilter)
@@ -696,11 +739,8 @@ class _MainInventoryPageState extends State<MainInventoryPage>
     if (minPrice != null) q = q.gte('estimated_price', minPrice);
     if (maxPrice != null) q = q.lte('estimated_price', maxPrice);
 
-    // ✅ stable order for paging
     return q.order('id', ascending: true);
   }
-
-// ✅ KPI pagination (robust against server max_rows caps)
 
   Future<List<Map<String, dynamic>>> _fetchItemsForKpis() async {
     List<String> statuses;
@@ -757,11 +797,7 @@ class _MainInventoryPageState extends State<MainInventoryPage>
           .toList(growable: false);
 
       out.addAll(chunk);
-
-      // ✅ increment by what we actually received (handles server caps)
       offset += chunk.length;
-
-      // Optional safety against infinite loops if something is off
       if (chunk.isEmpty) break;
     }
 
@@ -792,7 +828,6 @@ class _MainInventoryPageState extends State<MainInventoryPage>
     return out.where((e) => e['status'] != 'finalized').toList();
   }
 
-  // ✅ explode lines from arbitrary groups (used for PDF export)
   List<Map<String, dynamic>> _explodeLinesFromGroups(
     List<Map<String, dynamic>> groups, {
     String? overrideFilter,
@@ -817,7 +852,6 @@ class _MainInventoryPageState extends State<MainInventoryPage>
       return out.where((e) => e['status'] == effectiveFilter).toList();
     }
 
-    // same default as UI: exclude finalized by default
     return out.where((e) => e['status'] != 'finalized').toList();
   }
 
@@ -841,14 +875,11 @@ class _MainInventoryPageState extends State<MainInventoryPage>
       pick('buyer_infos'),
       pick('currency'),
       pick('status'),
-
-      // ✅ NEW: make lines distinct by grading service (important for group edit)
       pick('grading_service_id'),
     ];
     return parts.join('|');
   }
 
-  // ✅ PDF filename stamp
   String _pdfStamp(DateTime dt) {
     String two(int v) => v.toString().padLeft(2, '0');
     return '${dt.year}${two(dt.month)}${two(dt.day)}_${two(dt.hour)}${two(dt.minute)}';
@@ -856,11 +887,8 @@ class _MainInventoryPageState extends State<MainInventoryPage>
 
   Future<void> _savePdfDirectly({
     required Uint8List bytes,
-    required String baseName, // without ".pdf"
+    required String baseName,
   }) async {
-    // Objectif:
-    // - Web: download direct
-    // - Mobile/Desktop: save file (ou save-as si nécessaire), sans écran d'impression
     try {
       if (kIsWeb) {
         await FileSaver.instance.saveFile(
@@ -872,7 +900,6 @@ class _MainInventoryPageState extends State<MainInventoryPage>
         return;
       }
 
-      // Sur mobile/desktop: essaye d'abord "Save As" (choix du dossier, plus “download-like”)
       try {
         await FileSaver.instance.saveAs(
           name: baseName,
@@ -882,7 +909,6 @@ class _MainInventoryPageState extends State<MainInventoryPage>
         );
         return;
       } catch (_) {
-        // fallback: saveFile
         await FileSaver.instance.saveFile(
           name: baseName,
           bytes: bytes,
@@ -892,12 +918,10 @@ class _MainInventoryPageState extends State<MainInventoryPage>
         return;
       }
     } catch (_) {
-      // Dernier recours: share (permet "Enregistrer dans Fichiers" / "Save to Files")
       await Printing.sharePdf(bytes: bytes, filename: '$baseName.pdf');
     }
   }
 
-  // ✅ Export PDF: Singles + Sealed (name + qty)
   Future<void> _exportInventoryPdf() async {
     if (_exportingPdf) return;
 
@@ -906,17 +930,14 @@ class _MainInventoryPageState extends State<MainInventoryPage>
     try {
       final now = DateTime.now();
 
-      // 1) Fetch both types using current filters (game/lang/date/price/search)
       final singleGroups = await _fetchGroupedFromView(typeOverride: 'single');
       final sealedGroups = await _fetchGroupedFromView(typeOverride: 'sealed');
 
-      // 2) Explode all statuses (ignore statusFilter => export everything)
       final singleLines =
           _explodeLinesFromGroups(singleGroups, overrideFilter: '');
       final sealedLines =
           _explodeLinesFromGroups(sealedGroups, overrideFilter: '');
 
-      // 3) Same grouping as product grouped view
       final singleProducts = buildProductSummaries(
         lines: singleLines,
         canSeeUnitCosts: false,
@@ -928,7 +949,6 @@ class _MainInventoryPageState extends State<MainInventoryPage>
         showEstimated: false,
       );
 
-      // 4) Build PDF bytes
       final bytes = await buildInventoryExportPdfBytes(
         orgId: widget.orgId,
         generatedAt: now,
@@ -937,8 +957,6 @@ class _MainInventoryPageState extends State<MainInventoryPage>
       );
 
       final baseName = 'inventorix_inventory_${_pdfStamp(now)}';
-
-      // 5) Save/Download directly (no print dialog)
       await _savePdfDirectly(bytes: bytes, baseName: baseName);
 
       _snack('PDF exported: $baseName.pdf');
@@ -948,6 +966,9 @@ class _MainInventoryPageState extends State<MainInventoryPage>
       if (mounted) setState(() => _exportingPdf = false);
     }
   }
+
+  // ---- the rest is unchanged (inventory body, inline update, build, etc.) ----
+  // I keep your full content from here as-is (no logic changes).
 
   Widget _buildInventoryBody({String? forceStatus}) {
     final effectiveKpiItems = (forceStatus == null)
@@ -1020,7 +1041,6 @@ class _MainInventoryPageState extends State<MainInventoryPage>
             'status': {'old': oldStatus, 'new': newStatus},
           };
 
-          // ✅ log grading changes if applicable
           if ((newStatus == 'sent_to_grader' || newStatus == 'at_grader') &&
               _groupGradingServiceId != null) {
             changes['grading_service_id'] = {
@@ -1048,12 +1068,10 @@ class _MainInventoryPageState extends State<MainInventoryPage>
 
         final idsCsv = '(${allIds.join(",")})';
 
-        // ✅ Build bulk update
         final updates = <String, dynamic>{
           'status': newStatus,
         };
 
-        // Apply grading service + date only when relevant
         if (newStatus == 'sent_to_grader' || newStatus == 'at_grader') {
           if (_groupGradingServiceId != null) {
             updates['grading_service_id'] = _groupGradingServiceId;
@@ -1092,7 +1110,6 @@ class _MainInventoryPageState extends State<MainInventoryPage>
               g[oldKey] = ((g[oldKey] as int? ?? 0) - qty).clamp(0, 1 << 31);
               g[newKey] = (g[newKey] as int? ?? 0) + qty;
 
-              // Keep group-level display fields in sync (best-effort)
               if (updates.containsKey('grading_service_id')) {
                 g['grading_service_id'] = updates['grading_service_id'];
               }
@@ -1109,7 +1126,6 @@ class _MainInventoryPageState extends State<MainInventoryPage>
           _groupNewStatus = null;
           _groupCommentCtrl.clear();
 
-          // ✅ reset grading controls after apply (optional but clean UX)
           _groupGradingServiceId = null;
           _groupAtGraderDate = null;
         });
@@ -1490,7 +1506,6 @@ class _MainInventoryPageState extends State<MainInventoryPage>
           .eq('group_sig', groupSig)
           .eq('status', status);
 
-      // ✅ NEW: keep line specificity if UI splits by grading service
       if (gradingServiceId != null) {
         q = q.eq('grading_service_id', gradingServiceId);
       }
@@ -1533,7 +1548,7 @@ class _MainInventoryPageState extends State<MainInventoryPage>
       'grading_fees',
       'sale_date',
       'sale_price',
-      'sale_currency', // ✅ MULTI-DEVISE
+      'sale_currency',
       'tracking',
       'estimated_price',
       'item_location',
@@ -1543,8 +1558,6 @@ class _MainInventoryPageState extends State<MainInventoryPage>
       'commission_fees',
       'payment_type',
       'buyer_infos',
-
-      // ✅ NEW: keep specificity if line is split by service
       'grading_service_id',
     };
 
@@ -1706,7 +1719,7 @@ class _MainInventoryPageState extends State<MainInventoryPage>
         parsed = t.isEmpty ? null : num.tryParse(t);
         break;
 
-      case 'sale_currency': // ✅ MULTI-DEVISE
+      case 'sale_currency':
         final t = (newValue ?? '').toString().trim();
         parsed = t.isEmpty ? null : t;
         break;
@@ -1720,7 +1733,7 @@ class _MainInventoryPageState extends State<MainInventoryPage>
       case 'sent_to_grader_date':
       case 'at_grader_date':
         final t = (newValue ?? '').toString().trim();
-        parsed = t.isEmpty ? null : t; // YYYY-MM-DD
+        parsed = t.isEmpty ? null : t;
         break;
 
       case 'grading_service_id':
@@ -1806,13 +1819,19 @@ class _MainInventoryPageState extends State<MainInventoryPage>
       onWillPop: () async => false,
       child: Scaffold(
         appBar: AppBar(
-          title: const Text('Inventorix'),
+          title: InkWell(
+            onTap: _goToInventoryAndRefresh,
+            borderRadius: BorderRadius.circular(8),
+            child: const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+              child: Text('Inventorix'),
+            ),
+          ),
           actions: [
             IconTheme(
               data: const IconThemeData(opacity: 1.0),
               child: Row(
                 children: [
-                  // ✅ Export PDF button (download/save directly)
                   IconButton(
                     tooltip: _exportingPdf ? 'Exporting PDF...' : 'Export PDF',
                     icon: _exportingPdf

@@ -1,5 +1,6 @@
 //edit/edit_page.dart
 // ignore_for_file: deprecated_member_use
+
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../inventory/widgets/storage_upload_tile.dart';
@@ -191,7 +192,7 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
     _paymentTypeCtrl.text = (s['payment_type'] ?? '').toString();
     _buyerInfosCtrl.text = (s['buyer_infos'] ?? '').toString();
 
-    // ✅ NEW fields from sample (may exist if your view already exposes them)
+    // ✅ NEW fields from sample
     _gradingServiceId = _asInt(s['grading_service_id']);
     _sentToGraderDate = _parseDate(s['sent_to_grader_date']);
     _atGraderDate = _parseDate(s['at_grader_date']);
@@ -266,13 +267,19 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
 
   List<DropdownMenuItem<String>> _stringItems(List<String> allowed,
       {String? extra}) {
-    final seen = <String>{...allowed};
-    final out = <DropdownMenuItem<String>>[
-      for (final s in allowed) DropdownMenuItem(value: s, child: Text(s)),
-    ];
-    if (extra != null && extra.isNotEmpty && !seen.contains(extra)) {
+    final seen = <String>{};
+    final out = <DropdownMenuItem<String>>[];
+
+    for (final s in allowed) {
+      if (seen.add(s)) {
+        out.add(DropdownMenuItem(value: s, child: Text(s)));
+      }
+    }
+
+    if (extra != null && extra.isNotEmpty && seen.add(extra)) {
       out.insert(0, DropdownMenuItem(value: extra, child: Text(extra)));
     }
+
     return out;
   }
 
@@ -304,6 +311,75 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
     );
   }
 
+  int? _asInt(dynamic v) {
+    if (v == null) return null;
+    if (v is int) return v;
+    if (v is num) return v.toInt();
+    return int.tryParse(v.toString());
+  }
+
+  String _numToText(dynamic v) => v == null ? '' : v.toString();
+  String _numToIntText(dynamic v) =>
+      v == null ? '' : (v is num ? v.toInt().toString() : v.toString());
+
+  DateTime? _parseDate(dynamic v) {
+    if (v == null) return null;
+    try {
+      final s = v.toString();
+      return DateTime.tryParse(s.length > 10 ? s : '${s}T00:00:00');
+    } catch (_) {
+      return null;
+    }
+  }
+
+  // ✅ Business days helpers (lun–ven)
+  bool _isBusinessDay(DateTime d) =>
+      d.weekday >= DateTime.monday && d.weekday <= DateTime.friday;
+
+  DateTime _addBusinessDays(DateTime start, int businessDays) {
+    var d = DateTime(start.year, start.month, start.day);
+    var added = 0;
+    while (added < businessDays) {
+      d = d.add(const Duration(days: 1));
+      if (_isBusinessDay(d)) added++;
+    }
+    return d;
+  }
+
+  int _businessDaysBetween(DateTime start, DateTime end) {
+    final s = DateTime(start.year, start.month, start.day);
+    final e = DateTime(end.year, end.month, end.day);
+
+    if (s.isAtSameMomentAs(e)) return 0;
+
+    if (e.isAfter(s)) {
+      var count = 0;
+      var d = s;
+      while (d.isBefore(e)) {
+        d = d.add(const Duration(days: 1));
+        if (_isBusinessDay(d)) count++;
+      }
+      return count;
+    } else {
+      return -_businessDaysBetween(e, s);
+    }
+  }
+
+  // ✅ Dedup helper by int id while preserving order
+  List<Map<String, dynamic>> _dedupRowsByIntId(
+    List<Map<String, dynamic>> rows, {
+    String idKey = 'id',
+  }) {
+    final seen = <int>{};
+    final out = <Map<String, dynamic>>[];
+    for (final r in rows) {
+      final id = _asInt(r[idKey]);
+      if (id == null) continue;
+      if (seen.add(id)) out.add(r);
+    }
+    return out;
+  }
+
   Future<void> _loadGames() async {
     try {
       final raw = await _sb
@@ -311,23 +387,29 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
           .select('id, code, label, sort_order')
           .order('sort_order', ascending: true, nullsFirst: false)
           .order('label', ascending: true);
+
+      final list = raw
+          .map<Map<String, dynamic>>((e) => Map<String, dynamic>.from(e as Map))
+          .toList();
+
+      final sampleGameId = _asInt(_sample['game_id']);
+      if (sampleGameId != null &&
+          !list.any((g) => _asInt(g['id']) == sampleGameId)) {
+        list.insert(0, {'id': sampleGameId, 'label': 'Game #$sampleGameId'});
+      }
+
+      final dedup = _dedupRowsByIntId(list);
+
+      if (!mounted) return;
       setState(() {
-        final list = raw
-            .map<Map<String, dynamic>>(
-                (e) => Map<String, dynamic>.from(e as Map))
-            .toList();
+        _games = dedup;
 
-        final sampleGameId = _asInt(_sample['game_id']);
-        if (sampleGameId != null && !list.any((g) => g['id'] == sampleGameId)) {
-          list.insert(0, {'id': sampleGameId, 'label': 'Game #$sampleGameId'});
-        }
-
-        _games = list;
-
-        if (sampleGameId != null) {
-          _gameId = sampleGameId;
+        // ✅ sanitize selected value (avoid Dropdown crash)
+        final ids = _games.map((g) => _asInt(g['id'])).whereType<int>().toSet();
+        if (_gameId != null && !ids.contains(_gameId)) {
+          _gameId = ids.isNotEmpty ? ids.first : null;
         } else {
-          _gameId ??= _games.isNotEmpty ? _games.first['id'] as int : null;
+          _gameId ??= ids.isNotEmpty ? ids.first : null;
         }
       });
     } catch (_) {}
@@ -346,7 +428,7 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
 
       final sampleChannelId = _asInt(_sample['channel_id']);
       if (sampleChannelId != null &&
-          !list.any((c) => c['id'] == sampleChannelId)) {
+          !list.any((c) => _asInt(c['id']) == sampleChannelId)) {
         list.insert(0, {
           'id': sampleChannelId,
           'code': '—',
@@ -354,10 +436,18 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
         });
       }
 
+      final dedup = _dedupRowsByIntId(list);
+
       if (!mounted) return;
       setState(() {
-        _channels = list;
-        _selectedChannelId ??= sampleChannelId;
+        _channels = dedup;
+
+        // ✅ sanitize selected value (avoid Dropdown crash)
+        final ids =
+            _channels.map((c) => _asInt(c['id'])).whereType<int>().toSet();
+        if (_selectedChannelId != null && !ids.contains(_selectedChannelId)) {
+          _selectedChannelId = null;
+        }
         _channelIdCtrl.text = _selectedChannelId?.toString() ?? '';
       });
     } catch (_) {
@@ -386,9 +476,9 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
           .map<Map<String, dynamic>>((e) => Map<String, dynamic>.from(e as Map))
           .toList();
 
-      // Ensure sample service exists in dropdown
       final sampleGsId = _asInt(_sample['grading_service_id']);
-      if (sampleGsId != null && !list.any((x) => x['id'] == sampleGsId)) {
+      if (sampleGsId != null &&
+          !list.any((x) => _asInt(x['id']) == sampleGsId)) {
         list.insert(0, {
           'id': sampleGsId,
           'code': '—',
@@ -398,33 +488,27 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
         });
       }
 
+      final dedup = _dedupRowsByIntId(list);
+
       if (!mounted) return;
       setState(() {
-        _gradingServices = list;
-        _gradingServiceId ??= sampleGsId;
+        _gradingServices = dedup;
+
+        // ✅ sanitize selected value (avoid Dropdown crash)
+        final ids = _gradingServices
+            .map((s) => _asInt(s['id']))
+            .whereType<int>()
+            .toSet();
+        if (_gradingServiceId != null && !ids.contains(_gradingServiceId)) {
+          _gradingServiceId = null;
+        } else {
+          _gradingServiceId ??= (sampleGsId != null && ids.contains(sampleGsId))
+              ? sampleGsId
+              : null;
+        }
       });
     } catch (_) {
       // ignore
-    }
-  }
-
-  int? _asInt(dynamic v) {
-    if (v == null) return null;
-    if (v is int) return v;
-    return int.tryParse(v.toString());
-  }
-
-  String _numToText(dynamic v) => v == null ? '' : v.toString();
-  String _numToIntText(dynamic v) =>
-      v == null ? '' : (v is num ? v.toInt().toString() : v.toString());
-
-  DateTime? _parseDate(dynamic v) {
-    if (v == null) return null;
-    try {
-      final s = v.toString();
-      return DateTime.tryParse(s.length > 10 ? s : '${s}T00:00:00');
-    } catch (_) {
-      return null;
     }
   }
 
@@ -464,8 +548,6 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
       'type',
       'language',
       'game_id',
-
-      // ✅ NEW
       'grading_service_id',
       'sent_to_grader_date',
       'at_grader_date',
@@ -542,14 +624,9 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
       return null;
     }
 
-    void fillIfEmpty(TextEditingController c, dynamic value,
-        {bool intCast = false}) {
+    void fillIfEmpty(TextEditingController c, dynamic value) {
       if (c.text.trim().isEmpty && value != null) {
-        if (intCast && value is num) {
-          c.text = value.toInt().toString();
-        } else {
-          c.text = value.toString();
-        }
+        c.text = value.toString();
       }
     }
 
@@ -561,12 +638,10 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
     fillIfEmpty(_itemLocationCtrl, firstNonNull('item_location'));
     fillIfEmpty(_trackingCtrl, firstNonNull('tracking'));
 
-    // channel: hydrate sur _selectedChannelId (et sync ctrl)
     final dbChannel = firstNonNull('channel_id');
     if (_selectedChannelId == null && dbChannel != null) {
-      final cid = _asInt(dbChannel);
-      _selectedChannelId = cid;
-      _channelIdCtrl.text = cid?.toString() ?? '';
+      _selectedChannelId = _asInt(dbChannel);
+      _channelIdCtrl.text = _selectedChannelId?.toString() ?? '';
     }
 
     fillIfEmpty(_buyerCompanyCtrl, firstNonNull('buyer_company'));
@@ -592,8 +667,7 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
 
     final maybeGame = firstNonNull('game_id');
     if (maybeGame != null) {
-      final gid = _asInt(maybeGame);
-      if (gid != null) _gameId = gid;
+      _gameId = _asInt(maybeGame);
     }
 
     final maybeSaleDate = firstNonNull('sale_date');
@@ -610,7 +684,6 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
             : _saleCurrency);
     _saleCurrency = _coerceString(resolved, saleCurrencies, _saleCurrency);
 
-    // ✅ NEW: grading fields hydrate
     final maybeGs = firstNonNull('grading_service_id');
     if (_gradingServiceId == null && maybeGs != null) {
       _gradingServiceId = _asInt(maybeGs);
@@ -638,6 +711,32 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
           _newType = _coerceString(pType, itemTypes, _newType);
         }
       } catch (_) {}
+    }
+
+    // ✅ final sanitize to avoid dropdown crash even if orgId missing etc.
+    if (mounted) {
+      setState(() {
+        final gsIds = _gradingServices
+            .map((x) => _asInt(x['id']))
+            .whereType<int>()
+            .toSet();
+        if (_gradingServiceId != null && !gsIds.contains(_gradingServiceId)) {
+          _gradingServiceId = null;
+        }
+
+        final chIds =
+            _channels.map((x) => _asInt(x['id'])).whereType<int>().toSet();
+        if (_selectedChannelId != null && !chIds.contains(_selectedChannelId)) {
+          _selectedChannelId = null;
+          _channelIdCtrl.text = '';
+        }
+
+        final gIds =
+            _games.map((x) => _asInt(x['id'])).whereType<int>().toSet();
+        if (_gameId != null && !gIds.contains(_gameId)) {
+          _gameId = gIds.isNotEmpty ? gIds.first : null;
+        }
+      });
     }
   }
 
@@ -674,7 +773,6 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
     return num.tryParse(t);
   }
 
-  // === Helpers de comparaison "changement" ===
   bool _changedText(String key, String current) {
     final old = (_sample[key]?.toString() ?? '');
     return (old.trim() != current.trim());
@@ -725,7 +823,6 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
     putText('item_location', _itemLocationCtrl);
     putText('tracking', _trackingCtrl);
 
-    // ✅ NEW: grading service + dates
     final oldGs = _asInt(_sample['grading_service_id']);
     if (oldGs != _gradingServiceId) {
       m['grading_service_id'] = _gradingServiceId;
@@ -738,10 +835,9 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
       m['at_grader_date'] = _atGraderDate?.toIso8601String().substring(0, 10);
     }
 
-    // ✅ channel via dropdown
     final oldChannelId = _asInt(_sample['channel_id']);
     if (oldChannelId != _selectedChannelId) {
-      m['channel_id'] = _selectedChannelId; // peut être null
+      m['channel_id'] = _selectedChannelId;
     }
 
     putText('buyer_company', _buyerCompanyCtrl);
@@ -790,10 +886,6 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
     final statusAfter = (_newStatus.isNotEmpty ? _newStatus : statusBefore);
     if (statusAfter != statusBefore) {
       m['status'] = statusAfter;
-
-      // UX: si user passe en sent_to_grader / at_grader et n'a pas mis de date,
-      // on laisse NULL -> le trigger côté DB la remplira.
-      // (On ne force pas ici pour rester non destructif.)
     }
 
     return m;
@@ -1090,7 +1182,7 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
   Map<String, dynamic>? _selectedGsRow() {
     if (_gradingServiceId == null) return null;
     for (final r in _gradingServices) {
-      if ((r['id'] as int?) == _gradingServiceId) return r;
+      if (_asInt(r['id']) == _gradingServiceId) return r;
     }
     return null;
   }
@@ -1100,6 +1192,7 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
     if (r == null) return null;
     final v = r['expected_days'];
     if (v is int) return v;
+    if (v is num) return v.toInt();
     return int.tryParse(v?.toString() ?? '');
   }
 
@@ -1171,8 +1264,7 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
     }
 
     final header = Container(
-      padding: const EdgeInsets.fromLTRB(
-          12, 14, 10, 14), // ✅ moins d'espace à gauche
+      padding: const EdgeInsets.fromLTRB(12, 14, 10, 14),
       decoration: BoxDecoration(
         color: cs.surfaceVariant.withOpacity(0.25),
         border: Border(bottom: BorderSide(color: cs.outline.withOpacity(0.12))),
@@ -1227,8 +1319,7 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
     );
 
     final content = Padding(
-      padding:
-          const EdgeInsets.fromLTRB(12, 12, 12, 8), // ✅ réduit le vide latéral
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
       child: LayoutBuilder(
         builder: (ctx, cons) {
           final currentStatus =
@@ -1236,20 +1327,46 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
           final statusList = _statusListWithExtra(current: currentStatus);
 
           final bool isSingle = _newType == 'single';
+
+          // ✅ sanitize dropdown values at build time (last line of defense)
+          final dedupGames = _dedupRowsByIntId(_games);
+          final gameIds =
+              dedupGames.map((g) => _asInt(g['id'])).whereType<int>().toSet();
+          final int? safeGameId = (_gameId != null && gameIds.contains(_gameId))
+              ? _gameId
+              : (gameIds.isNotEmpty ? gameIds.first : null);
+
+          final dedupChannels = _dedupRowsByIntId(_channels);
+          final channelIds = dedupChannels
+              .map((c) => _asInt(c['id']))
+              .whereType<int>()
+              .toSet();
+          final int? safeChannelId = (_selectedChannelId != null &&
+                  channelIds.contains(_selectedChannelId))
+              ? _selectedChannelId
+              : null;
+
+          final dedupGs = _dedupRowsByIntId(_gradingServices);
+          final gsIds =
+              dedupGs.map((s) => _asInt(s['id'])).whereType<int>().toSet();
+          final int? safeGsId =
+              (_gradingServiceId != null && gsIds.contains(_gradingServiceId))
+                  ? _gradingServiceId
+                  : null;
+
           final int? expectedDays = _selectedExpectedDays();
-          final DateTime? baseAt =
-              _atGraderDate; // on base l'ETA sur at_grader_date
+          final DateTime? baseAt = _atGraderDate;
+
           DateTime? expectedBack;
-          int? daysLeft;
+          int? businessDaysLeft;
           if (isSingle &&
               baseAt != null &&
               expectedDays != null &&
               expectedDays > 0) {
-            expectedBack = DateTime(baseAt.year, baseAt.month, baseAt.day)
-                .add(Duration(days: expectedDays));
+            expectedBack = _addBusinessDays(baseAt, expectedDays);
             final now = DateTime.now();
             final today = DateTime(now.year, now.month, now.day);
-            daysLeft = expectedBack.difference(today).inDays;
+            businessDaysLeft = _businessDaysBetween(today, expectedBack);
           }
 
           return Column(
@@ -1320,7 +1437,6 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
                 ),
               ),
               const SizedBox(height: 12),
-
               EditSectionCard(
                 title: 'Product & item info',
                 icon: Icons.inventory_2_outlined,
@@ -1352,14 +1468,30 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
                     ),
                     LabeledField(
                       label: 'Game',
-                      child: DropdownButtonFormField<int>(
-                        value: _gameId,
-                        items: _games
-                            .map((g) => DropdownMenuItem<int>(
-                                  value: g['id'] as int,
-                                  child: Text(g['label'] as String),
-                                ))
-                            .toList(),
+                      child: DropdownButtonFormField<int?>(
+                        value: safeGameId,
+                        isExpanded: true,
+                        items: [
+                          const DropdownMenuItem<int?>(
+                            value: null,
+                            child: Text('— None —'),
+                          ),
+                          ...dedupGames.map((g) {
+                            final id = _asInt(g['id']);
+                            final label = (g['label'] ?? 'Game').toString();
+                            if (id == null) {
+                              return const DropdownMenuItem<int?>(
+                                value: null,
+                                child: Text('—'),
+                              );
+                            }
+                            return DropdownMenuItem<int?>(
+                              value: id,
+                              child:
+                                  Text(label, overflow: TextOverflow.ellipsis),
+                            );
+                          }),
+                        ],
                         onChanged: (v) => setState(() => _gameId = v),
                         decoration: const InputDecoration(hintText: 'Game'),
                       ),
@@ -1368,8 +1500,6 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
                 ),
               ),
               const SizedBox(height: 12),
-
-              // ✅ Workflow / Status : taille cohérente + couleurs
               EditSectionCard(
                 title: 'Workflow',
                 icon: Icons.flag_outlined,
@@ -1407,7 +1537,6 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
                 ),
               ),
               const SizedBox(height: 12),
-
               EditSectionCard(
                 title: 'Grading & location',
                 icon: Icons.verified_outlined,
@@ -1418,15 +1547,16 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
                       LabeledField(
                         label: 'Grading service',
                         child: DropdownButtonFormField<int?>(
-                          value: _gradingServiceId,
+                          value: safeGsId,
                           isExpanded: true,
                           items: [
                             const DropdownMenuItem<int?>(
                               value: null,
                               child: Text('— None —'),
                             ),
-                            ..._gradingServices.map((gs) {
-                              final id = gs['id'] as int;
+                            ...dedupGs.map((gs) {
+                              final id = _asInt(gs['id']);
+                              if (id == null) return null;
                               final label = (gs['label'] ?? '').toString();
                               final code = (gs['code'] ?? '').toString();
                               final days = gs['expected_days'];
@@ -1443,13 +1573,12 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
                                   overflow: TextOverflow.ellipsis,
                                 ),
                               );
-                            }),
+                            }).whereType<DropdownMenuItem<int?>>(),
                           ],
                           onChanged: (v) {
                             setState(() {
                               _gradingServiceId = v;
 
-                              // UX: auto-fill fees only if field empty
                               if (_gradingFeesCtrl.text.trim().isEmpty &&
                                   v != null) {
                                 final df = _selectedDefaultFee();
@@ -1483,7 +1612,6 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
                           text(_itemLocationCtrl, hint: 'e.g.: Paris / Dubai'),
                     ),
 
-                    // ✅ NEW dates
                     if (isSingle)
                       LabeledField(
                         label: 'Sent to grader date',
@@ -1543,14 +1671,12 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
                         ),
                       ),
 
-                    // ✅ NEW: ETA display (read-only)
+                    // ✅ ETA display (business days)
                     if (isSingle)
                       LabeledField(
                         label: 'Estimated grading time',
                         child: InputDecorator(
-                          decoration: const InputDecoration(
-                            hintText: '—',
-                          ),
+                          decoration: const InputDecoration(hintText: '—'),
                           child: Padding(
                             padding: const EdgeInsets.symmetric(vertical: 8),
                             child: Column(
@@ -1564,16 +1690,17 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
                                       fontWeight: FontWeight.w800),
                                 ),
                                 const SizedBox(height: 6),
-                                if (expectedBack != null && daysLeft != null)
+                                if (expectedBack != null &&
+                                    businessDaysLeft != null)
                                   Text(
-                                    daysLeft < 0
-                                        ? 'Overdue: ${-daysLeft} day(s)'
-                                        : 'Remaining: $daysLeft day(s)',
+                                    businessDaysLeft < 0
+                                        ? 'Overdue: ${-businessDaysLeft} business day(s)'
+                                        : 'Remaining: $businessDaysLeft business day(s)',
                                     style: TextStyle(
                                       fontWeight: FontWeight.w800,
-                                      color: daysLeft < 0
+                                      color: businessDaysLeft < 0
                                           ? Colors.redAccent
-                                          : (daysLeft <= 5
+                                          : (businessDaysLeft <= 5
                                               ? Colors.orange
                                               : Colors.green),
                                     ),
@@ -1587,7 +1714,6 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
                 ),
               ),
               const SizedBox(height: 12),
-
               EditSectionCard(
                 title: 'Pricing',
                 icon: Icons.payments_outlined,
@@ -1627,7 +1753,6 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
                 ),
               ),
               const SizedBox(height: 12),
-
               EditSectionCard(
                 title: 'Sale & shipping',
                 icon: Icons.local_shipping_outlined,
@@ -1672,20 +1797,19 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
                       child: text(_trackingCtrl,
                           hint: 'e.g.: UPS 1Z... / DHL *****...'),
                     ),
-
-                    // ✅ Channel dropdown
                     LabeledField(
                       label: 'Sale channel',
                       child: DropdownButtonFormField<int?>(
-                        value: _selectedChannelId,
+                        value: safeChannelId,
                         isExpanded: true,
                         items: [
                           const DropdownMenuItem<int?>(
                             value: null,
                             child: Text('— None —'),
                           ),
-                          ..._channels.map((c) {
-                            final id = c['id'] as int;
+                          ...dedupChannels.map((c) {
+                            final id = _asInt(c['id']);
+                            if (id == null) return null;
                             final code = (c['code'] ?? '').toString();
                             final label = (c['label'] ?? '').toString();
                             final txt =
@@ -1694,7 +1818,7 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
                               value: id,
                               child: Text(txt, overflow: TextOverflow.ellipsis),
                             );
-                          }),
+                          }).whereType<DropdownMenuItem<int?>>(),
                         ],
                         onChanged: (v) => setState(() {
                           _selectedChannelId = v;
@@ -1704,7 +1828,6 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
                             const InputDecoration(hintText: 'Choose a channel'),
                       ),
                     ),
-
                     LabeledField(
                       label: 'Buyer company',
                       child: text(_buyerCompanyCtrl, hint: 'Buyer company'),
@@ -1713,7 +1836,6 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
                 ),
               ),
               const SizedBox(height: 12),
-
               EditSectionCard(
                 title: 'Parties & notes',
                 icon: Icons.groups_outlined,
@@ -1747,7 +1869,6 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
                 ),
               ),
               const SizedBox(height: 12),
-
               EditSectionCard(
                 title: 'Fees',
                 subtitle:
@@ -1770,7 +1891,6 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
                 ),
               ),
               const SizedBox(height: 12),
-
               EditSectionCard(
                 title: 'Files',
                 icon: Icons.attach_file_outlined,
@@ -1842,7 +1962,6 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
       data: decoratedTheme,
       child: LayoutBuilder(
         builder: (ctx, cons) {
-          // ✅ Le dialog prend la taille du contenu jusqu’à maxHeight, sinon scroll interne
           return SizedBox(
             width: cons.maxWidth,
             child: Column(
@@ -1850,8 +1969,7 @@ class _EditItemsDialogState extends State<EditItemsDialog> {
               children: [
                 header,
                 Flexible(
-                  fit: FlexFit
-                      .loose, // ✅ shrink si contenu court, scroll si long
+                  fit: FlexFit.loose,
                   child: SingleChildScrollView(
                     padding: EdgeInsets.zero,
                     child: content,
