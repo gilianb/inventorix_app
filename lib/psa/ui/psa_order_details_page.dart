@@ -139,20 +139,25 @@ class _PsaOrderDetailsPageState extends State<PsaOrderDetailsPage> {
     setState(() => _editingIds.remove(it.id));
   }
 
-  Widget _photoThumb(String? url, {double size = 52}) {
+  Widget _photoThumb(
+    String? url, {
+    double size = 52,
+    double heightFactor = 1,
+  }) {
     final u = (url ?? '').trim();
     final hasPhoto = u.isNotEmpty;
+    final height = size * heightFactor;
     return ClipRRect(
       borderRadius: BorderRadius.circular(12),
       child: Container(
         width: size,
-        height: size,
+        height: height,
         color: Theme.of(context).colorScheme.surfaceVariant,
         child: hasPhoto
             ? Image.network(
                 u,
                 width: size,
-                height: size,
+                height: height,
                 fit: BoxFit.cover,
                 errorBuilder: (_, __, ___) => Icon(
                   Icons.photo,
@@ -720,7 +725,7 @@ class _PsaOrderDetailsPageState extends State<PsaOrderDetailsPage> {
 
           return Row(
             children: [
-              _photoThumb(heroUrl, size: 72),
+              //_photoThumb(heroUrl, size: 72),
               const SizedBox(width: 16),
               Expanded(
                 child: Column(
@@ -972,7 +977,11 @@ class _PsaOrderDetailsPageState extends State<PsaOrderDetailsPage> {
             children: [
               Row(
                 children: [
-                  _photoThumb(it.photoUrl, size: 56),
+                  _photoThumb(
+                    it.photoUrl,
+                    size: 48,
+                    heightFactor: 1.5,
+                  ),
                   const SizedBox(width: 12),
                   Expanded(
                     child: Column(
@@ -1188,6 +1197,136 @@ class _PsaPickItemsDialogState extends State<_PsaPickItemsDialog> {
   final Set<int> _sel = <int>{};
   String _q = '';
 
+  void _setSelected(PsaOrderItem it, bool selected) {
+    setState(() {
+      if (selected) {
+        _sel.add(it.id);
+      } else {
+        _sel.remove(it.id);
+      }
+    });
+  }
+
+  bool _isImageUrl(String? url) {
+    final u = url ?? '';
+    if (u.isEmpty) return false;
+    try {
+      final path = Uri.parse(u).path.toLowerCase();
+      return path.endsWith('.png') ||
+          path.endsWith('.jpg') ||
+          path.endsWith('.jpeg') ||
+          path.endsWith('.gif') ||
+          path.endsWith('.webp');
+    } catch (_) {
+      final lu = u.toLowerCase();
+      return RegExp(r'\.(png|jpe?g|gif|webp)(\?.*)?$').hasMatch(lu);
+    }
+  }
+
+  String _safeImageUrl(String url) {
+    try {
+      final uri = Uri.parse(url);
+      return Uri(
+        scheme: uri.scheme,
+        userInfo: uri.userInfo.isEmpty ? null : uri.userInfo,
+        host: uri.host,
+        port: uri.hasPort ? uri.port : null,
+        path: uri.path,
+        query: uri.query.isEmpty ? null : uri.query,
+        fragment: uri.fragment.isEmpty ? null : uri.fragment,
+      ).toString();
+    } catch (_) {
+      return Uri.encodeFull(url);
+    }
+  }
+
+  Widget _miniThumb(
+    String? url, {
+    double width = 44,
+    double heightFactor = 1.5,
+  }) {
+    final u = (url ?? '').trim();
+    final cs = Theme.of(context).colorScheme;
+    final iconColor = cs.onSurfaceVariant;
+    final height = width * heightFactor;
+
+    Widget box(Widget child) => ClipRRect(
+          borderRadius: BorderRadius.circular(10),
+          child: Container(
+            width: width,
+            height: height,
+            color: cs.surfaceVariant,
+            child: child,
+          ),
+        );
+
+    if (u.isEmpty) {
+      return box(Icon(Icons.photo, color: iconColor, size: width * 0.6));
+    }
+
+    if (!_isImageUrl(u)) {
+      return box(Icon(Icons.insert_drive_file_outlined,
+          color: iconColor, size: width * 0.6));
+    }
+
+    final imgUrl = _safeImageUrl(u);
+
+    return box(
+      Image.network(
+        imgUrl,
+        width: width,
+        height: height,
+        fit: BoxFit.cover,
+        gaplessPlayback: true,
+        filterQuality: FilterQuality.low,
+        cacheWidth: (width * 2).round(),
+        loadingBuilder: (ctx, child, progress) {
+          if (progress == null) return child;
+          return const Center(
+            child: SizedBox(
+              height: 14,
+              width: 14,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+          );
+        },
+        errorBuilder: (_, __, ___) => Icon(
+          Icons.broken_image_outlined,
+          color: iconColor,
+          size: width * 0.6,
+        ),
+      ),
+    );
+  }
+
+  Widget _metaChip({required IconData icon, required String label}) {
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: cs.surfaceVariant,
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: cs.outlineVariant),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 14, color: cs.onSurfaceVariant),
+          const SizedBox(width: 4),
+          Text(
+            label,
+            style: theme.textTheme.labelSmall?.copyWith(
+              color: cs.onSurfaceVariant,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final q = _q.trim().toLowerCase();
@@ -1244,21 +1383,88 @@ class _PsaPickItemsDialogState extends State<_PsaPickItemsDialog> {
                 itemBuilder: (_, i) {
                   final it = filtered[i];
                   final checked = _sel.contains(it.id);
-                  return CheckboxListTile(
-                    value: checked,
-                    onChanged: (v) {
-                      setState(() {
-                        if (v == true) {
-                          _sel.add(it.id);
-                        } else {
-                          _sel.remove(it.id);
-                        }
-                      });
-                    },
-                    title: Text(it.productName),
-                    subtitle: Text(
-                        '${it.gameLabel ?? '—'} • ${it.language ?? '—'} • #${it.id}'),
-                    controlAffinity: ListTileControlAffinity.leading,
+                  final theme = Theme.of(context);
+                  final cs = theme.colorScheme;
+                  final gameLabel = (it.gameLabel ?? '').trim().isEmpty
+                      ? '—'
+                      : it.gameLabel!.trim();
+                  final langLabel = (it.language ?? '').trim().isEmpty
+                      ? '—'
+                      : it.language!.trim();
+
+                  return Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 6),
+                    child: Material(
+                      color:
+                          checked ? cs.primary.withOpacity(0.08) : cs.surface,
+                      borderRadius: BorderRadius.circular(12),
+                      child: InkWell(
+                        borderRadius: BorderRadius.circular(12),
+                        onTap: () => _setSelected(it, !checked),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 10,
+                          ),
+                          decoration: BoxDecoration(
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(
+                              color: checked
+                                  ? cs.primary.withOpacity(0.45)
+                                  : cs.outlineVariant,
+                            ),
+                          ),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Checkbox(
+                                value: checked,
+                                onChanged: (v) => _setSelected(it, v == true),
+                              ),
+                              _miniThumb(
+                                it.photoUrl,
+                                width: 44,
+                                heightFactor: 1.5,
+                              ),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      it.productName,
+                                      style:
+                                          theme.textTheme.titleSmall?.copyWith(
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Wrap(
+                                      spacing: 8,
+                                      runSpacing: 4,
+                                      children: [
+                                        _metaChip(
+                                          icon: Icons.sports_esports,
+                                          label: gameLabel,
+                                        ),
+                                        _metaChip(
+                                          icon: Icons.translate,
+                                          label: langLabel,
+                                        ),
+                                        _metaChip(
+                                          icon: Icons.tag,
+                                          label: '#${it.id}',
+                                        ),
+                                      ],
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
                   );
                 },
               ),
