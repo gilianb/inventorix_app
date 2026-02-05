@@ -1409,15 +1409,25 @@ class _PsaPickItemsDialogState extends State<_PsaPickItemsDialog> {
 
   @override
   Widget build(BuildContext context) {
-    final q = _q.trim().toLowerCase();
-    final filtered = q.isEmpty
+    final rawQ = _q.trim().toLowerCase();
+    final tokens = rawQ.isEmpty
+        ? const <String>[]
+        : rawQ.split(RegExp(r'\s+')).where((t) => t.isNotEmpty).toList();
+
+    final filtered = tokens.isEmpty
         ? widget.items
         : widget.items.where((it) {
-            final s =
-                '${it.productName} ${it.gameLabel ?? ''} ${it.language ?? ''}'
-                    .toLowerCase();
-            return s.contains(q);
-          }).toList();
+            final fields = <String>[
+              it.productName,
+              it.gameLabel ?? '',
+              it.language ?? '',
+              it.gradeId ?? '',
+              it.gradingNote ?? '',
+              it.id.toString(),
+            ].map((s) => s.toLowerCase()).toList();
+
+            return tokens.every((t) => fields.any((f) => f.contains(t)));
+        }).toList();
 
     final allSelected =
         filtered.isNotEmpty && filtered.every((it) => _sel.contains(it.id));
