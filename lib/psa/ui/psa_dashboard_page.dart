@@ -312,7 +312,7 @@ class _PsaDashboardPageState extends State<PsaDashboardPage> {
     DateTime? psaReceivedDate,
   }) async {
     if (!widget.canEdit) {
-      _snack('No permission to create orders.');
+      _snack('No permission to create submissions.');
       return;
     }
 
@@ -327,7 +327,7 @@ class _PsaDashboardPageState extends State<PsaDashboardPage> {
       _orderNumberCtrl.clear();
       setState(() => _psaReceivedDate = null);
 
-      _snack('PSA order created (#$id).');
+      _snack('PSA submission created (#$id).');
       await _refresh();
     } on PostgrestException catch (e) {
       _snack('Supabase error: ${e.message}');
@@ -338,7 +338,7 @@ class _PsaDashboardPageState extends State<PsaDashboardPage> {
 
   Future<void> _showCreateOrderDialog() async {
     if (!widget.canEdit) {
-      _snack('No permission to create orders.');
+      _snack('No permission to create submissions.');
       return;
     }
 
@@ -372,7 +372,7 @@ class _PsaDashboardPageState extends State<PsaDashboardPage> {
                 : 'Received: ${_fmtDate(receivedDate)}';
 
             return AlertDialog(
-              title: const Text('Create PSA order'),
+              title: const Text('Create PSA submission'),
               content: SizedBox(
                 width: 420,
                 child: Column(
@@ -382,7 +382,7 @@ class _PsaDashboardPageState extends State<PsaDashboardPage> {
                       controller: numberCtrl,
                       textInputAction: TextInputAction.next,
                       decoration: const InputDecoration(
-                        labelText: 'Order number',
+                        labelText: 'Submission number',
                         prefixIcon: Icon(Icons.receipt_long_outlined),
                         border: OutlineInputBorder(),
                       ),
@@ -439,7 +439,7 @@ class _PsaDashboardPageState extends State<PsaDashboardPage> {
                   onPressed: () async {
                     final numStr = numberCtrl.text.trim();
                     if (numStr.isEmpty) {
-                      _snack('Enter an order number.');
+                      _snack('Enter a submission number.');
                       return;
                     }
                     if (serviceId == null) {
@@ -454,7 +454,7 @@ class _PsaDashboardPageState extends State<PsaDashboardPage> {
                     );
                   },
                   icon: const Iconify(Mdi.plus, size: 18),
-                  label: const Text('Create order'),
+                  label: const Text('Create submission'),
                 ),
               ],
             );
@@ -464,6 +464,35 @@ class _PsaDashboardPageState extends State<PsaDashboardPage> {
     );
 
     numberCtrl.dispose();
+  }
+
+  Future<void> _deleteOrder(PsaOrderSummary o) async {
+    if (!widget.canEdit) return;
+
+    final ok = await showDialog<bool>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('Delete PSA submission?'),
+            content: Text(
+              'This will delete submission ${o.orderNumber} and move all items back to RECEIVED. Items will not be deleted.',
+            ),
+            actions: [
+              TextButton(
+                  onPressed: () => Navigator.pop(ctx, false),
+                  child: const Text('Cancel')),
+              FilledButton(
+                  onPressed: () => Navigator.pop(ctx, true),
+                  child: const Text('Delete')),
+            ],
+          ),
+        ) ??
+        false;
+
+    if (!ok) return;
+
+    await repo.deleteOrder(orgId: widget.orgId, psaOrderId: o.psaOrderId);
+    _snack('Submission deleted.');
+    await _refresh();
   }
 
   Widget _orderCard(PsaOrderSummary o) {
@@ -603,6 +632,19 @@ class _PsaDashboardPageState extends State<PsaDashboardPage> {
                       ),
                     ),
                   ),
+                  if (widget.canEdit)
+                    PopupMenuButton<int>(
+                      tooltip: 'Submission actions',
+                      onSelected: (v) {
+                        if (v == 1) _deleteOrder(o);
+                      },
+                      itemBuilder: (ctx) => const [
+                        PopupMenuItem<int>(
+                          value: 1,
+                          child: Text('Delete submission'),
+                        ),
+                      ],
+                    ),
                   Container(
                     padding:
                         const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
@@ -747,7 +789,7 @@ class _PsaDashboardPageState extends State<PsaDashboardPage> {
 
     final tiles = <Widget>[
       _summaryTile(
-        label: 'Orders',
+        label: 'Submissions',
         value: '$totalOrders',
         icon: Icon(Icons.receipt_long_outlined,
             size: 18, color: theme.colorScheme.primary),
@@ -858,7 +900,7 @@ class _PsaDashboardPageState extends State<PsaDashboardPage> {
                 crossAxisAlignment: WrapCrossAlignment.center,
                 children: [
                   Text(
-                    'Orders',
+                    'Submissions',
                     style: theme.textTheme.titleSmall?.copyWith(
                       fontWeight: FontWeight.w800,
                     ),
@@ -886,7 +928,7 @@ class _PsaDashboardPageState extends State<PsaDashboardPage> {
                         ),
                         DropdownMenuItem(
                           value: _OrderSortMode.orderNumberAsc,
-                          child: Text('Order number'),
+                          child: Text('Submission number'),
                         ),
                       ],
                       onChanged: (v) =>
@@ -896,10 +938,10 @@ class _PsaDashboardPageState extends State<PsaDashboardPage> {
                   FilledButton.icon(
                     onPressed: widget.canEdit ? _showCreateOrderDialog : null,
                     icon: const Iconify(Mdi.plus, size: 18),
-                    label: const Text('Create order'),
+                    label: const Text('Create submission'),
                   ),
                   Text(
-                    '${_orders.length} order(s)',
+                    '${_orders.length} submission(s)',
                     style: theme.textTheme.bodySmall?.copyWith(
                       color: theme.colorScheme.onSurfaceVariant,
                     ),
@@ -911,7 +953,7 @@ class _PsaDashboardPageState extends State<PsaDashboardPage> {
             return Row(
               children: [
                 Text(
-                  'Orders',
+                  'Submissions',
                   style: theme.textTheme.titleSmall?.copyWith(
                     fontWeight: FontWeight.w800,
                   ),
@@ -940,7 +982,7 @@ class _PsaDashboardPageState extends State<PsaDashboardPage> {
                       ),
                       DropdownMenuItem(
                         value: _OrderSortMode.orderNumberAsc,
-                        child: Text('Order number'),
+                        child: Text('Submission number'),
                       ),
                     ],
                     onChanged: (v) =>
@@ -949,7 +991,7 @@ class _PsaDashboardPageState extends State<PsaDashboardPage> {
                 ),
                 const Spacer(),
                 Text(
-                  '${_orders.length} order(s)',
+                  '${_orders.length} submission(s)',
                   style: theme.textTheme.bodySmall?.copyWith(
                     color: theme.colorScheme.onSurfaceVariant,
                   ),
@@ -958,7 +1000,7 @@ class _PsaDashboardPageState extends State<PsaDashboardPage> {
                 FilledButton.icon(
                   onPressed: widget.canEdit ? _showCreateOrderDialog : null,
                   icon: const Iconify(Mdi.plus, size: 18),
-                  label: const Text('Create order'),
+                  label: const Text('Create submission'),
                 ),
               ],
             );
@@ -991,7 +1033,7 @@ class _PsaDashboardPageState extends State<PsaDashboardPage> {
           else if (sorted.isEmpty)
             const Padding(
               padding: EdgeInsets.all(24),
-              child: Center(child: Text('No PSA orders yet.')),
+              child: Center(child: Text('No PSA submissions yet.')),
             )
           else
             ...sorted.map(_orderCard),

@@ -149,6 +149,67 @@ class PsaRepository {
     );
   }
 
+  Future<void> removeItemsFromOrder({
+    required String orgId,
+    required List<int> itemIds,
+  }) async {
+    if (itemIds.isEmpty) return;
+
+    final idsCsv = _idsCsv(itemIds);
+
+    await sb
+        .from('item')
+        .update({
+          'psa_order_id': null,
+          'status': 'received',
+          'grading_service_id': null,
+          'sent_to_grader_date': null,
+          'at_grader_date': null,
+          'graded_date': null,
+          'grading_fees': null,
+        })
+        .eq('org_id', orgId)
+        .filter('id', 'in', idsCsv);
+
+    await _logBatchEdit(
+      orgId: orgId,
+      itemIds: itemIds,
+      changes: {
+        'psa_order_id': {'old': 'set', 'new': null},
+        'status': {'old': 'in_order', 'new': 'received'},
+        'grading_service_id': {'old': 'set', 'new': null},
+        'sent_to_grader_date': {'old': 'set', 'new': null},
+        'at_grader_date': {'old': 'set', 'new': null},
+        'graded_date': {'old': 'set', 'new': null},
+        'grading_fees': {'old': 'set', 'new': null},
+      },
+      reason: 'psa_remove_from_order',
+    );
+  }
+
+  Future<void> deleteOrder({
+    required String orgId,
+    required int psaOrderId,
+  }) async {
+    final raw = await sb
+        .from('item')
+        .select('id')
+        .eq('org_id', orgId)
+        .eq('psa_order_id', psaOrderId)
+        .limit(20000);
+
+    final ids = raw.map((e) => (e as Map)['id']).whereType<int>().toList();
+    if (ids.isNotEmpty) {
+      await removeItemsFromOrder(orgId: orgId, itemIds: ids);
+    }
+
+    await sb
+        .from('psa_order')
+        .delete()
+        .eq('org_id', orgId)
+        .eq('id', psaOrderId);
+  }
+
   Future<void> markOrderAtGrader({
     required String orgId,
     required int psaOrderId,

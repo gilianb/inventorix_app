@@ -412,6 +412,73 @@ class _PsaOrderDetailsPageState extends State<PsaOrderDetailsPage> {
     await _refresh();
   }
 
+  Future<void> _removeItemFromOrder(PsaOrderItem it) async {
+    if (!widget.canEdit) return;
+
+    final ok = await showDialog<bool>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('Remove item from order?'),
+            content: Text(
+              'This will move item #${it.id} back to RECEIVED and clear PSA dates/fees. The item will not be deleted.',
+            ),
+            actions: [
+              TextButton(
+                  onPressed: () => Navigator.pop(ctx, false),
+                  child: const Text('Cancel')),
+              FilledButton(
+                  onPressed: () => Navigator.pop(ctx, true),
+                  child: const Text('Remove')),
+            ],
+          ),
+        ) ??
+        false;
+
+    if (!ok) return;
+
+    await repo.removeItemsFromOrder(
+      orgId: widget.orgId,
+      itemIds: [it.id],
+    );
+
+    _snack('Removed item #${it.id} from order.');
+    await _refresh();
+  }
+
+  Future<void> _deleteOrder() async {
+    if (!widget.canEdit) return;
+
+    final ok = await showDialog<bool>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('Delete PSA order?'),
+            content: Text(
+              'This will delete order ${_order.orderNumber} and move all items back to RECEIVED. Items will not be deleted.',
+            ),
+            actions: [
+              TextButton(
+                  onPressed: () => Navigator.pop(ctx, false),
+                  child: const Text('Cancel')),
+              FilledButton(
+                  onPressed: () => Navigator.pop(ctx, true),
+                  child: const Text('Delete')),
+            ],
+          ),
+        ) ??
+        false;
+
+    if (!ok) return;
+
+    await repo.deleteOrder(
+      orgId: widget.orgId,
+      psaOrderId: _order.psaOrderId,
+    );
+
+    if (!mounted) return;
+    _snack('Order deleted.');
+    Navigator.pop(context, true);
+  }
+
   Future<void> _markAtGrader() async {
     if (!widget.canEdit) return;
 
@@ -1049,6 +1116,13 @@ class _PsaOrderDetailsPageState extends State<PsaOrderDetailsPage> {
                           onPressed: () => _toggleEditing(it),
                           icon: Iconify(Mdi.pencil_outline, size: 20),
                         ),
+                      if (widget.canEdit)
+                        IconButton(
+                          tooltip: 'Remove from submission',
+                          onPressed:
+                              saving ? null : () => _removeItemFromOrder(it),
+                          icon: Iconify(Mdi.trash_can_outline, size: 20),
+                        ),
                     ],
                   ),
                 ],
@@ -1145,6 +1219,12 @@ class _PsaOrderDetailsPageState extends State<PsaOrderDetailsPage> {
                     child: CircularProgressIndicator(strokeWidth: 2))
                 : const Iconify(Mdi.refresh, size: 20),
           ),
+          if (widget.canEdit)
+            IconButton(
+              tooltip: 'Delete submission',
+              onPressed: _deleteOrder,
+              icon: const Iconify(Mdi.trash_can_outline, size: 20),
+            ),
         ],
       ),
       body: RefreshIndicator(
@@ -1168,7 +1248,7 @@ class _PsaOrderDetailsPageState extends State<PsaOrderDetailsPage> {
             else if (_items.isEmpty)
               const Padding(
                 padding: EdgeInsets.all(24),
-                child: Center(child: Text('No items in this order yet.')),
+                child: Center(child: Text('No items in this submission yet.')),
               )
             else if (filtered.isEmpty)
               const Padding(
