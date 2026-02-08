@@ -36,6 +36,11 @@ enum _OrderSortMode {
   orderNumberAsc,
 }
 
+enum _OrderView {
+  inProgress,
+  finished,
+}
+
 class _PsaDashboardPageState extends State<PsaDashboardPage> {
   final _sb = Supabase.instance.client;
   late final PsaRepository repo = PsaRepository(_sb);
@@ -44,8 +49,11 @@ class _PsaDashboardPageState extends State<PsaDashboardPage> {
 
   List<Map<String, dynamic>> _services = const [];
   List<PsaOrderSummary> _orders = const [];
+  Map<int, List<String?>> _orderThumbs = {};
 
   _OrderSortMode _sortMode = _OrderSortMode.daysRemainingAsc;
+  _OrderView _orderView = _OrderView.inProgress;
+  String _orderQuery = '';
 
   // Create order form
   final _orderNumberCtrl = TextEditingController();
@@ -170,6 +178,7 @@ class _PsaDashboardPageState extends State<PsaDashboardPage> {
     required String value,
     Widget? leading,
     Color? tone,
+    bool emphasis = false,
   }) {
     final theme = Theme.of(context);
     final color = tone ?? theme.colorScheme.primary;
@@ -189,8 +198,8 @@ class _PsaDashboardPageState extends State<PsaDashboardPage> {
           Text(
             '$label: $value',
             style: theme.textTheme.labelLarge?.copyWith(
-              fontWeight: FontWeight.w600,
-              color: theme.colorScheme.onSurface,
+              fontWeight: emphasis ? FontWeight.w800 : FontWeight.w600,
+              color: emphasis ? color : theme.colorScheme.onSurface,
             ),
           ),
         ],
@@ -247,12 +256,23 @@ class _PsaDashboardPageState extends State<PsaDashboardPage> {
     try {
       final services = await repo.fetchGradingServices(widget.orgId);
       final orders = await repo.fetchOrderSummaries(widget.orgId);
+      Map<int, List<String?>> thumbs = {};
+      try {
+        final orderIds = orders.map((o) => o.psaOrderId).toList();
+        if (orderIds.isNotEmpty) {
+          thumbs = await repo.fetchOrderItemThumbs(
+            orgId: widget.orgId,
+            psaOrderIds: orderIds,
+          );
+        }
+      } catch (_) {}
 
       final filteredServices = _psaServicesOnly(services);
 
       setState(() {
         _services = filteredServices;
         _orders = orders;
+        _orderThumbs = thumbs;
         // auto select service if none selected
         _serviceId ??=
             _services.isNotEmpty ? (_services.first['id'] as int) : null;
@@ -304,6 +324,90 @@ class _PsaDashboardPageState extends State<PsaDashboardPage> {
             a.orderNumber.toLowerCase().compareTo(b.orderNumber.toLowerCase()));
         return list;
     }
+  }
+
+  List<PsaOrderSummary> _filteredOrders(List<PsaOrderSummary> src) {
+    final q = _orderQuery.trim().toLowerCase();
+    if (q.isEmpty) return src;
+    return src.where((o) => o.orderNumber.toLowerCase().contains(q)).toList();
+  }
+
+  bool _isFinished(PsaOrderSummary o) {
+    return o.qtyTotal > 0 && o.qtySentToGrader == 0 && o.qtyAtGrader == 0;
+  }
+
+  List<PsaOrderSummary> _applyViewFilter(List<PsaOrderSummary> src) {
+    switch (_orderView) {
+      case _OrderView.inProgress:
+        return src.where((o) => !_isFinished(o)).toList();
+      case _OrderView.finished:
+        return src.where(_isFinished).toList();
+    }
+  }
+
+  String _viewLabel(_OrderView v) {
+    switch (v) {
+      case _OrderView.inProgress:
+        return 'In progress';
+      case _OrderView.finished:
+        return 'Finished';
+    }
+  }
+
+  Widget _tinyThumb(String? url) {
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+    const width = 36.0;
+    const height = 51.0;
+    final u = (url ?? '').trim();
+    final hasPhoto = u.isNotEmpty;
+
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(7),
+      child: Container(
+        width: width,
+        height: height,
+        color: cs.surfaceVariant,
+        padding: const EdgeInsets.all(1),
+        child: Container(
+          decoration: BoxDecoration(
+            color: cs.surfaceVariant,
+            borderRadius: BorderRadius.circular(6),
+            border: Border.all(color: cs.outlineVariant),
+          ),
+          child: hasPhoto
+              ? Image.network(
+                  u,
+                  width: width,
+                  height: height,
+                  fit: BoxFit.cover,
+                  errorBuilder: (_, __, ___) => Icon(
+                    Icons.photo,
+                    size: 16,
+                    color: cs.onSurfaceVariant,
+                  ),
+                )
+              : Icon(
+                  Icons.photo,
+                  size: 16,
+                  color: cs.onSurfaceVariant,
+                ),
+        ),
+      ),
+    );
+  }
+
+  Widget _thumbStrip(PsaOrderSummary o) {
+    final thumbs = _orderThumbs[o.psaOrderId] ?? const <String?>[];
+    if (thumbs.isEmpty) return const SizedBox.shrink();
+
+    final items = thumbs.length > 10 ? thumbs.take(10).toList() : thumbs;
+
+    return Wrap(
+      spacing: 4,
+      runSpacing: 4,
+      children: items.map(_tinyThumb).toList(),
+    );
   }
 
   Future<void> _createOrderFromDialog({
@@ -499,15 +603,24 @@ class _PsaDashboardPageState extends State<PsaDashboardPage> {
     final rem = _daysRemaining(o);
     final due = _dueDate(o);
     final theme = Theme.of(context);
-    final tone = _remainingTone(rem, theme.colorScheme);
-    final statusLabel = _remainingLabel(rem);
+    final finished = _isFinished(o);
+    final tone =
+        finished ? Colors.green : _remainingTone(rem, theme.colorScheme);
+    final statusLabel = finished ? 'Finished' : _remainingLabel(rem);
+    final marginTone = o.potentialMargin >= 0
+        ? theme.colorScheme.tertiary
+        : theme.colorScheme.error;
+    final hasThumbs =
+        (_orderThumbs[o.psaOrderId] ?? const <String?>[]).isNotEmpty;
 
     final qtyChips = <Widget>[
       _statPill(
         label: 'Total',
         value: '${o.qtyTotal}',
-        leading: Icon(Icons.inventory_2_outlined, size: 16, color: tone),
-        tone: tone,
+        leading: Icon(Icons.inventory_2_outlined,
+            size: 16, color: theme.colorScheme.primary),
+        tone: theme.colorScheme.primary,
+        emphasis: true,
       ),
       _statPill(
         label: 'Sent',
@@ -573,8 +686,9 @@ class _PsaDashboardPageState extends State<PsaDashboardPage> {
                     label: 'Est. margin',
                     value: _fmtMoney(o.potentialMargin),
                     leading: Icon(Icons.analytics_outlined,
-                        size: 16, color: theme.colorScheme.primary),
-                    tone: theme.colorScheme.primary,
+                        size: 16, color: marginTone),
+                    tone: marginTone,
+                    emphasis: true,
                   ),
                 ],
               ),
@@ -607,99 +721,131 @@ class _PsaDashboardPageState extends State<PsaDashboardPage> {
         clipBehavior: Clip.antiAlias,
         child: Padding(
           padding: const EdgeInsets.all(16),
-          child: Column(
+          child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Row(
-                children: [
-                  Container(
-                    width: 36,
-                    height: 36,
-                    decoration: BoxDecoration(
-                      color: theme.colorScheme.surfaceVariant,
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: const Center(
-                      child: Iconify(Mdi.certificate_outline, size: 18),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Text(
-                      o.orderNumber,
-                      style: theme.textTheme.titleMedium?.copyWith(
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                  ),
-                  if (widget.canEdit)
-                    PopupMenuButton<int>(
-                      tooltip: 'Submission actions',
-                      onSelected: (v) {
-                        if (v == 1) _deleteOrder(o);
-                      },
-                      itemBuilder: (ctx) => const [
-                        PopupMenuItem<int>(
-                          value: 1,
-                          child: Text('Delete submission'),
+              Container(
+                width: 4,
+                decoration: BoxDecoration(
+                  color: tone.withOpacity(0.85),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Container(
+                          width: 36,
+                          height: 36,
+                          decoration: BoxDecoration(
+                            color: theme.colorScheme.surfaceVariant,
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: const Center(
+                            child: Iconify(Mdi.certificate_outline, size: 18),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Text(
+                            o.orderNumber,
+                            style: theme.textTheme.titleMedium?.copyWith(
+                              fontWeight: FontWeight.w800,
+                              color: theme.colorScheme.primary,
+                            ),
+                          ),
+                        ),
+                        if (widget.canEdit)
+                          PopupMenuButton<int>(
+                            tooltip: 'Submission actions',
+                            onSelected: (v) {
+                              if (v == 1) _deleteOrder(o);
+                            },
+                            itemBuilder: (ctx) => const [
+                              PopupMenuItem<int>(
+                                value: 1,
+                                child: Text('Delete submission'),
+                              ),
+                            ],
+                          ),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 12, vertical: 6),
+                          decoration: BoxDecoration(
+                            color: tone.withOpacity(0.12),
+                            borderRadius: BorderRadius.circular(999),
+                            border: Border.all(color: tone.withOpacity(0.5)),
+                          ),
+                          child: Text(
+                            statusLabel,
+                            style: theme.textTheme.labelLarge?.copyWith(
+                              color: tone,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
                         ),
                       ],
                     ),
-                  Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                    decoration: BoxDecoration(
-                      color: tone.withOpacity(0.12),
-                      borderRadius: BorderRadius.circular(999),
-                      border: Border.all(color: tone.withOpacity(0.5)),
+                    const SizedBox(height: 6),
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.center,
+                      children: [
+                        Expanded(
+                          child: Text(
+                            _serviceLabelForOrder(o),
+                            overflow: TextOverflow.ellipsis,
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                        ),
+                        if (hasThumbs) const SizedBox(width: 8),
+                        if (hasThumbs)
+                          Flexible(
+                            child: Align(
+                              alignment: Alignment.centerRight,
+                              child: _thumbStrip(o),
+                            ),
+                          ),
+                      ],
                     ),
-                    child: Text(
-                      statusLabel,
-                      style: theme.textTheme.labelLarge?.copyWith(
-                        color: tone,
-                        fontWeight: FontWeight.w700,
-                      ),
+                    const SizedBox(height: 12),
+                    Wrap(
+                      spacing: 12,
+                      runSpacing: 8,
+                      children: [
+                        _metaLine(
+                          label: 'Received',
+                          value: _fmtDate(o.psaReceivedDate),
+                          icon: Icons.calendar_today_outlined,
+                        ),
+                        _metaLine(
+                          label: 'Due',
+                          value: _fmtDate(due),
+                          icon: Icons.event_available_outlined,
+                        ),
+                        _metaLine(
+                          label: 'Expected',
+                          value: '${o.expectedDays} bd',
+                          icon: Icons.timelapse,
+                        ),
+                      ],
                     ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 6),
-              Text(
-                _serviceLabelForOrder(o),
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: theme.colorScheme.onSurfaceVariant,
+                    const SizedBox(height: 12),
+                    Wrap(spacing: 10, runSpacing: 8, children: qtyChips),
+                    if (widget.canSeeFinance) ...[
+                      const SizedBox(height: 12),
+                      const Divider(height: 1),
+                      const SizedBox(height: 12),
+                      finance,
+                    ],
+                  ],
                 ),
               ),
-              const SizedBox(height: 12),
-              Wrap(
-                spacing: 12,
-                runSpacing: 8,
-                children: [
-                  _metaLine(
-                    label: 'Received',
-                    value: _fmtDate(o.psaReceivedDate),
-                    icon: Icons.calendar_today_outlined,
-                  ),
-                  _metaLine(
-                    label: 'Due',
-                    value: _fmtDate(due),
-                    icon: Icons.event_available_outlined,
-                  ),
-                  _metaLine(
-                    label: 'Expected',
-                    value: '${o.expectedDays} bd',
-                    icon: Icons.timelapse,
-                  ),
-                ],
-              ),
-              const SizedBox(height: 12),
-              Wrap(spacing: 10, runSpacing: 8, children: qtyChips),
-              if (widget.canSeeFinance) ...[
-                const SizedBox(height: 12),
-                const Divider(height: 1),
-                const SizedBox(height: 12),
-                finance,
-              ],
             ],
           ),
         ),
@@ -882,6 +1028,12 @@ class _PsaDashboardPageState extends State<PsaDashboardPage> {
 
   Widget _ordersToolbar() {
     final theme = Theme.of(context);
+    final searched = _filteredOrders(_orders);
+    final viewList = _applyViewFilter(searched);
+    final visibleCount = viewList.length;
+    final countLabel = _orderQuery.trim().isEmpty
+        ? '$visibleCount ${_viewLabel(_orderView).toLowerCase()} submission(s)'
+        : '$visibleCount of ${_orders.length} submission(s)';
     return Card(
       elevation: 0,
       shape: RoundedRectangleBorder(
@@ -903,6 +1055,18 @@ class _PsaDashboardPageState extends State<PsaDashboardPage> {
                     'Submissions',
                     style: theme.textTheme.titleSmall?.copyWith(
                       fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  SizedBox(
+                    width: double.infinity,
+                    child: TextField(
+                      decoration: const InputDecoration(
+                        hintText: 'Search by submission #',
+                        isDense: true,
+                        prefixIcon: Icon(Icons.search, size: 18),
+                        border: OutlineInputBorder(),
+                      ),
+                      onChanged: (v) => setState(() => _orderQuery = v),
                     ),
                   ),
                   SizedBox(
@@ -941,7 +1105,7 @@ class _PsaDashboardPageState extends State<PsaDashboardPage> {
                     label: const Text('Create submission'),
                   ),
                   Text(
-                    '${_orders.length} submission(s)',
+                    countLabel,
                     style: theme.textTheme.bodySmall?.copyWith(
                       color: theme.colorScheme.onSurfaceVariant,
                     ),
@@ -950,7 +1114,10 @@ class _PsaDashboardPageState extends State<PsaDashboardPage> {
               );
             }
 
-            return Row(
+            return Wrap(
+              spacing: 12,
+              runSpacing: 12,
+              crossAxisAlignment: WrapCrossAlignment.center,
               children: [
                 Text(
                   'Submissions',
@@ -958,9 +1125,8 @@ class _PsaDashboardPageState extends State<PsaDashboardPage> {
                     fontWeight: FontWeight.w800,
                   ),
                 ),
-                const SizedBox(width: 12),
-                SizedBox(
-                  width: 240,
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 220),
                   child: DropdownButtonFormField<_OrderSortMode>(
                     value: _sortMode,
                     decoration: const InputDecoration(
@@ -989,14 +1155,24 @@ class _PsaDashboardPageState extends State<PsaDashboardPage> {
                         setState(() => _sortMode = v ?? _sortMode),
                   ),
                 ),
-                const Spacer(),
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 200),
+                  child: TextField(
+                    decoration: const InputDecoration(
+                      hintText: 'Search by #',
+                      isDense: true,
+                      prefixIcon: Icon(Icons.search, size: 18),
+                      border: OutlineInputBorder(),
+                    ),
+                    onChanged: (v) => setState(() => _orderQuery = v),
+                  ),
+                ),
                 Text(
-                  '${_orders.length} submission(s)',
+                  countLabel,
                   style: theme.textTheme.bodySmall?.copyWith(
                     color: theme.colorScheme.onSurfaceVariant,
                   ),
                 ),
-                const SizedBox(width: 12),
                 FilledButton.icon(
                   onPressed: widget.canEdit ? _showCreateOrderDialog : null,
                   icon: const Iconify(Mdi.plus, size: 18),
@@ -1010,9 +1186,71 @@ class _PsaDashboardPageState extends State<PsaDashboardPage> {
     );
   }
 
+  Widget _orderTabsBar() {
+    final theme = Theme.of(context);
+
+    Widget tab(_OrderView v) {
+      final selected = _orderView == v;
+      final tone = selected ? theme.colorScheme.primary : null;
+      return Expanded(
+        child: InkWell(
+          onTap: () => setState(() => _orderView = v),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 180),
+            curve: Curves.easeOut,
+            padding: const EdgeInsets.symmetric(vertical: 10),
+            margin: const EdgeInsets.all(4),
+            decoration: BoxDecoration(
+              color: selected ? theme.colorScheme.surface : Colors.transparent,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(
+                color: selected
+                    ? theme.colorScheme.primary.withOpacity(0.35)
+                    : Colors.transparent,
+              ),
+              boxShadow: selected
+                  ? [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.06),
+                        blurRadius: 8,
+                        offset: const Offset(0, 4),
+                      ),
+                    ]
+                  : null,
+            ),
+            child: Center(
+              child: Text(
+                _viewLabel(v),
+                style: theme.textTheme.labelLarge?.copyWith(
+                  color: tone ?? theme.colorScheme.onSurfaceVariant,
+                  fontWeight: selected ? FontWeight.w700 : FontWeight.w600,
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceVariant.withOpacity(0.4),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: theme.colorScheme.outlineVariant),
+      ),
+      child: Row(
+        children: _OrderView.values.map(tab).toList(),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final sorted = _sortedOrders(_orders);
+    final searched = _filteredOrders(sorted);
+    final filtered = _applyViewFilter(searched);
+    final hasSearch = _orderQuery.trim().isNotEmpty;
 
     return RefreshIndicator(
       onRefresh: _refresh,
@@ -1024,19 +1262,37 @@ class _PsaDashboardPageState extends State<PsaDashboardPage> {
           _summaryCard(),
           const SizedBox(height: 12),
           _ordersToolbar(),
+          const SizedBox(height: 6),
+          _orderTabsBar(),
           const SizedBox(height: 8),
           if (_loading)
             const Padding(
               padding: EdgeInsets.all(24),
               child: Center(child: CircularProgressIndicator()),
             )
-          else if (sorted.isEmpty)
+          else if (_orders.isEmpty)
             const Padding(
               padding: EdgeInsets.all(24),
               child: Center(child: Text('No PSA submissions yet.')),
             )
+          else if (searched.isEmpty)
+            const Padding(
+              padding: EdgeInsets.all(24),
+              child: Center(child: Text('No submissions match your search.')),
+            )
+          else if (filtered.isEmpty)
+            Padding(
+              padding: const EdgeInsets.all(24),
+              child: Center(
+                child: Text(
+                  hasSearch
+                      ? 'No ${_viewLabel(_orderView).toLowerCase()} submissions match your search.'
+                      : 'No ${_viewLabel(_orderView).toLowerCase()} submissions yet.',
+                ),
+              ),
+            )
           else
-            ...sorted.map(_orderCard),
+            ...filtered.map(_orderCard),
           const SizedBox(height: 48),
         ],
       ),

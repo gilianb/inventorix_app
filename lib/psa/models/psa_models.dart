@@ -9,6 +9,14 @@ DateTime? _parseDate(dynamic v) {
   return DateTime.tryParse(s);
 }
 
+DateTime? _parseDateTime(dynamic v) {
+  if (v == null) return null;
+  if (v is DateTime) return v;
+  final s = v.toString().trim();
+  if (s.isEmpty) return null;
+  return DateTime.tryParse(s);
+}
+
 class PsaOrderSummary {
   PsaOrderSummary({
     required this.psaOrderId,
@@ -76,14 +84,16 @@ class PsaOrderSummary {
   }
 }
 
-class PsaOrderItem {
-  PsaOrderItem({
-    required this.id,
-    required this.orgId,
-    required this.psaOrderId,
-    required this.status,
-    required this.type,
-    required this.productId,
+  class PsaOrderItem {
+    PsaOrderItem({
+      required this.id,
+      required this.orgId,
+      required this.psaOrderId,
+      required this.psaOrderPosition,
+      required this.psaOrderAddedAt,
+      required this.status,
+      required this.type,
+      required this.productId,
     required this.productName,
     required this.gameLabel,
     required this.language,
@@ -97,11 +107,13 @@ class PsaOrderItem {
     required this.photoUrl,
   });
 
-  final int id;
-  final String orgId;
-  final int? psaOrderId;
-  final String status;
-  final String type;
+    final int id;
+    final String orgId;
+    final int? psaOrderId;
+    final int? psaOrderPosition;
+    final DateTime? psaOrderAddedAt;
+    final String status;
+    final String type;
 
   final int productId;
   final String productName;
@@ -120,13 +132,15 @@ class PsaOrderItem {
   final String? photoUrl;
 
   factory PsaOrderItem.fromJson(Map<String, dynamic> j) {
-    return PsaOrderItem(
-      id: (j['id'] as num).toInt(),
-      orgId: (j['org_id'] ?? '').toString(),
-      psaOrderId: (j['psa_order_id'] as num?)?.toInt(),
-      status: (j['status'] ?? '').toString(),
-      type: (j['type'] ?? '').toString(),
-      productId: (j['product_id'] as num).toInt(),
+      return PsaOrderItem(
+        id: (j['id'] as num).toInt(),
+        orgId: (j['org_id'] ?? '').toString(),
+        psaOrderId: (j['psa_order_id'] as num?)?.toInt(),
+        psaOrderPosition: (j['psa_order_position'] as num?)?.toInt(),
+        psaOrderAddedAt: _parseDateTime(j['psa_order_added_at']),
+        status: (j['status'] ?? '').toString(),
+        type: (j['type'] ?? '').toString(),
+        productId: (j['product_id'] as num).toInt(),
       productName: (j['product_name'] ?? '').toString(),
       gameLabel: (j['game_label'] ?? '')?.toString(),
       language: (j['language'] ?? '')?.toString(),

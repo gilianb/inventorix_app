@@ -83,12 +83,44 @@ class PsaRepository {
         .select('*')
         .eq('org_id', orgId)
         .eq('psa_order_id', psaOrderId)
+        .order('psa_order_position', ascending: true, nullsFirst: false)
         .order('id', ascending: true);
 
     return raw
         .map<PsaOrderItem>(
             (e) => PsaOrderItem.fromJson(Map<String, dynamic>.from(e as Map)))
-        .toList();
+          .toList();
+  }
+
+  Future<Map<int, List<String?>>> fetchOrderItemThumbs({
+    required String orgId,
+    required List<int> psaOrderIds,
+    int perOrderLimit = 10,
+  }) async {
+    if (psaOrderIds.isEmpty) return {};
+
+    final idsCsv = _idsCsv(psaOrderIds);
+    final raw = await sb
+        .from('v_psa_order_items_masked')
+        .select('psa_order_id, photo_url, psa_order_position, id')
+        .eq('org_id', orgId)
+        .filter('psa_order_id', 'in', idsCsv)
+        .order('psa_order_id', ascending: true)
+        .order('psa_order_position', ascending: true, nullsFirst: false)
+        .order('id', ascending: true);
+
+    final out = <int, List<String?>>{};
+    for (final row in raw) {
+      final m = Map<String, dynamic>.from(row as Map);
+      final orderId = (m['psa_order_id'] as num?)?.toInt();
+      if (orderId == null) continue;
+      final list = out.putIfAbsent(orderId, () => <String?>[]);
+      if (list.length >= perOrderLimit) continue;
+      final rawUrl = (m['photo_url'] ?? '').toString().trim();
+      list.add(rawUrl.isEmpty ? null : rawUrl);
+    }
+
+    return out;
   }
 
   Future<List<PsaOrderItem>> fetchReceivedCandidates({
@@ -101,8 +133,7 @@ class PsaRepository {
         .eq('type', 'single')
         .eq('status', 'received')
         .filter('psa_order_id', 'is', null)
-        .order('purchase_date', ascending: false)
-        .order('id', ascending: false);
+        .order('id', ascending: true);
 
     return raw
         .map<PsaOrderItem>(
@@ -115,37 +146,74 @@ class PsaRepository {
     required int psaOrderId,
     required int gradingServiceId,
     required num defaultFee,
-    required List<int> itemIds,
+    required List<int> itemIdsInOrder,
+    required int startPosition,
   }) async {
-    if (itemIds.isEmpty) return;
+    if (itemIdsInOrder.isEmpty) return;
 
     final today = _dateStr(DateTime.now());
-    final idsCsv = _idsCsv(itemIds);
+    final addedAt = DateTime.now().toUtc().toIso8601String();
 
-    await sb
-        .from('item')
-        .update({
-          'psa_order_id': psaOrderId,
-          'status': 'sent_to_grader',
-          'grading_service_id': gradingServiceId,
-          'sent_to_grader_date': today,
-          'grading_fees':
-              defaultFee, // override simple & consistent; tu peux éditer ensuite si besoin
-        })
-        .eq('org_id', orgId)
-        .filter('id', 'in', idsCsv);
+    for (var i = 0; i < itemIdsInOrder.length; i++) {
+      final id = itemIdsInOrder[i];
+      final pos = startPosition + i;
+
+      await sb
+          .from('item')
+          .update({
+            'psa_order_id': psaOrderId,
+            'status': 'sent_to_grader',
+            'grading_service_id': gradingServiceId,
+            'sent_to_grader_date': today,
+            'grading_fees':
+                defaultFee, // override simple & consistent; tu peux éditer ensuite si besoin
+            'psa_order_position': pos,
+            'psa_order_added_at': addedAt,
+          })
+          .eq('org_id', orgId)
+          .eq('id', id);
+    }
 
     await _logBatchEdit(
       orgId: orgId,
-      itemIds: itemIds,
+      itemIds: itemIdsInOrder,
       changes: {
         'psa_order_id': {'old': null, 'new': psaOrderId},
         'status': {'old': 'received', 'new': 'sent_to_grader'},
         'grading_service_id': {'old': null, 'new': gradingServiceId},
         'sent_to_grader_date': {'old': null, 'new': today},
         'grading_fees': {'old': null, 'new': defaultFee},
+        'psa_order_position': {'old': null, 'new': 'set'},
+        'psa_order_added_at': {'old': null, 'new': addedAt},
       },
       reason: 'psa_add_to_order',
+    );
+  }
+
+  Future<void> seedOrderPositions({
+    required String orgId,
+    required List<int> itemIdsInOrder,
+    required int startPosition,
+  }) async {
+    if (itemIdsInOrder.isEmpty) return;
+
+    for (var i = 0; i < itemIdsInOrder.length; i++) {
+      final id = itemIdsInOrder[i];
+      final pos = startPosition + i;
+      await sb
+          .from('item')
+          .update({'psa_order_position': pos})
+          .eq('org_id', orgId)
+          .eq('id', id);
+    }
+
+    await _logBatchEdit(
+      orgId: orgId,
+      itemIds: itemIdsInOrder,
+      changes: {
+        'psa_order_position': {'old': null, 'new': 'set'},
+      },
+      reason: 'psa_seed_order_positions',
     );
   }
 
@@ -157,34 +225,38 @@ class PsaRepository {
 
     final idsCsv = _idsCsv(itemIds);
 
-    await sb
-        .from('item')
-        .update({
-          'psa_order_id': null,
-          'status': 'received',
-          'grading_service_id': null,
-          'sent_to_grader_date': null,
-          'at_grader_date': null,
-          'graded_date': null,
-          'grading_fees': null,
-        })
-        .eq('org_id', orgId)
-        .filter('id', 'in', idsCsv);
+      await sb
+          .from('item')
+          .update({
+            'psa_order_id': null,
+            'status': 'received',
+            'grading_service_id': null,
+            'sent_to_grader_date': null,
+            'at_grader_date': null,
+            'graded_date': null,
+            'grading_fees': null,
+            'psa_order_position': null,
+            'psa_order_added_at': null,
+          })
+          .eq('org_id', orgId)
+          .filter('id', 'in', idsCsv);
 
     await _logBatchEdit(
       orgId: orgId,
       itemIds: itemIds,
-      changes: {
-        'psa_order_id': {'old': 'set', 'new': null},
-        'status': {'old': 'in_order', 'new': 'received'},
-        'grading_service_id': {'old': 'set', 'new': null},
-        'sent_to_grader_date': {'old': 'set', 'new': null},
-        'at_grader_date': {'old': 'set', 'new': null},
-        'graded_date': {'old': 'set', 'new': null},
-        'grading_fees': {'old': 'set', 'new': null},
-      },
-      reason: 'psa_remove_from_order',
-    );
+        changes: {
+          'psa_order_id': {'old': 'set', 'new': null},
+          'status': {'old': 'in_order', 'new': 'received'},
+          'grading_service_id': {'old': 'set', 'new': null},
+          'sent_to_grader_date': {'old': 'set', 'new': null},
+          'at_grader_date': {'old': 'set', 'new': null},
+          'graded_date': {'old': 'set', 'new': null},
+          'grading_fees': {'old': 'set', 'new': null},
+          'psa_order_position': {'old': 'set', 'new': null},
+          'psa_order_added_at': {'old': 'set', 'new': null},
+        },
+        reason: 'psa_remove_from_order',
+      );
   }
 
   Future<void> deleteOrder({

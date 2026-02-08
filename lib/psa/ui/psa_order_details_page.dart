@@ -38,6 +38,14 @@ enum _ItemFilter {
   graded,
 }
 
+enum _ItemSort {
+  defaultOrder,
+  nameAsc,
+  nameDesc,
+  idAsc,
+  idDesc,
+}
+
 class _PsaOrderDetailsPageState extends State<PsaOrderDetailsPage> {
   final _sb = Supabase.instance.client;
   late final PsaRepository repo = PsaRepository(_sb);
@@ -46,6 +54,8 @@ class _PsaOrderDetailsPageState extends State<PsaOrderDetailsPage> {
   late PsaOrderSummary _order = widget.order;
   List<PsaOrderItem> _items = const [];
   _ItemFilter _itemFilter = _ItemFilter.all;
+  _ItemSort _itemSort = _ItemSort.defaultOrder;
+  String _itemQuery = '';
   final Map<int, TextEditingController> _gradeCtrls = {};
   final Map<int, TextEditingController> _noteCtrls = {};
   final Set<int> _editingIds = <int>{};
@@ -58,6 +68,15 @@ class _PsaOrderDetailsPageState extends State<PsaOrderDetailsPage> {
       d == null ? '—' : d.toIso8601String().split('T').first;
 
   String _fmtMoney(num v) => v.toStringAsFixed(2);
+
+  int _maxOrderPosition(List<PsaOrderItem> items) {
+    var maxPos = 0;
+    for (final it in items) {
+      final p = it.psaOrderPosition;
+      if (p != null && p > maxPos) maxPos = p;
+    }
+    return maxPos;
+  }
 
   String _serviceLabelWithMeta({
     required String label,
@@ -230,8 +249,79 @@ class _PsaOrderDetailsPageState extends State<PsaOrderDetailsPage> {
 
   List<PsaOrderItem> _filteredItems(List<PsaOrderItem> items) {
     final status = _filterStatusValue(_itemFilter);
-    if (status == null) return items;
-    return items.where((it) => it.status == status).toList();
+    final base =
+        status == null ? items : items.where((it) => it.status == status);
+
+    final rawQ = _itemQuery.trim().toLowerCase();
+    if (rawQ.isEmpty) return base.toList();
+
+    final tokens =
+        rawQ.split(RegExp(r'\s+')).where((t) => t.isNotEmpty).toList();
+
+    return base.where((it) {
+      final fields = <String>[
+        it.productName,
+        it.gameLabel ?? '',
+        it.language ?? '',
+        it.gradeId ?? '',
+        it.gradingNote ?? '',
+        it.id.toString(),
+      ].map((s) => s.toLowerCase()).toList();
+
+      return tokens.every((t) => fields.any((f) => f.contains(t)));
+    }).toList();
+  }
+
+  String _sortLabel(_ItemSort s) {
+    switch (s) {
+      case _ItemSort.defaultOrder:
+        return 'Selection order';
+      case _ItemSort.nameAsc:
+        return 'Name (A–Z)';
+      case _ItemSort.nameDesc:
+        return 'Name (Z–A)';
+      case _ItemSort.idAsc:
+        return 'Item ID (asc)';
+      case _ItemSort.idDesc:
+        return 'Item ID (desc)';
+    }
+  }
+
+  int _cmpNullLastIntAsc(int? a, int? b) {
+    if (a == null && b == null) return 0;
+    if (a == null) return 1;
+    if (b == null) return -1;
+    return a.compareTo(b);
+  }
+
+  int _cmpNameAsc(PsaOrderItem a, PsaOrderItem b) {
+    final an = a.productName.toLowerCase().trim();
+    final bn = b.productName.toLowerCase().trim();
+    final c = an.compareTo(bn);
+    return c != 0 ? c : a.id.compareTo(b.id);
+  }
+
+  List<PsaOrderItem> _sortedItems(List<PsaOrderItem> items) {
+    final out = [...items];
+    out.sort((a, b) {
+      switch (_itemSort) {
+        case _ItemSort.defaultOrder:
+          final c1 = _cmpNullLastIntAsc(a.psaOrderPosition, b.psaOrderPosition);
+          if (c1 != 0) return c1;
+          final c2 = a.id.compareTo(b.id);
+          if (c2 != 0) return c2;
+          return _cmpNameAsc(a, b);
+        case _ItemSort.nameAsc:
+          return _cmpNameAsc(a, b);
+        case _ItemSort.nameDesc:
+          return -_cmpNameAsc(a, b);
+        case _ItemSort.idAsc:
+          return a.id.compareTo(b.id);
+        case _ItemSort.idDesc:
+          return b.id.compareTo(a.id);
+      }
+    });
+    return out;
   }
 
   Widget _statPill({
@@ -393,19 +483,33 @@ class _PsaOrderDetailsPageState extends State<PsaOrderDetailsPage> {
       return;
     }
 
-    final pickedIds = await showDialog<Set<int>>(
+    final pickedIds = await showDialog<List<int>>(
       context: context,
       builder: (_) => _PsaPickItemsDialog(items: candidates),
     );
 
     if (pickedIds == null || pickedIds.isEmpty) return;
 
+    final missingPosItems =
+        _items.where((it) => it.psaOrderPosition == null).toList();
+    var startPos = _maxOrderPosition(_items) + 1;
+
+    if (missingPosItems.isNotEmpty) {
+      await repo.seedOrderPositions(
+        orgId: widget.orgId,
+        itemIdsInOrder: missingPosItems.map((e) => e.id).toList(),
+        startPosition: startPos,
+      );
+      startPos += missingPosItems.length;
+    }
+
     await repo.addItemsToOrder(
       orgId: widget.orgId,
       psaOrderId: _order.psaOrderId,
       gradingServiceId: _order.gradingServiceId,
       defaultFee: _order.defaultFee,
-      itemIds: pickedIds.toList(),
+      itemIdsInOrder: pickedIds,
+      startPosition: startPos,
     );
 
     _snack('Added ${pickedIds.length} item(s) to order.');
@@ -975,6 +1079,18 @@ class _PsaOrderDetailsPageState extends State<PsaOrderDetailsPage> {
                 fontWeight: FontWeight.w800,
               ),
             ),
+            SizedBox(
+              width: 220,
+              child: TextField(
+                decoration: InputDecoration(
+                  hintText: 'Search items',
+                  isDense: true,
+                  prefixIcon: const Icon(Icons.search, size: 18),
+                  border: const OutlineInputBorder(),
+                ),
+                onChanged: (v) => setState(() => _itemQuery = v),
+              ),
+            ),
             Text(
               '${items.length} item(s)',
               style: theme.textTheme.bodySmall?.copyWith(
@@ -999,6 +1115,30 @@ class _PsaOrderDetailsPageState extends State<PsaOrderDetailsPage> {
                 ),
               );
             }),
+            PopupMenuButton<_ItemSort>(
+              tooltip: 'Sort items',
+              onSelected: (v) => setState(() => _itemSort = v),
+              itemBuilder: (ctx) => _ItemSort.values
+                  .map((s) => PopupMenuItem(
+                        value: s,
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            if (s == _itemSort)
+                              Icon(Icons.check,
+                                  size: 18, color: theme.colorScheme.primary),
+                            if (s == _itemSort) const SizedBox(width: 6),
+                            Text(_sortLabel(s)),
+                          ],
+                        ),
+                      ))
+                  .toList(),
+              child: OutlinedButton.icon(
+                onPressed: null,
+                icon: const Icon(Icons.sort, size: 18),
+                label: Text('Sort: ${_sortLabel(_itemSort)}'),
+              ),
+            ),
             Text(
               widget.canEdit
                   ? 'Double-click a card to edit grade'
@@ -1203,7 +1343,7 @@ class _PsaOrderDetailsPageState extends State<PsaOrderDetailsPage> {
 
   @override
   Widget build(BuildContext context) {
-    final filtered = _filteredItems(_items);
+    final filtered = _sortedItems(_filteredItems(_items));
 
     return Scaffold(
       appBar: AppBar(
@@ -1274,15 +1414,20 @@ class _PsaPickItemsDialog extends StatefulWidget {
 }
 
 class _PsaPickItemsDialogState extends State<_PsaPickItemsDialog> {
-  final Set<int> _sel = <int>{};
+  final List<int> _sel = <int>[];
+  final Set<int> _selSet = <int>{};
   String _q = '';
 
   void _setSelected(PsaOrderItem it, bool selected) {
     setState(() {
       if (selected) {
-        _sel.add(it.id);
+        if (_selSet.add(it.id)) {
+          _sel.add(it.id);
+        }
       } else {
-        _sel.remove(it.id);
+        if (_selSet.remove(it.id)) {
+          _sel.remove(it.id);
+        }
       }
     });
   }
@@ -1427,10 +1572,10 @@ class _PsaPickItemsDialogState extends State<_PsaPickItemsDialog> {
             ].map((s) => s.toLowerCase()).toList();
 
             return tokens.every((t) => fields.any((f) => f.contains(t)));
-        }).toList();
+          }).toList();
 
     final allSelected =
-        filtered.isNotEmpty && filtered.every((it) => _sel.contains(it.id));
+        filtered.isNotEmpty && filtered.every((it) => _selSet.contains(it.id));
 
     return AlertDialog(
       title: const Text('Pick RECEIVED cards'),
@@ -1454,9 +1599,13 @@ class _PsaPickItemsDialogState extends State<_PsaPickItemsDialog> {
                   onChanged: (v) {
                     setState(() {
                       if (v == true) {
-                        _sel.addAll(filtered.map((e) => e.id));
+                        for (final e in filtered) {
+                          if (_selSet.add(e.id)) _sel.add(e.id);
+                        }
                       } else {
-                        _sel.removeAll(filtered.map((e) => e.id));
+                        final ids = filtered.map((e) => e.id).toSet();
+                        _selSet.removeAll(ids);
+                        _sel.removeWhere(ids.contains);
                       }
                     });
                   },
@@ -1472,7 +1621,7 @@ class _PsaPickItemsDialogState extends State<_PsaPickItemsDialog> {
                 itemCount: filtered.length,
                 itemBuilder: (_, i) {
                   final it = filtered[i];
-                  final checked = _sel.contains(it.id);
+                  final checked = _selSet.contains(it.id);
                   final theme = Theme.of(context);
                   final cs = theme.colorScheme;
                   final gameLabel = (it.gameLabel ?? '').trim().isEmpty
@@ -1567,7 +1716,9 @@ class _PsaPickItemsDialogState extends State<_PsaPickItemsDialog> {
             onPressed: () => Navigator.pop(context),
             child: const Text('Cancel')),
         FilledButton(
-          onPressed: _sel.isEmpty ? null : () => Navigator.pop(context, _sel),
+          onPressed: _sel.isEmpty
+              ? null
+              : () => Navigator.pop(context, List<int>.from(_sel)),
           child: const Text('Add selected'),
         ),
       ],
