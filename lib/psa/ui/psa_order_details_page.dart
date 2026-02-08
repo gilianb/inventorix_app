@@ -477,43 +477,50 @@ class _PsaOrderDetailsPageState extends State<PsaOrderDetailsPage> {
   Future<void> _addReceivedCardsToOrder() async {
     if (!widget.canEdit) return;
 
-    final candidates = await repo.fetchReceivedCandidates(orgId: widget.orgId);
-    if (candidates.isEmpty) {
-      _snack('No received single cards available.');
-      return;
-    }
+    try {
+      final candidates =
+          await repo.fetchReceivedCandidates(orgId: widget.orgId);
+      if (candidates.isEmpty) {
+        _snack('No received single cards available.');
+        return;
+      }
 
-    final pickedIds = await showDialog<List<int>>(
-      context: context,
-      builder: (_) => _PsaPickItemsDialog(items: candidates),
-    );
+      final pickedIds = await showDialog<List<int>>(
+        context: context,
+        builder: (_) => _PsaPickItemsDialog(items: candidates),
+      );
 
-    if (pickedIds == null || pickedIds.isEmpty) return;
+      if (pickedIds == null || pickedIds.isEmpty) return;
 
-    final missingPosItems =
-        _items.where((it) => it.psaOrderPosition == null).toList();
-    var startPos = _maxOrderPosition(_items) + 1;
+      final missingPosItems =
+          _items.where((it) => it.psaOrderPosition == null).toList();
+      var startPos = _maxOrderPosition(_items) + 1;
 
-    if (missingPosItems.isNotEmpty) {
-      await repo.seedOrderPositions(
+      if (missingPosItems.isNotEmpty) {
+        await repo.seedOrderPositions(
+          orgId: widget.orgId,
+          itemIdsInOrder: missingPosItems.map((e) => e.id).toList(),
+          startPosition: startPos,
+        );
+        startPos += missingPosItems.length;
+      }
+
+      await repo.addItemsToOrder(
         orgId: widget.orgId,
-        itemIdsInOrder: missingPosItems.map((e) => e.id).toList(),
+        psaOrderId: _order.psaOrderId,
+        gradingServiceId: _order.gradingServiceId,
+        defaultFee: _order.defaultFee,
+        itemIdsInOrder: List<int>.from(pickedIds),
         startPosition: startPos,
       );
-      startPos += missingPosItems.length;
+
+      _snack('Added ${pickedIds.length} item(s) to order.');
+      await _refresh();
+    } on PostgrestException catch (e) {
+      _snack('Supabase error: ${e.message}');
+    } catch (e) {
+      _snack('Error: $e');
     }
-
-    await repo.addItemsToOrder(
-      orgId: widget.orgId,
-      psaOrderId: _order.psaOrderId,
-      gradingServiceId: _order.gradingServiceId,
-      defaultFee: _order.defaultFee,
-      itemIdsInOrder: pickedIds,
-      startPosition: startPos,
-    );
-
-    _snack('Added ${pickedIds.length} item(s) to order.');
-    await _refresh();
   }
 
   Future<void> _removeItemFromOrder(PsaOrderItem it) async {
