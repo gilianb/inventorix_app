@@ -15,7 +15,6 @@ class PsaRepository {
         .from('grading_service')
         .select(
             'id, code, label, expected_days, default_fee, sort_order, active')
-        .eq('org_id', orgId)
         .eq('active', true)
         .order('sort_order', ascending: true, nullsFirst: false)
         .order('label', ascending: true);
