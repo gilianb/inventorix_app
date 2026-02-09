@@ -922,8 +922,434 @@ class _MainInventoryPageState extends State<MainInventoryPage>
     }
   }
 
+  InventoryPdfFieldDef? _pdfFieldByKey(String key) {
+    for (final d in kInventoryPdfFieldDefs) {
+      if (d.key == key) return d;
+    }
+    return null;
+  }
+
+  List<String> _allExportStatuses() =>
+      kStatusOrder.where((s) => s != 'vault').toList();
+
+  List<String> _defaultExportStatuses() {
+    final all = _allExportStatuses();
+    final raw = (_statusFilter ?? '').toString().trim();
+    if (raw.isEmpty) {
+      return all.where((s) => s != 'finalized').toList();
+    }
+
+    final grouped = kGroupToStatuses[raw];
+    if (grouped != null) {
+      return grouped.where((s) => s != 'vault').toList();
+    }
+    if (all.contains(raw)) return [raw];
+    return all.where((s) => s != 'finalized').toList();
+  }
+
+  Set<String> _defaultPdfFields(InventoryPdfViewMode view) {
+    if (view == InventoryPdfViewMode.lines) {
+      return {'name', 'qty'};
+    }
+    return {'name', 'qty'};
+  }
+
+  bool _isPdfFieldPermitted(InventoryPdfFieldDef def) {
+    switch (def.key) {
+      case 'buy_unit':
+        return _perm.canSeeUnitCosts;
+      case 'estimated_unit':
+        return _perm.canSeeEstimated;
+      case 'sale_price':
+        return _perm.canSeeRevenue;
+      default:
+        return true;
+    }
+  }
+
+  bool _isPdfFieldForView(
+    InventoryPdfFieldDef def,
+    InventoryPdfViewMode view,
+  ) {
+    if (def.lineOnly && view != InventoryPdfViewMode.lines) return false;
+    if (def.productOnly && view != InventoryPdfViewMode.products) return false;
+    return true;
+  }
+
+  Set<String> _normalizePdfFieldsForView(
+    Set<String> fields,
+    InventoryPdfViewMode view,
+  ) {
+    final out = <String>{};
+    for (final key in fields) {
+      final def = _pdfFieldByKey(key);
+      if (def == null) continue;
+      if (!_isPdfFieldPermitted(def)) continue;
+      if (!_isPdfFieldForView(def, view)) continue;
+      out.add(key);
+    }
+
+    if (view == InventoryPdfViewMode.products &&
+        fields.contains('status') &&
+        _pdfFieldByKey('status_mix') != null) {
+      out.add('status_mix');
+    }
+    if (view == InventoryPdfViewMode.lines &&
+        fields.contains('status_mix') &&
+        _pdfFieldByKey('status') != null) {
+      out.add('status');
+    }
+
+    if (out.isEmpty) {
+      out.addAll(_defaultPdfFields(view));
+    }
+    return out;
+  }
+
+  InventoryPdfSortMode _normalizePdfSort(
+    InventoryPdfSortMode sortMode,
+    InventoryPdfViewMode view,
+  ) {
+    if (view == InventoryPdfViewMode.products &&
+        sortMode == InventoryPdfSortMode.statusThenName) {
+      return InventoryPdfSortMode.nameAsc;
+    }
+    return sortMode;
+  }
+
+  String _pdfFieldLabel(InventoryPdfFieldDef def) {
+    var label = def.label;
+    if (def.lineOnly) label = '$label (lines)';
+    if (def.productOnly) label = '$label (grouped)';
+    return label;
+  }
+
+  List<Map<String, dynamic>> _filterLinesByStatuses(
+    List<Map<String, dynamic>> lines,
+    Set<String> statuses,
+  ) {
+    if (statuses.isEmpty) return const [];
+    return lines
+        .where((r) => statuses.contains((r['status'] ?? '').toString()))
+        .toList(growable: false);
+  }
+
+  List<Map<String, dynamic>> _expandLinesByQty(
+    List<Map<String, dynamic>> lines,
+  ) {
+    final out = <Map<String, dynamic>>[];
+    for (final r in lines) {
+      final q = (r['qty_status'] as int?) ?? 0;
+      if (q <= 1) {
+        if (q == 1) out.add(r);
+        continue;
+      }
+      for (int i = 0; i < q; i++) {
+        out.add({...r, 'qty_status': 1});
+      }
+    }
+    return out;
+  }
+
+  Future<InventoryPdfExportOptions?> _showPdfExportDialog() async {
+    final allStatuses = _allExportStatuses();
+    final initialView = _viewMode == InventoryListViewMode.lines
+        ? InventoryPdfViewMode.lines
+        : InventoryPdfViewMode.products;
+
+    var selectedStatuses = _defaultExportStatuses().toSet();
+    var viewMode = initialView;
+    var selectedFields =
+        _normalizePdfFieldsForView(_defaultPdfFields(viewMode), viewMode);
+    var sortMode = InventoryPdfSortMode.nameAsc;
+    var landscape = false;
+    var expandQtyToRows = true;
+
+    return showDialog<InventoryPdfExportOptions>(
+      context: context,
+      builder: (ctx) {
+        return AlertDialog(
+          title: const Text('Export inventory PDF'),
+          content: StatefulBuilder(
+            builder: (context, setModalState) {
+              void applyStatusPreset(Iterable<String> statuses) {
+                setModalState(() {
+                  selectedStatuses = statuses.toSet();
+                });
+              }
+
+              void setViewMode(InventoryPdfViewMode next) {
+                setModalState(() {
+                  viewMode = next;
+                  selectedFields =
+                      _normalizePdfFieldsForView(selectedFields, viewMode);
+                  sortMode = _normalizePdfSort(sortMode, viewMode);
+                });
+              }
+
+              final sortItems = <DropdownMenuItem<InventoryPdfSortMode>>[
+                const DropdownMenuItem(
+                  value: InventoryPdfSortMode.nameAsc,
+                  child: Text('Name (A-Z)'),
+                ),
+                const DropdownMenuItem(
+                  value: InventoryPdfSortMode.qtyDesc,
+                  child: Text('Qty (desc)'),
+                ),
+                if (viewMode == InventoryPdfViewMode.lines)
+                  const DropdownMenuItem(
+                    value: InventoryPdfSortMode.statusThenName,
+                    child: Text('Status then Name'),
+                  ),
+              ];
+
+              final canExport =
+                  selectedStatuses.isNotEmpty && selectedFields.isNotEmpty;
+
+              return SizedBox(
+                width: 560,
+                child: SingleChildScrollView(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Statuses',
+                        style: Theme.of(context).textTheme.titleSmall,
+                      ),
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 6,
+                        children: [
+                          ActionChip(
+                            label: const Text('All'),
+                            onPressed: () => applyStatusPreset(allStatuses),
+                          ),
+                          if (kGroupToStatuses['purchase'] != null)
+                            ActionChip(
+                              label: const Text('Purchase'),
+                              onPressed: () => applyStatusPreset(
+                                  kGroupToStatuses['purchase']!),
+                            ),
+                          if (kGroupToStatuses['grading'] != null)
+                            ActionChip(
+                              label: const Text('Grading'),
+                              onPressed: () => applyStatusPreset(
+                                  kGroupToStatuses['grading']!),
+                            ),
+                          if (kGroupToStatuses['sale'] != null)
+                            ActionChip(
+                              label: const Text('Sale'),
+                              onPressed: () =>
+                                  applyStatusPreset(kGroupToStatuses['sale']!),
+                            ),
+                          ActionChip(
+                            label: const Text('Clear'),
+                            onPressed: () =>
+                                applyStatusPreset(const <String>[]),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 6,
+                        children: [
+                          for (final s in allStatuses)
+                            FilterChip(
+                              label: Text(s.replaceAll('_', ' ')),
+                              selected: selectedStatuses.contains(s),
+                              onSelected: (v) {
+                                setModalState(() {
+                                  if (v) {
+                                    selectedStatuses.add(s);
+                                  } else {
+                                    selectedStatuses.remove(s);
+                                  }
+                                });
+                              },
+                            ),
+                        ],
+                      ),
+                      if (selectedStatuses.isEmpty)
+                        const Padding(
+                          padding: EdgeInsets.only(top: 6),
+                          child: Text(
+                            'Select at least one status.',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Colors.redAccent,
+                            ),
+                          ),
+                        ),
+                      const SizedBox(height: 16),
+                      Text(
+                        'View',
+                        style: Theme.of(context).textTheme.titleSmall,
+                      ),
+                      RadioListTile<InventoryPdfViewMode>(
+                        value: InventoryPdfViewMode.lines,
+                        groupValue: viewMode,
+                        onChanged: (v) {
+                          if (v != null) setViewMode(v);
+                        },
+                        title: const Text('Lines (one row per status)'),
+                        contentPadding: EdgeInsets.zero,
+                      ),
+                      RadioListTile<InventoryPdfViewMode>(
+                        value: InventoryPdfViewMode.products,
+                        groupValue: viewMode,
+                        onChanged: (v) {
+                          if (v != null) setViewMode(v);
+                        },
+                        title: const Text('Grouped by product'),
+                        contentPadding: EdgeInsets.zero,
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        'Fields',
+                        style: Theme.of(context).textTheme.titleSmall,
+                      ),
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 6,
+                        children: [
+                          for (final def in kInventoryPdfFieldDefs)
+                            () {
+                              final permitted = _isPdfFieldPermitted(def);
+                              final available =
+                                  _isPdfFieldForView(def, viewMode);
+                              final enabled = permitted && available;
+                              var label = _pdfFieldLabel(def);
+                              if (!permitted) label = '$label (locked)';
+
+                              return FilterChip(
+                                label: Text(label),
+                                selected: selectedFields.contains(def.key),
+                                onSelected: enabled
+                                    ? (v) {
+                                        setModalState(() {
+                                          if (v) {
+                                            selectedFields.add(def.key);
+                                          } else {
+                                            selectedFields.remove(def.key);
+                                          }
+                                          selectedFields =
+                                              _normalizePdfFieldsForView(
+                                            selectedFields,
+                                            viewMode,
+                                          );
+                                        });
+                                      }
+                                    : null,
+                              );
+                            }(),
+                        ],
+                      ),
+                      if (selectedFields.isEmpty)
+                        const Padding(
+                          padding: EdgeInsets.only(top: 6),
+                          child: Text(
+                            'Select at least one field.',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Colors.redAccent,
+                            ),
+                          ),
+                        ),
+                      const SizedBox(height: 16),
+                      Text(
+                        'Options',
+                        style: Theme.of(context).textTheme.titleSmall,
+                      ),
+                      const SizedBox(height: 8),
+                      DropdownButtonFormField<InventoryPdfSortMode>(
+                        value: sortMode,
+                        items: sortItems,
+                        onChanged: (v) {
+                          if (v == null) return;
+                          setModalState(() => sortMode = v);
+                        },
+                        decoration: const InputDecoration(
+                          labelText: 'Sort',
+                          border: OutlineInputBorder(),
+                          isDense: true,
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      SwitchListTile(
+                        value: landscape,
+                        onChanged: (v) => setModalState(() => landscape = v),
+                        title: const Text('Landscape layout'),
+                        subtitle: const Text('Better for many columns'),
+                        contentPadding: EdgeInsets.zero,
+                      ),
+                      if (viewMode == InventoryPdfViewMode.lines)
+                        SwitchListTile(
+                          value: expandQtyToRows,
+                          onChanged: (v) =>
+                              setModalState(() => expandQtyToRows = v),
+                          title: const Text('One row per item'),
+                          subtitle: const Text(
+                            'Expand quantities so each item is its own row',
+                          ),
+                          contentPadding: EdgeInsets.zero,
+                        ),
+                      if (!canExport)
+                        const Padding(
+                          padding: EdgeInsets.only(top: 6),
+                          child: Text(
+                            'Pick at least one status and one field to export.',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Colors.redAccent,
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              );
+            },
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () {
+                if (selectedStatuses.isEmpty || selectedFields.isEmpty) return;
+                Navigator.pop(
+                  ctx,
+                  InventoryPdfExportOptions(
+                    viewMode: viewMode,
+                    fields: selectedFields.toList(),
+                    selectedStatuses: selectedStatuses.toList(),
+                    sortMode: sortMode,
+                    landscape: landscape,
+                    expandQtyToRows: expandQtyToRows,
+                  ),
+                );
+              },
+              child: const Text('Export'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
   Future<void> _exportInventoryPdf() async {
     if (_exportingPdf) return;
+
+    final options = await _showPdfExportDialog();
+    if (options == null) return;
+    if (options.selectedStatuses.isEmpty || options.fields.isEmpty) {
+      _snack('Select at least one status and one field.');
+      return;
+    }
 
     setState(() => _exportingPdf = true);
 
@@ -933,30 +1359,62 @@ class _MainInventoryPageState extends State<MainInventoryPage>
       final singleGroups = await _fetchGroupedFromView(typeOverride: 'single');
       final sealedGroups = await _fetchGroupedFromView(typeOverride: 'sealed');
 
-      final singleLines =
+      final allSingleLines =
           _explodeLinesFromGroups(singleGroups, overrideFilter: '');
-      final sealedLines =
+      final allSealedLines =
           _explodeLinesFromGroups(sealedGroups, overrideFilter: '');
 
-      final singleProducts = buildProductSummaries(
-        lines: singleLines,
-        canSeeUnitCosts: false,
-        showEstimated: false,
-      );
-      final sealedProducts = buildProductSummaries(
-        lines: sealedLines,
-        canSeeUnitCosts: false,
-        showEstimated: false,
-      );
+      final statusSet = options.selectedStatuses.toSet();
+      var singleLines = _filterLinesByStatuses(allSingleLines, statusSet);
+      var sealedLines = _filterLinesByStatuses(allSealedLines, statusSet);
+
+      if (options.viewMode == InventoryPdfViewMode.lines &&
+          options.expandQtyToRows) {
+        singleLines = _expandLinesByQty(singleLines);
+        sealedLines = _expandLinesByQty(sealedLines);
+      }
+
+      final wantsUnit =
+          _perm.canSeeUnitCosts && options.fields.contains('buy_unit');
+      final wantsEst =
+          _perm.canSeeEstimated && options.fields.contains('estimated_unit');
+
+      final singleProducts = options.viewMode == InventoryPdfViewMode.products
+          ? buildProductSummaries(
+              lines: singleLines,
+              canSeeUnitCosts: wantsUnit,
+              showEstimated: wantsEst,
+            )
+          : const <InventoryProductSummary>[];
+      final sealedProducts = options.viewMode == InventoryPdfViewMode.products
+          ? buildProductSummaries(
+              lines: sealedLines,
+              canSeeUnitCosts: wantsUnit,
+              showEstimated: wantsEst,
+            )
+          : const <InventoryProductSummary>[];
 
       final bytes = await buildInventoryExportPdfBytes(
         orgId: widget.orgId,
         generatedAt: now,
-        singles: singleProducts,
-        sealed: sealedProducts,
+        sections: [
+          InventoryPdfSectionData(
+            title: 'Singles',
+            lines: singleLines,
+            products: singleProducts,
+          ),
+          InventoryPdfSectionData(
+            title: 'Sealed',
+            lines: sealedLines,
+            products: sealedProducts,
+          ),
+        ],
+        options: options,
       );
 
-      final baseName = 'inventorix_inventory_${_pdfStamp(now)}';
+      final viewTag =
+          options.viewMode == InventoryPdfViewMode.lines ? 'lines' : 'products';
+      final baseName = 'inventorix_inventory_${viewTag}_${_pdfStamp(now)}';
       await _savePdfDirectly(bytes: bytes, baseName: baseName);
 
       _snack('PDF exported: $baseName.pdf');
