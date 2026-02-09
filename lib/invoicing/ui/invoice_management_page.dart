@@ -30,13 +30,15 @@ class _FolderNode {
     required this.name,
     required this.path,
     this.folderId,
-    this.invoiceCount = 0,
+    this.directCount = 0,
+    this.totalCount = 0,
   });
 
   String name; // e.g. "CardShouker"
   String path; // e.g. "CardShouker/purchase/ebay"
   int? folderId; // real DB folder id (only on leaf nodes)
-  int invoiceCount; // aggregated invoice count
+  int directCount; // invoices directly inside this folder
+  int totalCount; // aggregated invoices (this folder + subfolders)
   final List<_FolderNode> children = [];
 
   bool get hasRealFolder => folderId != null;
@@ -73,6 +75,9 @@ class _InvoiceManagementPageState extends State<InvoiceManagementPage> {
   /// if non-null => show all invoices whose folder name starts with that prefix
   String? _selectedFolderPrefix;
 
+  final TextEditingController _searchCtrl = TextEditingController();
+  String _searchQuery = '';
+
   bool _loading = true;
 
   @override
@@ -80,6 +85,12 @@ class _InvoiceManagementPageState extends State<InvoiceManagementPage> {
     super.initState();
     _invoiceService = InvoiceService(Supabase.instance.client);
     _loadData();
+  }
+
+  @override
+  void dispose() {
+    _searchCtrl.dispose();
+    super.dispose();
   }
 
   // ---------------------------------------------------------------------------
@@ -207,8 +218,13 @@ class _InvoiceManagementPageState extends State<InvoiceManagementPage> {
     List<InvoiceFolder> folders,
     Map<int, int> folderCounts,
   ) {
-    final root =
-        _FolderNode(name: '', path: '', folderId: null, invoiceCount: 0);
+    final root = _FolderNode(
+      name: '',
+      path: '',
+      folderId: null,
+      directCount: 0,
+      totalCount: 0,
+    );
 
     for (final folder in folders) {
       final fullName = folder.name.trim();
@@ -243,13 +259,14 @@ class _InvoiceManagementPageState extends State<InvoiceManagementPage> {
             name: seg,
             path: pathSoFar,
             folderId: isLast ? folder.id : null,
-            invoiceCount: isLast ? (folderCounts[folder.id] ?? 0) : 0,
+            directCount: isLast ? (folderCounts[folder.id] ?? 0) : 0,
+            totalCount: 0,
           );
           current.children.add(child);
         } else if (isLast) {
           // if node already existed as virtual parent, attach folderId and direct count
           child.folderId ??= folder.id;
-          child.invoiceCount = folderCounts[folder.id] ?? child.invoiceCount;
+          child.directCount = folderCounts[folder.id] ?? child.directCount;
         }
 
         current = child;
@@ -262,11 +279,11 @@ class _InvoiceManagementPageState extends State<InvoiceManagementPage> {
   }
 
   int _computeAggregatedCounts(_FolderNode node) {
-    int sum = node.invoiceCount;
+    int sum = node.directCount;
     for (final child in node.children) {
       sum += _computeAggregatedCounts(child);
     }
-    node.invoiceCount = sum;
+    node.totalCount = sum;
     return sum;
   }
 
@@ -281,24 +298,36 @@ class _InvoiceManagementPageState extends State<InvoiceManagementPage> {
       return;
     }
 
-    // All invoices
-    if (_selectedFolderId == null && _selectedFolderPrefix == null) {
-      _invoices = List<Invoice>.from(_allInvoices);
-      return;
-    }
+    Iterable<Invoice> filtered = _allInvoices;
 
-    _invoices = _allInvoices.where((inv) {
-      final fid = inv.folderId;
-      if (_selectedFolderId != null) {
-        return fid == _selectedFolderId;
-      }
-      if (_selectedFolderPrefix != null) {
+    if (_selectedFolderId != null) {
+      filtered = filtered.where((inv) => inv.folderId == _selectedFolderId);
+    } else if (_selectedFolderPrefix != null) {
+      filtered = filtered.where((inv) {
+        final fid = inv.folderId;
         if (fid == null) return false;
         final folderName = _folderNameById[fid] ?? '';
         return folderName.startsWith(_selectedFolderPrefix!);
-      }
-      return true;
-    }).toList();
+      });
+    }
+
+    final q = _searchQuery.trim().toLowerCase();
+    if (q.isNotEmpty) {
+      filtered = filtered.where((inv) {
+        final folderName =
+            inv.folderId != null ? _folderNameById[inv.folderId!] ?? '' : '';
+        final counterpartyRaw =
+            inv.type == InvoiceType.purchase ? inv.sellerName : inv.buyerName;
+        final counterparty = (counterpartyRaw).toLowerCase();
+        return inv.invoiceNumber.toLowerCase().contains(q) ||
+            counterparty.contains(q) ||
+            folderName.toLowerCase().contains(q) ||
+            inv.currency.toLowerCase().contains(q) ||
+            inv.totalInclTax.toString().contains(q);
+      });
+    }
+
+    _invoices = filtered.toList();
   }
 
   void _selectAll() {
@@ -936,11 +965,7 @@ class _InvoiceManagementPageState extends State<InvoiceManagementPage> {
         break;
     }
 
-    return Chip(
-      label: Text(label, style: const TextStyle(color: Colors.white)),
-      backgroundColor: color,
-      visualDensity: VisualDensity.compact,
-    );
+    return _buildPill(label: label, color: color);
   }
 
   Widget _buildTypeChip(Invoice invoice) {
@@ -962,10 +987,26 @@ class _InvoiceManagementPageState extends State<InvoiceManagementPage> {
         break;
     }
 
-    return Chip(
-      label: Text(label, style: const TextStyle(color: Colors.white)),
-      backgroundColor: color,
-      visualDensity: VisualDensity.compact,
+    return _buildPill(label: label, color: color);
+  }
+
+  Widget _buildPill({required String label, required Color color}) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.12),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: color.withOpacity(0.3)),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          color: color,
+          fontSize: 11,
+          fontWeight: FontWeight.w700,
+          letterSpacing: 0.4,
+        ),
+      ),
     );
   }
 
@@ -1038,98 +1079,258 @@ class _InvoiceManagementPageState extends State<InvoiceManagementPage> {
 
   @override
   Widget build(BuildContext context) {
-    final isWide = MediaQuery.of(context).size.width > 800;
+    final isWide = MediaQuery.of(context).size.width >= 980;
 
     return Scaffold(
       appBar: AppBar(
         title: const Text('Invoices'),
-        actions: [
-          IconButton(
-            onPressed: _onCreateSalesInvoiceFromManagement,
-            icon: const Icon(Icons.receipt_long_outlined),
-            tooltip: 'New sales invoice',
-          ),
-          IconButton(
-            onPressed: _onAttachExternalInvoice,
-            icon: const Icon(Icons.upload_file_outlined),
-            tooltip: 'Attach external invoice/document',
-          ),
-          IconButton(
-            onPressed: _createFolderDialog,
-            icon: const Icon(Icons.create_new_folder_outlined),
-            tooltip: 'New folder',
-          ),
-        ],
       ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
-          : isWide
-              ? Row(
-                  children: [
-                    SizedBox(
-                      width: 280,
-                      child: _buildFolderList(),
-                    ),
-                    const VerticalDivider(width: 1),
-                    Expanded(child: _buildInvoiceList()),
-                  ],
-                )
-              : Column(
-                  children: [
-                    SizedBox(
-                      height: 80,
-                      child: _buildFolderChips(),
-                    ),
-                    const Divider(height: 1),
-                    Expanded(child: _buildInvoiceList()),
-                  ],
+          : Column(
+              children: [
+                _buildCommandBar(isWide: isWide),
+                Expanded(
+                  child: isWide
+                      ? Row(
+                          children: [
+                            SizedBox(
+                              width: 300,
+                              child: _buildFolderList(),
+                            ),
+                            const VerticalDivider(width: 1),
+                            Expanded(child: _buildInvoiceList(isWide: true)),
+                          ],
+                        )
+                      : Column(
+                          children: [
+                            SizedBox(
+                              height: 64,
+                              child: _buildFolderChips(),
+                            ),
+                            const Divider(height: 1),
+                            Expanded(
+                              child: _buildInvoiceList(isWide: false),
+                            ),
+                          ],
+                        ),
                 ),
+              ],
+            ),
     );
+  }
+
+  Widget _buildCommandBar({required bool isWide}) {
+    final theme = Theme.of(context);
+    final actions = [
+      _buildCommandButton(
+        icon: Icons.receipt_long_outlined,
+        label: 'New sales invoice',
+        onPressed: _onCreateSalesInvoiceFromManagement,
+        primary: true,
+      ),
+      _buildCommandButton(
+        icon: Icons.upload_file_outlined,
+        label: 'Attach document',
+        onPressed: _onAttachExternalInvoice,
+      ),
+      _buildCommandButton(
+        icon: Icons.create_new_folder_outlined,
+        label: 'New folder',
+        onPressed: _createFolderDialog,
+      ),
+    ];
+    final actionWidgets = <Widget>[];
+    for (int i = 0; i < actions.length; i++) {
+      if (i > 0) {
+        actionWidgets.add(const SizedBox(width: 8));
+      }
+      actionWidgets.add(actions[i]);
+    }
+
+    final searchField = SizedBox(
+      width: isWide ? 300 : double.infinity,
+      child: _buildSearchField(),
+    );
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surface,
+        border: Border(
+          bottom: BorderSide(color: theme.dividerColor),
+        ),
+      ),
+      child: isWide
+          ? Row(
+              children: [
+                ...actionWidgets,
+                const Spacer(),
+                searchField,
+              ],
+            )
+          : Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: actions,
+                ),
+                const SizedBox(height: 10),
+                searchField,
+              ],
+            ),
+    );
+  }
+
+  Widget _buildCommandButton({
+    required IconData icon,
+    required String label,
+    required VoidCallback onPressed,
+    bool primary = false,
+  }) {
+    final buttonStyle = primary
+        ? ElevatedButton.styleFrom(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          )
+        : OutlinedButton.styleFrom(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          );
+
+    final button = primary
+        ? ElevatedButton.icon(
+            onPressed: onPressed,
+            icon: Icon(icon, size: 18),
+            label: Text(label),
+            style: buttonStyle,
+          )
+        : OutlinedButton.icon(
+            onPressed: onPressed,
+            icon: Icon(icon, size: 18),
+            label: Text(label),
+            style: buttonStyle,
+          );
+
+    return Tooltip(message: label, child: button);
+  }
+
+  Widget _buildSearchField() {
+    final theme = Theme.of(context);
+    return TextField(
+      controller: _searchCtrl,
+      onChanged: (value) {
+        setState(() {
+          _searchQuery = value;
+          _applyCurrentFilter();
+        });
+      },
+      decoration: InputDecoration(
+        hintText: 'Search invoices, people, totals...',
+        prefixIcon: const Icon(Icons.search),
+        suffixIcon: _searchQuery.isEmpty
+            ? null
+            : IconButton(
+                onPressed: _clearSearch,
+                icon: const Icon(Icons.close),
+              ),
+        isDense: true,
+        filled: true,
+        fillColor: theme.colorScheme.surfaceVariant.withOpacity(0.35),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: BorderSide(color: theme.dividerColor),
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: BorderSide(color: theme.dividerColor),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: BorderSide(color: theme.colorScheme.primary),
+        ),
+      ),
+    );
+  }
+
+  void _clearSearch() {
+    _searchCtrl.clear();
+    setState(() {
+      _searchQuery = '';
+      _applyCurrentFilter();
+    });
   }
 
   // ----- LEFT PANE (desktop) : hierarchical folder tree -----
 
   Widget _buildFolderList() {
     final root = _folderRoot;
+    final theme = Theme.of(context);
     return Container(
-      color: Theme.of(context).colorScheme.surfaceVariant.withOpacity(0.4),
-      child: ListView(
-        padding: const EdgeInsets.all(8),
+      color: theme.colorScheme.surfaceVariant.withOpacity(0.22),
+      child: Column(
         children: [
-          ListTile(
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(8),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 12, 12, 6),
+            child: Row(
+              children: [
+                const Icon(Icons.storage_outlined, size: 18),
+                const SizedBox(width: 6),
+                Text(
+                  'Navigation',
+                  style: theme.textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
             ),
-            tileColor:
-                _selectedFolderId == null && _selectedFolderPrefix == null
-                    ? Theme.of(context).colorScheme.primary.withOpacity(0.08)
-                    : null,
-            selected:
-                _selectedFolderId == null && _selectedFolderPrefix == null,
-            leading: const Icon(Icons.dashboard_outlined),
-            title: const Text(
-              'All invoices',
-              style: TextStyle(fontWeight: FontWeight.w600),
+          ),
+          Expanded(
+            child: ListView(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+              children: [
+                ListTile(
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  tileColor:
+                      _selectedFolderId == null && _selectedFolderPrefix == null
+                          ? theme.colorScheme.primary.withOpacity(0.08)
+                          : null,
+                  selected: _selectedFolderId == null &&
+                      _selectedFolderPrefix == null,
+                  selectedTileColor:
+                      theme.colorScheme.primary.withOpacity(0.08),
+                  leading: const Icon(Icons.all_inbox_outlined),
+                  title: const Text(
+                    'All invoices',
+                    style: TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                  subtitle: Text('${_allInvoices.length} documents'),
+                  onTap: _selectAll,
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  'Folders',
+                  style: theme.textTheme.labelLarge?.copyWith(
+                    fontWeight: FontWeight.w700,
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                const Divider(),
+                if (root != null)
+                  ...root.children.map((node) => _buildFolderNodeTile(node)),
+              ],
             ),
-            subtitle: Text('${_allInvoices.length} documents'),
-            onTap: _selectAll,
           ),
-          const SizedBox(height: 8),
-          const Text(
-            'Folders',
-            style: TextStyle(fontWeight: FontWeight.bold),
-          ),
-          const SizedBox(height: 4),
-          const Divider(),
-          if (root != null)
-            ...root.children.map((node) => _buildFolderNodeTile(node)),
         ],
       ),
     );
   }
 
-  Widget _buildFolderCountChip(_FolderNode node) {
-    if (node.invoiceCount <= 0) return const SizedBox.shrink();
+  Widget _buildCountBadge(int count) {
+    if (count <= 0) return const SizedBox.shrink();
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
       decoration: BoxDecoration(
@@ -1137,7 +1338,7 @@ class _InvoiceManagementPageState extends State<InvoiceManagementPage> {
         borderRadius: BorderRadius.circular(999),
       ),
       child: Text(
-        node.invoiceCount.toString(),
+        count.toString(),
         style: const TextStyle(fontSize: 11),
       ),
     );
@@ -1168,26 +1369,29 @@ class _InvoiceManagementPageState extends State<InvoiceManagementPage> {
   Widget _buildFolderNodeTile(_FolderNode node) {
     final bool isSelectedLeaf =
         node.folderId != null && node.folderId == _selectedFolderId;
-    final bool isSelectedPrefix =
-        node.folderId == null && node.path == _selectedFolderPrefix;
+    final bool isSelectedPrefix = node.path == _selectedFolderPrefix;
 
+    final theme = Theme.of(context);
     final bool isSelected = isSelectedLeaf || isSelectedPrefix;
 
     if (!node.hasChildren) {
-      // leaf
       return ListTile(
         dense: true,
-        contentPadding: const EdgeInsets.symmetric(horizontal: 12),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 10),
         selected: isSelected,
+        selectedTileColor: theme.colorScheme.primary.withOpacity(0.08),
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(6),
         ),
-        leading: const Icon(Icons.folder),
-        title: Text(node.name),
+        leading: const Icon(Icons.folder_outlined),
+        title: Text(
+          node.name,
+          overflow: TextOverflow.ellipsis,
+        ),
         trailing: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            _buildFolderCountChip(node),
+            _buildCountBadge(node.directCount),
             const SizedBox(width: 4),
             _buildFolderMenuButton(node),
           ],
@@ -1200,57 +1404,61 @@ class _InvoiceManagementPageState extends State<InvoiceManagementPage> {
       );
     }
 
-    return ExpansionTile(
-      tilePadding: const EdgeInsets.only(left: 8, right: 8),
-      leading: const Icon(Icons.folder),
-      title: Text(
-        node.name,
-        style: const TextStyle(fontWeight: FontWeight.w600),
-      ),
-      childrenPadding: const EdgeInsets.only(left: 16),
-      initiallyExpanded: true,
-      children: [
-        if (node.folderId != null)
+    return Theme(
+      data: theme.copyWith(dividerColor: Colors.transparent),
+      child: ExpansionTile(
+        tilePadding: const EdgeInsets.only(left: 8, right: 4),
+        childrenPadding: const EdgeInsets.only(left: 12),
+        initiallyExpanded: true,
+        leading: Icon(
+          Icons.folder_outlined,
+          color: isSelectedPrefix ? theme.colorScheme.primary : null,
+        ),
+        title: Text(
+          node.name,
+          style: const TextStyle(fontWeight: FontWeight.w600),
+        ),
+        subtitle: Text('${node.totalCount} items'),
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _buildCountBadge(node.totalCount),
+            const SizedBox(width: 4),
+            _buildFolderMenuButton(node),
+          ],
+        ),
+        children: [
           ListTile(
             dense: true,
             contentPadding: const EdgeInsets.only(left: 8, right: 8),
-            selected: isSelectedLeaf,
-            leading: const Icon(Icons.folder_open),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(6),
-            ),
-            title: const Text('This folder'),
+            selected: isSelectedPrefix,
+            selectedTileColor: theme.colorScheme.primary.withOpacity(0.08),
+            leading: const Icon(Icons.folder_special_outlined, size: 18),
+            title: const Text('All items in this folder'),
             subtitle: Text(node.path),
-            trailing: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                _buildFolderCountChip(node),
-                const SizedBox(width: 4),
-                _buildFolderMenuButton(node),
-              ],
+            trailing: _buildCountBadge(node.totalCount),
+            onTap: () => _selectFolderByPrefix(node.path),
+          ),
+          if (node.folderId != null)
+            ListTile(
+              dense: true,
+              contentPadding: const EdgeInsets.only(left: 8, right: 8),
+              selected: isSelectedLeaf,
+              selectedTileColor: theme.colorScheme.primary.withOpacity(0.08),
+              leading: const Icon(Icons.folder_open, size: 18),
+              title: const Text('Only this folder'),
+              subtitle: Text(node.path),
+              trailing: _buildCountBadge(node.directCount),
+              onTap: () => _selectFolderById(node.folderId!),
             ),
-            onTap: () => _selectFolderById(node.folderId!),
+          ...node.children.map(
+            (child) => Padding(
+              padding: const EdgeInsets.only(left: 6),
+              child: _buildFolderNodeTile(child),
+            ),
           ),
-        ListTile(
-          dense: true,
-          contentPadding: const EdgeInsets.only(left: 8, right: 8),
-          selected: isSelectedPrefix,
-          leading: const Icon(Icons.folder_special_outlined),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(6),
-          ),
-          title: const Text('All subfolders'),
-          subtitle: Text(node.path),
-          trailing: _buildFolderCountChip(node),
-          onTap: () => _selectFolderByPrefix(node.path),
-        ),
-        ...node.children.map(
-          (child) => Padding(
-            padding: const EdgeInsets.only(left: 4),
-            child: _buildFolderNodeTile(child),
-          ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 
@@ -1284,201 +1492,625 @@ class _InvoiceManagementPageState extends State<InvoiceManagementPage> {
 
   // ----- RIGHT PANE : invoice list + header -----
 
-  Widget _buildInvoiceList() {
+  Widget _buildInvoiceList({required bool isWide}) {
     if (_invoices.isEmpty) {
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const Icon(Icons.receipt_long_outlined,
-                size: 48, color: Colors.grey),
-            const SizedBox(height: 12),
-            const Text('No invoices yet in this view.'),
-            const SizedBox(height: 4),
-            Text(
-              _currentFilterLabel(),
-              style: const TextStyle(color: Colors.grey),
-            ),
-          ],
-        ),
-      );
+      return _buildEmptyState();
     }
 
     return Column(
       children: [
-        Container(
-          width: double.infinity,
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-          color: Theme.of(context).colorScheme.surfaceVariant.withOpacity(0.4),
-          child: Row(
-            children: [
-              const Icon(Icons.folder_open, size: 18),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  _currentFilterLabel(),
-                  style: const TextStyle(fontWeight: FontWeight.w600),
-                ),
-              ),
-            ],
-          ),
-        ),
+        _buildContentHeader(),
+        _buildSummaryStrip(),
         const Divider(height: 1),
         Expanded(
-          child: ListView.builder(
-            padding: const EdgeInsets.all(12),
-            itemCount: _invoices.length,
-            itemBuilder: (context, index) {
-              final invoice = _invoices[index];
-
-              final numberSuffix = invoice.invoiceNumber.contains('-')
-                  ? invoice.invoiceNumber.split('-').last
-                  : invoice.invoiceNumber;
-
-              final folderName = (invoice.folderId != null)
-                  ? _folderNameById[invoice.folderId!] ?? ''
-                  : '';
-
-              final hasDoc = invoice.documentUrl != null;
-
-              return Card(
-                margin: const EdgeInsets.symmetric(vertical: 6),
-                elevation: 1.5,
-                child: ListTile(
-                  leading: CircleAvatar(
-                    child: Text(
-                      numberSuffix,
-                      style: const TextStyle(fontSize: 11),
-                    ),
-                  ),
-                  title: Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          invoice.invoiceNumber,
-                          style: const TextStyle(fontWeight: FontWeight.bold),
-                        ),
-                      ),
-                      const SizedBox(width: 4),
-                      _buildTypeChip(invoice),
-                      const SizedBox(width: 4),
-                      _buildStatusChip(invoice),
-                    ],
-                  ),
-                  subtitle: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const SizedBox(height: 2),
-                      if (invoice.type == InvoiceType.sale)
-                        Text('Buyer: ${invoice.buyerName}')
-                      else if (invoice.type == InvoiceType.purchase)
-                        Text('Supplier: ${invoice.sellerName}')
-                      else
-                        Text('Counterparty: ${invoice.buyerName}'),
-                      Text(
-                        'Date: ${formatDate(invoice.issueDate)}'
-                        ' • Total: ${formatMoney(invoice.totalInclTax, invoice.currency)}',
-                      ),
-                      if (folderName.isNotEmpty)
-                        Text(
-                          'Folder: $folderName',
-                          style: TextStyle(
-                            color: Colors.grey.shade600,
-                            fontSize: 13,
-                          ),
-                        ),
-                    ],
-                  ),
-                  trailing: PopupMenuButton<String>(
-                    onSelected: (value) async {
-                      if (value == 'view') {
-                        await _viewInvoicePdf(invoice);
-                      } else if (value == 'download') {
-                        await _downloadInvoiceDocument(invoice);
-                      } else if (value == 'attach') {
-                        await _attachOrReplacePdf(invoice);
-                      } else if (value == 'detach') {
-                        await _detachPdf(invoice);
-                      } else if (value == 'move') {
-                        await _moveInvoiceToFolder(invoice);
-                      } else if (value == 'paid') {
-                        await _markInvoicePaid(invoice);
-                      } else if (value == 'delete') {
-                        await _deleteInvoice(invoice);
-                      }
-                    },
-                    itemBuilder: (context) {
-                      final items = <PopupMenuEntry<String>>[];
-
-                      items.add(
-                        PopupMenuItem(
-                          value: 'view',
-                          child: Text(
-                            hasDoc
-                                ? 'View document'
-                                : 'View document (none attached)',
-                          ),
-                        ),
-                      );
-
-                      if (hasDoc) {
-                        items.add(
-                          const PopupMenuItem(
-                            value: 'download',
-                            child: Text('Download document'),
-                          ),
-                        );
-                      }
-
-                      items.add(
-                        PopupMenuItem(
-                          value: 'attach',
-                          child: Text(
-                            hasDoc ? 'Replace document' : 'Attach document',
-                          ),
-                        ),
-                      );
-
-                      if (hasDoc) {
-                        items.add(
-                          const PopupMenuItem(
-                            value: 'detach',
-                            child: Text('Remove attached document'),
-                          ),
-                        );
-                      }
-
-                      items.add(const PopupMenuDivider());
-
-                      items.add(
-                        const PopupMenuItem(
-                          value: 'move',
-                          child: Text('Move to folder...'),
-                        ),
-                      );
-                      items.add(
-                        const PopupMenuItem(
-                          value: 'paid',
-                          child: Text('Mark as paid'),
-                        ),
-                      );
-                      items.add(
-                        const PopupMenuItem(
-                          value: 'delete',
-                          child: Text('Delete invoice'),
-                        ),
-                      );
-
-                      return items;
-                    },
-                  ),
-                  onTap: () => _viewInvoicePdf(invoice),
-                ),
-              );
-            },
-          ),
+          child: isWide ? _buildInvoiceTable() : _buildInvoiceCards(),
         ),
       ],
     );
+  }
+
+  Widget _buildEmptyState() {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const Icon(Icons.receipt_long_outlined, size: 48, color: Colors.grey),
+          const SizedBox(height: 12),
+          const Text('No invoices yet in this view.'),
+          const SizedBox(height: 4),
+          Text(
+            _currentFilterLabel(),
+            style: const TextStyle(color: Colors.grey),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildContentHeader() {
+    final theme = Theme.of(context);
+    final segments = _currentPathSegments();
+    final showClear = _selectedFolderId != null ||
+        _selectedFolderPrefix != null ||
+        _searchQuery.isNotEmpty;
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      color: theme.colorScheme.surfaceVariant.withOpacity(0.35),
+      child: Row(
+        children: [
+          const Icon(Icons.folder_open, size: 18),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Wrap(
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  spacing: 4,
+                  runSpacing: 4,
+                  children: [
+                    for (int i = 0; i < segments.length; i++) ...[
+                      Text(
+                        segments[i],
+                        style: TextStyle(
+                          fontWeight:
+                              i == segments.length - 1 ? FontWeight.w600 : null,
+                        ),
+                      ),
+                      if (i < segments.length - 1)
+                        const Icon(Icons.chevron_right, size: 16),
+                    ],
+                  ],
+                ),
+                if (_searchQuery.isNotEmpty) ...[
+                  const SizedBox(height: 4),
+                  _buildFilterChip('Search: $_searchQuery'),
+                ],
+              ],
+            ),
+          ),
+          if (showClear)
+            TextButton.icon(
+              onPressed: _clearAllFilters,
+              icon: const Icon(Icons.filter_alt_off_outlined, size: 18),
+              label: const Text('Clear filters'),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildFilterChip(String label) {
+    final theme = Theme.of(context);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.primary.withOpacity(0.08),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: theme.colorScheme.primary.withOpacity(0.2)),
+      ),
+      child: Text(
+        label,
+        style: theme.textTheme.labelSmall?.copyWith(
+          color: theme.colorScheme.primary,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+    );
+  }
+
+  List<String> _currentPathSegments() {
+    if (_selectedFolderId == null && _selectedFolderPrefix == null) {
+      return ['All invoices'];
+    }
+
+    final rawPath = _selectedFolderId != null
+        ? _folderNameById[_selectedFolderId!] ?? ''
+        : _selectedFolderPrefix ?? '';
+
+    if (rawPath.isEmpty) return ['All invoices'];
+    return ['All invoices', ...rawPath.split('/')];
+  }
+
+  void _clearAllFilters() {
+    setState(() {
+      _searchCtrl.clear();
+      _searchQuery = '';
+      _selectedFolderId = null;
+      _selectedFolderPrefix = null;
+      _applyCurrentFilter();
+    });
+  }
+
+  Widget _buildSummaryStrip() {
+    final total = _invoices.length;
+    final paid = _invoices.where((i) => i.status == InvoiceStatus.paid).length;
+    final overdue =
+        _invoices.where((i) => i.status == InvoiceStatus.overdue).length;
+    final draft =
+        _invoices.where((i) => i.status == InvoiceStatus.draft).length;
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      child: Wrap(
+        spacing: 8,
+        runSpacing: 8,
+        children: [
+          _buildSummaryCard('Total', total, Colors.blueGrey),
+          _buildSummaryCard('Paid', paid, Colors.green),
+          _buildSummaryCard('Overdue', overdue, Colors.redAccent),
+          _buildSummaryCard('Draft', draft, Colors.orange),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSummaryCard(String label, int value, Color color) {
+    final theme = Theme.of(context);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surface,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: theme.dividerColor),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 8,
+            height: 8,
+            decoration: BoxDecoration(
+              color: color,
+              shape: BoxShape.circle,
+            ),
+          ),
+          const SizedBox(width: 8),
+          Text(
+            label,
+            style: theme.textTheme.labelMedium,
+          ),
+          const SizedBox(width: 6),
+          Text(
+            value.toString(),
+            style: theme.textTheme.titleMedium?.copyWith(
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildInvoiceTable() {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final width = constraints.maxWidth;
+        final showFolder = width >= 980;
+        final showType = width >= 880;
+        final showStatus = width >= 760;
+        final showTotal = width >= 660;
+        final showDate = width >= 560;
+
+        return Column(
+          children: [
+            _buildInvoiceTableHeader(
+              showFolder: showFolder,
+              showType: showType,
+              showStatus: showStatus,
+              showTotal: showTotal,
+              showDate: showDate,
+            ),
+            const Divider(height: 1),
+            Expanded(
+              child: ListView.separated(
+                itemCount: _invoices.length,
+                separatorBuilder: (_, __) => const Divider(height: 1),
+                itemBuilder: (context, index) {
+                  final invoice = _invoices[index];
+                  return _buildInvoiceRow(
+                    invoice,
+                    showFolder: showFolder,
+                    showType: showType,
+                    showStatus: showStatus,
+                    showTotal: showTotal,
+                    showDate: showDate,
+                  );
+                },
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _buildInvoiceTableHeader({
+    required bool showFolder,
+    required bool showType,
+    required bool showStatus,
+    required bool showTotal,
+    required bool showDate,
+  }) {
+    final theme = Theme.of(context);
+    final headerStyle = theme.textTheme.labelSmall?.copyWith(
+      fontWeight: FontWeight.w700,
+      color: theme.colorScheme.onSurfaceVariant,
+      letterSpacing: 0.3,
+    );
+
+    // Build children list explicitly to avoid collection-if/spread parsing issues.
+    final List<Widget> children = [
+      Expanded(flex: 4, child: Text('INVOICE', style: headerStyle)),
+      const SizedBox(width: 12),
+      Expanded(flex: 4, child: Text('COUNTERPARTY', style: headerStyle)),
+    ];
+
+    if (showDate) {
+      children.addAll([
+        const SizedBox(width: 12),
+        Expanded(flex: 2, child: Text('DATE', style: headerStyle)),
+      ]);
+    }
+
+    if (showTotal) {
+      children.addAll([
+        const SizedBox(width: 12),
+        Expanded(
+          flex: 2,
+          child: Align(
+            alignment: Alignment.centerRight,
+            child: Text('TOTAL', style: headerStyle),
+          ),
+        ),
+      ]);
+    }
+
+    if (showStatus) {
+      children.addAll([
+        const SizedBox(width: 12),
+        SizedBox(width: 92, child: Text('STATUS', style: headerStyle)),
+      ]);
+    }
+
+    if (showType) {
+      children.addAll([
+        const SizedBox(width: 12),
+        SizedBox(width: 96, child: Text('TYPE', style: headerStyle)),
+      ]);
+    }
+
+    if (showFolder) {
+      children.addAll([
+        const SizedBox(width: 12),
+        Expanded(flex: 3, child: Text('FOLDER', style: headerStyle)),
+      ]);
+    }
+
+    children.addAll([
+      const SizedBox(width: 12),
+      const SizedBox(width: 36),
+    ]);
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      color: theme.colorScheme.surfaceVariant.withOpacity(0.35),
+      child: Row(
+        children: children,
+      ),
+    );
+  }
+
+  Widget _buildInvoiceRow(
+    Invoice invoice, {
+    required bool showFolder,
+    required bool showType,
+    required bool showStatus,
+    required bool showTotal,
+    required bool showDate,
+  }) {
+    final theme = Theme.of(context);
+    final folderName = invoice.folderId != null
+        ? _folderNameById[invoice.folderId!] ?? ''
+        : '';
+    final counterpartyValue = _counterpartyValue(invoice);
+    final hasDoc = invoice.documentUrl != null;
+
+    return InkWell(
+        onTap: () => _viewInvoicePdf(invoice),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          child: Row(
+            children: [
+              Expanded(
+                flex: 4,
+                child: Row(
+                  children: [
+                    _buildInvoiceIcon(invoice),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            invoice.invoiceNumber,
+                            style: const TextStyle(fontWeight: FontWeight.w600),
+                          ),
+                          Text(
+                            hasDoc ? 'Document attached' : 'No document',
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                flex: 4,
+                child: Text(
+                  counterpartyValue.isEmpty ? '-' : counterpartyValue,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              if (showDate) ...[
+                const SizedBox(width: 12),
+                Expanded(
+                  flex: 2,
+                  child: Text(formatDate(invoice.issueDate)),
+                ),
+              ],
+              if (showTotal) ...[
+                const SizedBox(width: 12),
+                Expanded(
+                  flex: 2,
+                  child: Align(
+                    alignment: Alignment.centerRight,
+                    child: Text(
+                      formatMoney(invoice.totalInclTax, invoice.currency),
+                    ),
+                  ),
+                ),
+              ],
+              if (showStatus) ...[
+                const SizedBox(width: 12),
+                SizedBox(width: 92, child: _buildStatusChip(invoice)),
+              ],
+              if (showType) ...[
+                const SizedBox(width: 12),
+                SizedBox(width: 96, child: _buildTypeChip(invoice)),
+              ],
+              if (showFolder) ...[
+                const SizedBox(width: 12),
+                Expanded(
+                  flex: 3,
+                  child: Text(
+                    folderName.isEmpty ? '-' : folderName,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
+              const SizedBox(width: 12),
+              SizedBox(width: 36, child: _buildInvoiceMenuButton(invoice)),
+            ],
+          ),
+        ));
+  }
+
+  Widget _buildInvoiceCards() {
+    return ListView.separated(
+      padding: const EdgeInsets.all(12),
+      itemCount: _invoices.length,
+      separatorBuilder: (_, __) => const SizedBox(height: 8),
+      itemBuilder: (context, index) {
+        final invoice = _invoices[index];
+        return _buildInvoiceCard(invoice);
+      },
+    );
+  }
+
+  Widget _buildInvoiceCard(Invoice invoice) {
+    final theme = Theme.of(context);
+    final folderName = invoice.folderId != null
+        ? _folderNameById[invoice.folderId!] ?? ''
+        : '';
+    final counterpartyLabel = _counterpartyLabel(invoice);
+    final counterpartyValue = _counterpartyValue(invoice);
+
+    return Card(
+      elevation: 0.8,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: () => _viewInvoicePdf(invoice),
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  _buildInvoiceIcon(invoice),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      invoice.invoiceNumber,
+                      style: const TextStyle(fontWeight: FontWeight.w600),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  _buildInvoiceMenuButton(invoice),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: [
+                  _buildStatusChip(invoice),
+                  _buildTypeChip(invoice),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Text(
+                counterpartyValue.isEmpty
+                    ? counterpartyLabel
+                    : '$counterpartyLabel: $counterpartyValue',
+                style: theme.textTheme.bodyMedium,
+              ),
+              const SizedBox(height: 4),
+              Text(
+                'Date: ${formatDate(invoice.issueDate)} • Total: ${formatMoney(invoice.totalInclTax, invoice.currency)}',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+              if (folderName.isNotEmpty) ...[
+                const SizedBox(height: 4),
+                Text(
+                  'Folder: $folderName',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildInvoiceIcon(Invoice invoice) {
+    final theme = Theme.of(context);
+    final hasDoc = invoice.documentUrl != null;
+    final icon =
+        hasDoc ? Icons.picture_as_pdf_outlined : Icons.receipt_long_outlined;
+    final color =
+        hasDoc ? theme.colorScheme.primary : theme.colorScheme.onSurfaceVariant;
+
+    return Container(
+      width: 32,
+      height: 32,
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceVariant.withOpacity(0.4),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Icon(icon, size: 18, color: color),
+    );
+  }
+
+  Widget _buildInvoiceMenuButton(Invoice invoice) {
+    final hasDoc = invoice.documentUrl != null;
+    return PopupMenuButton<String>(
+      onSelected: (value) => _onInvoiceMenuAction(value, invoice),
+      itemBuilder: (context) => _buildInvoiceMenuItems(hasDoc),
+      icon: const Icon(Icons.more_vert, size: 18),
+    );
+  }
+
+  List<PopupMenuEntry<String>> _buildInvoiceMenuItems(bool hasDoc) {
+    final items = <PopupMenuEntry<String>>[];
+
+    items.add(
+      PopupMenuItem(
+        value: 'view',
+        child: Text(
+          hasDoc ? 'View document' : 'View document (none attached)',
+        ),
+      ),
+    );
+
+    if (hasDoc) {
+      items.add(
+        const PopupMenuItem(
+          value: 'download',
+          child: Text('Download document'),
+        ),
+      );
+    }
+
+    items.add(
+      PopupMenuItem(
+        value: 'attach',
+        child: Text(
+          hasDoc ? 'Replace document' : 'Attach document',
+        ),
+      ),
+    );
+
+    if (hasDoc) {
+      items.add(
+        const PopupMenuItem(
+          value: 'detach',
+          child: Text('Remove attached document'),
+        ),
+      );
+    }
+
+    items.add(const PopupMenuDivider());
+
+    items.add(
+      const PopupMenuItem(
+        value: 'move',
+        child: Text('Move to folder...'),
+      ),
+    );
+    items.add(
+      const PopupMenuItem(
+        value: 'paid',
+        child: Text('Mark as paid'),
+      ),
+    );
+    items.add(
+      const PopupMenuItem(
+        value: 'delete',
+        child: Text('Delete invoice'),
+      ),
+    );
+
+    return items;
+  }
+
+  Future<void> _onInvoiceMenuAction(String value, Invoice invoice) async {
+    if (value == 'view') {
+      await _viewInvoicePdf(invoice);
+    } else if (value == 'download') {
+      await _downloadInvoiceDocument(invoice);
+    } else if (value == 'attach') {
+      await _attachOrReplacePdf(invoice);
+    } else if (value == 'detach') {
+      await _detachPdf(invoice);
+    } else if (value == 'move') {
+      await _moveInvoiceToFolder(invoice);
+    } else if (value == 'paid') {
+      await _markInvoicePaid(invoice);
+    } else if (value == 'delete') {
+      await _deleteInvoice(invoice);
+    }
+  }
+
+  String _counterpartyLabel(Invoice invoice) {
+    switch (invoice.type) {
+      case InvoiceType.sale:
+        return 'Buyer';
+      case InvoiceType.purchase:
+        return 'Supplier';
+      case InvoiceType.creditNote:
+        return 'Counterparty';
+    }
+  }
+
+  String _counterpartyValue(Invoice invoice) {
+    if (invoice.type == InvoiceType.purchase) {
+      return invoice.sellerName;
+    }
+    return invoice.buyerName;
   }
 }
