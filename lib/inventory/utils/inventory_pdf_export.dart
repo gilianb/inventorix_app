@@ -49,8 +49,9 @@ const List<InventoryPdfFieldDef> kInventoryPdfFieldDefs = [
   InventoryPdfFieldDef(
     key: 'grade_id',
     label: 'Grade ID',
-    flex: 1,
+    flex: 2,
     lineOnly: true,
+    maxLines: 2,
   ),
   InventoryPdfFieldDef(
     key: 'grading_note',
@@ -435,21 +436,27 @@ Future<Uint8List> buildInventoryExportPdfBytes({
   }
 
   pw.Widget buildHeaderRow() {
-    const double colGap = 6;
+    final double colGap = columns.length >= 8 ? 6 : 8;
     final children = <pw.Widget>[];
     for (int i = 0; i < columns.length; i++) {
       final c = columns[i];
       children.add(
         pw.Expanded(
           flex: c.flex,
-          child: pw.Align(
-            alignment:
-                c.numeric ? pw.Alignment.centerRight : pw.Alignment.centerLeft,
-            child: pw.Text(
-              sanitize(c.label),
-              style: pw.TextStyle(
-                fontSize: headerFontSize,
-                fontWeight: pw.FontWeight.bold,
+          child: pw.Padding(
+            padding: const pw.EdgeInsets.symmetric(horizontal: 2),
+            child: pw.Align(
+              alignment: c.numeric
+                  ? pw.Alignment.centerRight
+                  : pw.Alignment.centerLeft,
+              child: pw.Text(
+                sanitize(c.label),
+                style: pw.TextStyle(
+                  fontSize: headerFontSize,
+                  fontWeight: pw.FontWeight.bold,
+                ),
+                maxLines: 2,
+                softWrap: true,
               ),
             ),
           ),
@@ -472,21 +479,25 @@ Future<Uint8List> buildInventoryExportPdfBytes({
 
   pw.Widget buildDataRow(List<String> values) {
     final cellStyle = pw.TextStyle(fontSize: cellFontSize.toDouble());
-    const double colGap = 6;
+    final double colGap = columns.length >= 8 ? 6 : 8;
     final children = <pw.Widget>[];
     for (int i = 0; i < columns.length; i++) {
       children.add(
         pw.Expanded(
           flex: columns[i].flex,
-          child: pw.Align(
-            alignment: columns[i].numeric
-                ? pw.Alignment.centerRight
-                : pw.Alignment.centerLeft,
-            child: pw.Text(
-              sanitize(values[i]),
-              style: cellStyle,
-              maxLines: columns[i].maxLines,
-              overflow: pw.TextOverflow.clip,
+          child: pw.Padding(
+            padding: const pw.EdgeInsets.symmetric(horizontal: 2),
+            child: pw.Align(
+              alignment: columns[i].numeric
+                  ? pw.Alignment.centerRight
+                  : pw.Alignment.centerLeft,
+              child: pw.Text(
+                sanitize(values[i]),
+                style: cellStyle,
+                maxLines: columns[i].maxLines,
+                softWrap: true,
+                overflow: pw.TextOverflow.clip,
+              ),
             ),
           ),
         ),
