@@ -152,14 +152,9 @@ class InventoryControlsCard extends StatelessWidget {
                     selected: {dateBase},
                     onSelectionChanged: (s) => onDateBaseChanged(s.first),
                   ),
-                  SegmentedButton<String>(
-                    segments: const [
-                      ButtonSegment(value: 'all', label: Text('All time')),
-                      ButtonSegment(value: 'month', label: Text('Last month')),
-                      ButtonSegment(value: 'week', label: Text('Last week')),
-                    ],
-                    selected: {dateRange},
-                    onSelectionChanged: (s) => onDateRangeChanged(s.first),
+                  DateRangeTabs(
+                    dateRange: dateRange,
+                    onDateRangeChanged: onDateRangeChanged,
                   ),
                   SegmentedButton<InventoryListViewMode>(
                     segments: const [

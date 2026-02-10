@@ -212,6 +212,31 @@ class TypeTabs extends StatelessWidget {
   }
 }
 
+class DateRangeTabs extends StatelessWidget {
+  const DateRangeTabs({
+    super.key,
+    required this.dateRange,
+    required this.onDateRangeChanged,
+  });
+
+  final String dateRange;
+  final ValueChanged<String> onDateRangeChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return SegmentedButton<String>(
+      segments: const [
+        ButtonSegment(value: 'all', label: Text('All time')),
+        ButtonSegment(value: 'this_month', label: Text('This month')),
+        ButtonSegment(value: 'month', label: Text('Last month')),
+        ButtonSegment(value: 'week', label: Text('Last week')),
+      ],
+      selected: {dateRange},
+      onSelectionChanged: (s) => onDateRangeChanged(s.first),
+    );
+  }
+}
+
 class ActiveStatusFilterBar extends StatelessWidget {
   const ActiveStatusFilterBar({
     super.key,

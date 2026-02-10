@@ -114,7 +114,7 @@ class _MainInventoryPageState extends State<MainInventoryPage>
   /// 'purchase' (purchase_date) ou 'sale' (sale_date)
   String _dateBase = 'purchase';
 
-  /// Période à appliquer : 'all' | 'month' (30j) | 'week' (7j)
+  /// Période à appliquer : 'all' | 'this_month' | 'month' (30j) | 'week' (7j)
   String _dateRange = 'all';
 
   TabController? _tabCtrl;
@@ -454,9 +454,17 @@ class _MainInventoryPageState extends State<MainInventoryPage>
         return now.subtract(const Duration(days: 7));
       case 'month':
         return now.subtract(const Duration(days: 30));
+      case 'this_month':
+        return DateTime(now.year, now.month, 1);
       default:
         return null;
     }
+  }
+
+  DateTime? _dateRangeEnd() {
+    if (_dateRange != 'this_month') return null;
+    final now = DateTime.now();
+    return DateTime(now.year, now.month, now.day);
   }
 
   Map<String, double?> _priceBounds() {
@@ -631,6 +639,7 @@ class _MainInventoryPageState extends State<MainInventoryPage>
         .eq('org_id', widget.orgId);
 
     final after = _dateRangeStart();
+    final before = _dateRangeEnd();
     late final String orderColumn;
 
     if (_dateBase == 'purchase') {
@@ -638,12 +647,20 @@ class _MainInventoryPageState extends State<MainInventoryPage>
         final afterStr = after.toIso8601String().split('T').first;
         query = query.gte('purchase_date', afterStr);
       }
+      if (before != null) {
+        final beforeStr = before.toIso8601String().split('T').first;
+        query = query.lte('purchase_date', beforeStr);
+      }
       orderColumn = 'purchase_date';
     } else {
       query = query.not('sale_date', 'is', null);
       if (after != null) {
         final afterStr = after.toIso8601String().split('T').first;
         query = query.gte('sale_date', afterStr);
+      }
+      if (before != null) {
+        final beforeStr = before.toIso8601String().split('T').first;
+        query = query.lte('sale_date', beforeStr);
       }
       orderColumn = 'sale_date';
     }
@@ -712,16 +729,25 @@ class _MainInventoryPageState extends State<MainInventoryPage>
         .inFilter('status', statuses);
 
     final after = _dateRangeStart();
+    final before = _dateRangeEnd();
     if (_dateBase == 'purchase') {
       if (after != null) {
         final d = after.toIso8601String().split('T').first;
         q = q.gte('purchase_date', d);
+      }
+      if (before != null) {
+        final d = before.toIso8601String().split('T').first;
+        q = q.lte('purchase_date', d);
       }
     } else {
       q = q.not('sale_date', 'is', null);
       if (after != null) {
         final d = after.toIso8601String().split('T').first;
         q = q.gte('sale_date', d);
+      }
+      if (before != null) {
+        final d = before.toIso8601String().split('T').first;
+        q = q.lte('sale_date', d);
       }
     }
 
@@ -1440,6 +1466,8 @@ class _MainInventoryPageState extends State<MainInventoryPage>
     _ensureViewState(forceStatus);
 
     final bool isFinalizedView = (forceStatus == 'finalized');
+    final bool useInvestOverride =
+        isFinalizedView && _dateBase == 'purchase' && _dateRangeEnd() == null;
     final bool showFinanceOverview =
         isFinalizedView || _perm.canSeeFinanceOverview;
 
@@ -1685,8 +1713,8 @@ class _MainInventoryPageState extends State<MainInventoryPage>
                   baseCurrency: 'USD',
                   fxToUsd: kFxToUsd,
                   finalizedMode: isFinalizedView,
-                  overrideInvested:
-                      isFinalizedView ? _finalizedInvestOverride : null,
+                    overrideInvested:
+                        useInvestOverride ? _finalizedInvestOverride : null,
                   titleInvested:
                       isFinalizedView ? 'Invested' : 'Invested (view)',
                   titleEstimated:
