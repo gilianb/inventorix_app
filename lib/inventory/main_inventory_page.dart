@@ -958,26 +958,11 @@ class _MainInventoryPageState extends State<MainInventoryPage>
   List<String> _allExportStatuses() =>
       kStatusOrder.where((s) => s != 'vault').toList();
 
-  List<String> _defaultExportStatuses() {
-    final all = _allExportStatuses();
-    final raw = (_statusFilter ?? '').toString().trim();
-    if (raw.isEmpty) {
-      return all.where((s) => s != 'finalized').toList();
-    }
-
-    final grouped = kGroupToStatuses[raw];
-    if (grouped != null) {
-      return grouped.where((s) => s != 'vault').toList();
-    }
-    if (all.contains(raw)) return [raw];
-    return all.where((s) => s != 'finalized').toList();
-  }
-
   Set<String> _defaultPdfFields(InventoryPdfViewMode view) {
     if (view == InventoryPdfViewMode.lines) {
-      return {'name', 'qty'};
+      return {'name', 'grade_id', 'grading_note', 'estimated_unit'};
     }
-    return {'name', 'qty'};
+    return {'name', 'estimated_unit'};
   }
 
   bool _isPdfFieldPermitted(InventoryPdfFieldDef def) {
@@ -1027,7 +1012,13 @@ class _MainInventoryPageState extends State<MainInventoryPage>
     }
 
     if (out.isEmpty) {
-      out.addAll(_defaultPdfFields(view));
+      for (final key in _defaultPdfFields(view)) {
+        final def = _pdfFieldByKey(key);
+        if (def == null) continue;
+        if (!_isPdfFieldPermitted(def)) continue;
+        if (!_isPdfFieldForView(def, view)) continue;
+        out.add(key);
+      }
     }
     return out;
   }
@@ -1079,29 +1070,126 @@ class _MainInventoryPageState extends State<MainInventoryPage>
 
   Future<InventoryPdfExportOptions?> _showPdfExportDialog() async {
     final allStatuses = _allExportStatuses();
-    final initialView = _viewMode == InventoryListViewMode.lines
-        ? InventoryPdfViewMode.lines
-        : InventoryPdfViewMode.products;
+    final initialView = InventoryPdfViewMode.lines;
 
-    var selectedStatuses = _defaultExportStatuses().toSet();
+    var selectedStatuses = <String>{};
     var viewMode = initialView;
     var selectedFields =
         _normalizePdfFieldsForView(_defaultPdfFields(viewMode), viewMode);
     var sortMode = InventoryPdfSortMode.nameAsc;
-    var landscape = false;
+    var landscape = true;
     var expandQtyToRows = true;
+    var includePhotos = false;
 
     return showDialog<InventoryPdfExportOptions>(
       context: context,
       builder: (ctx) {
         return AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
           title: const Text('Export inventory PDF'),
+          titlePadding: const EdgeInsets.fromLTRB(20, 18, 20, 6),
+          contentPadding: const EdgeInsets.fromLTRB(20, 0, 20, 0),
+          actionsPadding: const EdgeInsets.fromLTRB(16, 6, 16, 12),
           content: StatefulBuilder(
             builder: (context, setModalState) {
+              final cs = Theme.of(context).colorScheme;
+
               void applyStatusPreset(Iterable<String> statuses) {
                 setModalState(() {
                   selectedStatuses = statuses.toSet();
                 });
+              }
+
+              Widget sectionCard({
+                required String title,
+                required Widget child,
+                Widget? trailing,
+              }) {
+                return Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: cs.surfaceVariant.withOpacity(0.35),
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(
+                      color: cs.outlineVariant.withOpacity(0.6),
+                    ),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              title,
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .titleSmall
+                                  ?.copyWith(fontWeight: FontWeight.w700),
+                            ),
+                          ),
+                          if (trailing != null) trailing,
+                        ],
+                      ),
+                      const SizedBox(height: 10),
+                      child,
+                    ],
+                  ),
+                );
+              }
+
+              Widget presetButton({
+                required String label,
+                required IconData icon,
+                required Color color,
+                required VoidCallback onPressed,
+              }) {
+                return FilledButton.tonalIcon(
+                  onPressed: onPressed,
+                  icon: Icon(icon, size: 18),
+                  label: Text(label),
+                  style: FilledButton.styleFrom(
+                    foregroundColor: color,
+                    backgroundColor: color.withOpacity(0.12),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 10,
+                    ),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(999),
+                      side: BorderSide(color: color.withOpacity(0.35)),
+                    ),
+                    textStyle: const TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                );
+              }
+
+              Widget statusChip(String s) {
+                final c = statusColor(context, s);
+                final selected = selectedStatuses.contains(s);
+                return FilterChip(
+                  label: Text(s.replaceAll('_', ' ')),
+                  selected: selected,
+                  onSelected: (v) {
+                    setModalState(() {
+                      if (v) {
+                        selectedStatuses.add(s);
+                      } else {
+                        selectedStatuses.remove(s);
+                      }
+                    });
+                  },
+                  backgroundColor: selected ? c.withOpacity(0.12) : cs.surface,
+                  selectedColor: c.withOpacity(0.18),
+                  checkmarkColor: c,
+                  side: BorderSide(
+                    color: selected ? c.withOpacity(0.9) : c.withOpacity(0.5),
+                  ),
+                  labelStyle: TextStyle(
+                    color: selected ? c : cs.onSurface,
+                    fontWeight: selected ? FontWeight.w700 : FontWeight.w600,
+                  ),
+                );
               }
 
               void setViewMode(InventoryPdfViewMode next) {
@@ -1133,195 +1221,273 @@ class _MainInventoryPageState extends State<MainInventoryPage>
                   selectedStatuses.isNotEmpty && selectedFields.isNotEmpty;
 
               return SizedBox(
-                width: 560,
+                width: 620,
                 child: SingleChildScrollView(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        'Statuses',
-                        style: Theme.of(context).textTheme.titleSmall,
+                      sectionCard(
+                        title: 'Statuses',
+                        trailing: Text(
+                          '${selectedStatuses.length} selected',
+                          style: Theme.of(context)
+                              .textTheme
+                              .labelMedium
+                              ?.copyWith(color: cs.onSurfaceVariant),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Wrap(
+                              spacing: 8,
+                              runSpacing: 8,
+                              children: [
+                                presetButton(
+                                  label: 'All',
+                                  icon: Icons.all_inclusive,
+                                  color: cs.primary,
+                                  onPressed: () =>
+                                      applyStatusPreset(allStatuses),
+                                ),
+                                if (kGroupToStatuses['purchase'] != null)
+                                  presetButton(
+                                    label: 'Purchase',
+                                    icon: Icons.shopping_cart_outlined,
+                                    color: statusColor(context, 'paid'),
+                                    onPressed: () => applyStatusPreset(
+                                        kGroupToStatuses['purchase']!),
+                                  ),
+                                if (kGroupToStatuses['grading'] != null)
+                                  presetButton(
+                                    label: 'Grading',
+                                    icon: Icons.school_outlined,
+                                    color: statusColor(context, 'at_grader'),
+                                    onPressed: () => applyStatusPreset(
+                                        kGroupToStatuses['grading']!),
+                                  ),
+                                if (kGroupToStatuses['sale'] != null)
+                                  presetButton(
+                                    label: 'Sale',
+                                    icon: Icons.sell_outlined,
+                                    color: statusColor(context, 'listed'),
+                                    onPressed: () => applyStatusPreset(
+                                        kGroupToStatuses['sale']!),
+                                  ),
+                                presetButton(
+                                  label: 'Clear',
+                                  icon: Icons.clear_all,
+                                  color: cs.error,
+                                  onPressed: () =>
+                                      applyStatusPreset(const <String>[]),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 10),
+                            Wrap(
+                              spacing: 8,
+                              runSpacing: 6,
+                              children: [
+                                for (final s in allStatuses) statusChip(s),
+                              ],
+                            ),
+                            if (selectedStatuses.isEmpty)
+                              Padding(
+                                padding: const EdgeInsets.only(top: 8),
+                                child: Row(
+                                  children: const [
+                                    Icon(Icons.info_outline,
+                                        size: 16, color: Colors.redAccent),
+                                    SizedBox(width: 6),
+                                    Text(
+                                      'Select at least one status.',
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        color: Colors.redAccent,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                          ],
+                        ),
                       ),
-                      const SizedBox(height: 8),
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 6,
-                        children: [
-                          ActionChip(
-                            label: const Text('All'),
-                            onPressed: () => applyStatusPreset(allStatuses),
-                          ),
-                          if (kGroupToStatuses['purchase'] != null)
-                            ActionChip(
-                              label: const Text('Purchase'),
-                              onPressed: () => applyStatusPreset(
-                                  kGroupToStatuses['purchase']!),
-                            ),
-                          if (kGroupToStatuses['grading'] != null)
-                            ActionChip(
-                              label: const Text('Grading'),
-                              onPressed: () => applyStatusPreset(
-                                  kGroupToStatuses['grading']!),
-                            ),
-                          if (kGroupToStatuses['sale'] != null)
-                            ActionChip(
-                              label: const Text('Sale'),
-                              onPressed: () =>
-                                  applyStatusPreset(kGroupToStatuses['sale']!),
-                            ),
-                          ActionChip(
-                            label: const Text('Clear'),
-                            onPressed: () =>
-                                applyStatusPreset(const <String>[]),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 6,
-                        children: [
-                          for (final s in allStatuses)
-                            FilterChip(
-                              label: Text(s.replaceAll('_', ' ')),
-                              selected: selectedStatuses.contains(s),
-                              onSelected: (v) {
-                                setModalState(() {
-                                  if (v) {
-                                    selectedStatuses.add(s);
-                                  } else {
-                                    selectedStatuses.remove(s);
-                                  }
-                                });
+                      const SizedBox(height: 14),
+                      sectionCard(
+                        title: 'View',
+                        child: Column(
+                          children: [
+                            RadioListTile<InventoryPdfViewMode>(
+                              value: InventoryPdfViewMode.lines,
+                              groupValue: viewMode,
+                              onChanged: (v) {
+                                if (v != null) setViewMode(v);
                               },
+                              title:
+                                  const Text('Lines (one row per status)'),
+                              contentPadding: EdgeInsets.zero,
                             ),
-                        ],
-                      ),
-                      if (selectedStatuses.isEmpty)
-                        const Padding(
-                          padding: EdgeInsets.only(top: 6),
-                          child: Text(
-                            'Select at least one status.',
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: Colors.redAccent,
+                            RadioListTile<InventoryPdfViewMode>(
+                              value: InventoryPdfViewMode.products,
+                              groupValue: viewMode,
+                              onChanged: (v) {
+                                if (v != null) setViewMode(v);
+                              },
+                              title: const Text('Grouped by product'),
+                              contentPadding: EdgeInsets.zero,
                             ),
-                          ),
+                          ],
                         ),
-                      const SizedBox(height: 16),
-                      Text(
-                        'View',
-                        style: Theme.of(context).textTheme.titleSmall,
                       ),
-                      RadioListTile<InventoryPdfViewMode>(
-                        value: InventoryPdfViewMode.lines,
-                        groupValue: viewMode,
-                        onChanged: (v) {
-                          if (v != null) setViewMode(v);
-                        },
-                        title: const Text('Lines (one row per status)'),
-                        contentPadding: EdgeInsets.zero,
-                      ),
-                      RadioListTile<InventoryPdfViewMode>(
-                        value: InventoryPdfViewMode.products,
-                        groupValue: viewMode,
-                        onChanged: (v) {
-                          if (v != null) setViewMode(v);
-                        },
-                        title: const Text('Grouped by product'),
-                        contentPadding: EdgeInsets.zero,
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        'Fields',
-                        style: Theme.of(context).textTheme.titleSmall,
-                      ),
-                      const SizedBox(height: 8),
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 6,
-                        children: [
-                          for (final def in kInventoryPdfFieldDefs)
-                            () {
-                              final permitted = _isPdfFieldPermitted(def);
-                              final available =
-                                  _isPdfFieldForView(def, viewMode);
-                              final enabled = permitted && available;
-                              var label = _pdfFieldLabel(def);
-                              if (!permitted) label = '$label (locked)';
+                      const SizedBox(height: 14),
+                      sectionCard(
+                        title: 'Fields',
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Wrap(
+                              spacing: 8,
+                              runSpacing: 6,
+                              children: [
+                                for (final def in kInventoryPdfFieldDefs)
+                                  () {
+                                    final permitted = _isPdfFieldPermitted(def);
+                                    final available =
+                                        _isPdfFieldForView(def, viewMode);
+                                    final enabled = permitted && available;
+                                    var label = _pdfFieldLabel(def);
+                                    if (!permitted) label = '$label (locked)';
 
-                              return FilterChip(
-                                label: Text(label),
-                                selected: selectedFields.contains(def.key),
-                                onSelected: enabled
-                                    ? (v) {
-                                        setModalState(() {
-                                          if (v) {
-                                            selectedFields.add(def.key);
-                                          } else {
-                                            selectedFields.remove(def.key);
-                                          }
-                                          selectedFields =
-                                              _normalizePdfFieldsForView(
-                                            selectedFields,
-                                            viewMode,
-                                          );
-                                        });
-                                      }
-                                    : null,
-                              );
-                            }(),
-                        ],
+                                    return FilterChip(
+                                      label: Text(label),
+                                      selected:
+                                          selectedFields.contains(def.key),
+                                      onSelected: enabled
+                                          ? (v) {
+                                              setModalState(() {
+                                                if (v) {
+                                                  selectedFields.add(def.key);
+                                                } else {
+                                                  selectedFields
+                                                      .remove(def.key);
+                                                }
+                                                selectedFields =
+                                                    _normalizePdfFieldsForView(
+                                                  selectedFields,
+                                                  viewMode,
+                                                );
+                                              });
+                                            }
+                                          : null,
+                                      backgroundColor:
+                                          cs.surfaceVariant.withOpacity(0.4),
+                                      selectedColor:
+                                          cs.primary.withOpacity(0.15),
+                                      side: BorderSide(
+                                        color: enabled
+                                            ? cs.outlineVariant
+                                                .withOpacity(0.6)
+                                            : cs.outlineVariant
+                                                .withOpacity(0.3),
+                                      ),
+                                      labelStyle: TextStyle(
+                                        color: enabled
+                                            ? cs.onSurface
+                                            : cs.onSurface
+                                                .withOpacity(0.45),
+                                        fontWeight: selectedFields
+                                                .contains(def.key)
+                                            ? FontWeight.w700
+                                            : FontWeight.w600,
+                                      ),
+                                    );
+                                  }(),
+                              ],
+                            ),
+                            if (selectedFields.isEmpty)
+                              const Padding(
+                                padding: EdgeInsets.only(top: 8),
+                                child: Text(
+                                  'Select at least one field.',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: Colors.redAccent,
+                                  ),
+                                ),
+                              ),
+                          ],
+                        ),
                       ),
-                      if (selectedFields.isEmpty)
-                        const Padding(
-                          padding: EdgeInsets.only(top: 6),
-                          child: Text(
-                            'Select at least one field.',
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: Colors.redAccent,
+                      const SizedBox(height: 14),
+                      sectionCard(
+                        title: 'Options',
+                        child: Column(
+                          children: [
+                            DropdownButtonFormField<InventoryPdfSortMode>(
+                              value: sortMode,
+                              items: sortItems,
+                              onChanged: (v) {
+                                if (v == null) return;
+                                setModalState(() => sortMode = v);
+                              },
+                              decoration: const InputDecoration(
+                                labelText: 'Sort',
+                                border: OutlineInputBorder(),
+                                isDense: true,
+                              ),
+                            ),
+                            const SizedBox(height: 10),
+                            SwitchListTile(
+                              value: landscape,
+                              onChanged: (v) =>
+                                  setModalState(() => landscape = v),
+                              title: const Text('Landscape layout'),
+                              subtitle: const Text('Better for many columns'),
+                              contentPadding: EdgeInsets.zero,
+                            ),
+                            SwitchListTile(
+                              value: includePhotos,
+                              onChanged: (v) =>
+                                  setModalState(() => includePhotos = v),
+                              title: const Text('Include photos'),
+                              subtitle: const Text(
+                                'Adds thumbnails to each row (slower)',
+                              ),
+                              contentPadding: EdgeInsets.zero,
+                            ),
+                            if (viewMode == InventoryPdfViewMode.lines)
+                              SwitchListTile(
+                                value: expandQtyToRows,
+                                onChanged: (v) =>
+                                    setModalState(() => expandQtyToRows = v),
+                                title: const Text('One row per item'),
+                                subtitle: const Text(
+                                  'Expand quantities so each item is its own row',
+                                ),
+                                contentPadding: EdgeInsets.zero,
+                              ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Row(
+                        children: [
+                          Icon(
+                            Icons.info_outline,
+                            size: 16,
+                            color: cs.onSurfaceVariant,
+                          ),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: Text(
+                              'Default view is Lines. No statuses are pre-selected.',
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .labelMedium
+                                  ?.copyWith(color: cs.onSurfaceVariant),
                             ),
                           ),
-                        ),
-                      const SizedBox(height: 16),
-                      Text(
-                        'Options',
-                        style: Theme.of(context).textTheme.titleSmall,
+                        ],
                       ),
-                      const SizedBox(height: 8),
-                      DropdownButtonFormField<InventoryPdfSortMode>(
-                        value: sortMode,
-                        items: sortItems,
-                        onChanged: (v) {
-                          if (v == null) return;
-                          setModalState(() => sortMode = v);
-                        },
-                        decoration: const InputDecoration(
-                          labelText: 'Sort',
-                          border: OutlineInputBorder(),
-                          isDense: true,
-                        ),
-                      ),
-                      const SizedBox(height: 10),
-                      SwitchListTile(
-                        value: landscape,
-                        onChanged: (v) => setModalState(() => landscape = v),
-                        title: const Text('Landscape layout'),
-                        subtitle: const Text('Better for many columns'),
-                        contentPadding: EdgeInsets.zero,
-                      ),
-                      if (viewMode == InventoryPdfViewMode.lines)
-                        SwitchListTile(
-                          value: expandQtyToRows,
-                          onChanged: (v) =>
-                              setModalState(() => expandQtyToRows = v),
-                          title: const Text('One row per item'),
-                          subtitle: const Text(
-                            'Expand quantities so each item is its own row',
-                          ),
-                          contentPadding: EdgeInsets.zero,
-                        ),
                       if (!canExport)
                         const Padding(
                           padding: EdgeInsets.only(top: 6),
@@ -1356,6 +1522,7 @@ class _MainInventoryPageState extends State<MainInventoryPage>
                     sortMode: sortMode,
                     landscape: landscape,
                     expandQtyToRows: expandQtyToRows,
+                    includePhotos: includePhotos,
                   ),
                 );
               },
@@ -1378,6 +1545,61 @@ class _MainInventoryPageState extends State<MainInventoryPage>
     }
 
     setState(() => _exportingPdf = true);
+
+    final progress = ValueNotifier<double?>(0);
+    final phase = ValueNotifier<String>('Preparing export...');
+    var dialogShown = false;
+    if (mounted) {
+      dialogShown = true;
+      showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        useRootNavigator: true,
+        builder: (ctx) {
+          return WillPopScope(
+            onWillPop: () async => false,
+            child: AlertDialog(
+              title: const Text('Exporting PDF…'),
+              content: ValueListenableBuilder<double?>(
+                valueListenable: progress,
+                builder: (context, value, _) {
+                  final isFinalizing = phase.value.toLowerCase().contains('finalizing');
+                  final percent = (value == null || isFinalizing)
+                      ? null
+                      : (value.clamp(0.0, 1.0) * 100);
+                  return Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      ValueListenableBuilder<String>(
+                        valueListenable: phase,
+                        builder: (context, label, _) {
+                          return Text(label);
+                        },
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        isFinalizing
+                            ? 'Finalizing… please wait'
+                            : (percent == null
+                                ? '...'
+                                : '${percent.round()}% complete'),
+                        style: Theme.of(context)
+                            .textTheme
+                            .labelMedium
+                            ?.copyWith(color: Colors.black54),
+                      ),
+                      const SizedBox(height: 10),
+                      LinearProgressIndicator(value: isFinalizing ? null : value),
+                    ],
+                  );
+                },
+              ),
+            ),
+          );
+        },
+      );
+    }
 
     try {
       final now = DateTime.now();
@@ -1436,6 +1658,11 @@ class _MainInventoryPageState extends State<MainInventoryPage>
           ),
         ],
         options: options,
+        onProgress: (value, label) {
+          final v = value.clamp(0.0, 1.0);
+          progress.value = v;
+          phase.value = label;
+        },
       );
 
       final viewTag =
@@ -1447,6 +1674,12 @@ class _MainInventoryPageState extends State<MainInventoryPage>
     } catch (e) {
       _snack('PDF export error: $e');
     } finally {
+      if (dialogShown && mounted) {
+        final nav = Navigator.of(context, rootNavigator: true);
+        if (nav.canPop()) nav.pop();
+      }
+      progress.dispose();
+      phase.dispose();
       if (mounted) setState(() => _exportingPdf = false);
     }
   }

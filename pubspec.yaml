@@ -76,6 +76,7 @@ flutter:
   assets:
     - .env
     - assets/images/default_card.png
+    - fonts/Roboto-Variable.ttf
 
 
 
