@@ -49,6 +49,7 @@ enum _ItemSort {
 class _PsaOrderDetailsPageState extends State<PsaOrderDetailsPage> {
   final _sb = Supabase.instance.client;
   late final PsaRepository repo = PsaRepository(_sb);
+  final ScrollController _scrollCtrl = ScrollController();
 
   bool _loading = true;
   late PsaOrderSummary _order = widget.order;
@@ -167,8 +168,7 @@ class _PsaOrderDetailsPageState extends State<PsaOrderDetailsPage> {
   Future<void> _saveInlineGrade(PsaOrderItem it) async {
     if (!widget.canEdit) return;
     final feeText = _feesCtrlFor(it).text;
-    final feeValue =
-        widget.canSeeUnitCosts ? _parseNullableNum(feeText) : null;
+    final feeValue = widget.canSeeUnitCosts ? _parseNullableNum(feeText) : null;
     if (widget.canSeeUnitCosts &&
         feeText.trim().isNotEmpty &&
         feeValue == null) {
@@ -186,7 +186,7 @@ class _PsaOrderDetailsPageState extends State<PsaOrderDetailsPage> {
         gradingFees: feeValue,
       );
       _editingIds.remove(it.id);
-      await _refresh();
+      await _refresh(keepOffset: true);
     } finally {
       if (mounted) setState(() => _savingIds.remove(it.id));
     }
@@ -456,6 +456,7 @@ class _PsaOrderDetailsPageState extends State<PsaOrderDetailsPage> {
     for (final c in _feesCtrls.values) {
       c.dispose();
     }
+    _scrollCtrl.dispose();
     super.dispose();
   }
 
@@ -472,7 +473,9 @@ class _PsaOrderDetailsPageState extends State<PsaOrderDetailsPage> {
     return addBusinessDays(r, o.expectedDays);
   }
 
-  Future<void> _refresh() async {
+  Future<void> _refresh({bool keepOffset = false}) async {
+    final savedOffset =
+        keepOffset && _scrollCtrl.hasClients ? _scrollCtrl.offset : null;
     setState(() => _loading = true);
     try {
       final items = await repo.fetchOrderItems(
@@ -494,6 +497,14 @@ class _PsaOrderDetailsPageState extends State<PsaOrderDetailsPage> {
       _snack('Error: $e');
     } finally {
       if (mounted) setState(() => _loading = false);
+    }
+    if (savedOffset != null && mounted) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!_scrollCtrl.hasClients) return;
+        final max = _scrollCtrl.position.maxScrollExtent;
+        final target = savedOffset.clamp(0.0, max);
+        _scrollCtrl.jumpTo(target);
+      });
     }
   }
 
@@ -760,9 +771,8 @@ class _PsaOrderDetailsPageState extends State<PsaOrderDetailsPage> {
 
     if (!ok) return;
 
-    final feeValue = widget.canSeeUnitCosts
-        ? _parseNullableNum(feesCtrl.text)
-        : null;
+    final feeValue =
+        widget.canSeeUnitCosts ? _parseNullableNum(feesCtrl.text) : null;
     if (widget.canSeeUnitCosts &&
         feesCtrl.text.trim().isNotEmpty &&
         feeValue == null) {
@@ -780,7 +790,101 @@ class _PsaOrderDetailsPageState extends State<PsaOrderDetailsPage> {
     );
 
     _snack('Updated grade fields.');
-    await _refresh();
+    await _refresh(keepOffset: true);
+  }
+
+  List<PsaOrderItem> _orderSequenceItems(List<PsaOrderItem> items) {
+    final out = [...items];
+    out.sort((a, b) {
+      final c = _cmpNullLastIntAsc(a.psaOrderPosition, b.psaOrderPosition);
+      if (c != 0) return c;
+      return a.id.compareTo(b.id);
+    });
+    return out;
+  }
+
+  Future<void> _editGradeForAll() async {
+    if (!widget.canEdit) return;
+    final gradeCtrl = TextEditingController();
+    final noteCtrl = TextEditingController();
+
+    final ok = await showDialog<bool>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('Edit grade for all items'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: gradeCtrl,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(
+                    labelText: 'First grade ID (cert #)',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: noteCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'Grading note (PSA 10, 9, ...)',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                  onPressed: () => Navigator.pop(ctx, false),
+                  child: const Text('Cancel')),
+              FilledButton(
+                  onPressed: () => Navigator.pop(ctx, true),
+                  child: const Text('Apply')),
+            ],
+          ),
+        ) ??
+        false;
+
+    if (!ok) return;
+
+    final base = gradeCtrl.text.trim();
+    if (base.isEmpty) {
+      _snack('Grade ID is required.');
+      return;
+    }
+    if (!RegExp(r'^\d+$').hasMatch(base)) {
+      _snack('Grade ID must be numeric.');
+      return;
+    }
+
+    final items = _orderSequenceItems(_items);
+    if (items.isEmpty) {
+      _snack('No items in this order.');
+      return;
+    }
+
+    final start = int.parse(base);
+    final width = base.length;
+    final note = noteCtrl.text;
+
+    try {
+      for (var i = 0; i < items.length; i++) {
+        final it = items[i];
+        final nextId = (start + i).toString().padLeft(width, '0');
+        await repo.updateItemGrade(
+          orgId: widget.orgId,
+          itemId: it.id,
+          gradeId: nextId,
+          gradingNote: note,
+        );
+      }
+      _snack('Updated ${items.length} item(s).');
+      await _refresh(keepOffset: true);
+    } on PostgrestException catch (e) {
+      _snack('Supabase error: ${e.message}');
+    } catch (e) {
+      _snack('Error: $e');
+    }
   }
 
   Color _filterTone(_ItemFilter f) {
@@ -1093,6 +1197,69 @@ class _PsaOrderDetailsPageState extends State<PsaOrderDetailsPage> {
               ),
             ),
             const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: theme.colorScheme.primaryContainer.withOpacity(0.4),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: theme.colorScheme.primary.withOpacity(0.35),
+                ),
+              ),
+              child: Row(
+                children: [
+                  Container(
+                    width: 36,
+                    height: 36,
+                    decoration: BoxDecoration(
+                      color: theme.colorScheme.primary.withOpacity(0.15),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Icon(
+                      Icons.add_box_outlined,
+                      size: 18,
+                      color: theme.colorScheme.primary,
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Add RECEIVED cards',
+                          style: theme.textTheme.titleSmall?.copyWith(
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          'Add items from RECEIVED into this submission.',
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  FilledButton.icon(
+                    onPressed: widget.canEdit ? _addReceivedCardsToOrder : null,
+                    icon: const Iconify(Mdi.plus_box, size: 24),
+                    label: const Text('Add'),
+                    style: FilledButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 20, vertical: 16),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+            Divider(color: theme.colorScheme.outlineVariant),
+            const SizedBox(height: 12),
             Wrap(
               spacing: 12,
               runSpacing: 12,
@@ -1102,10 +1269,10 @@ class _PsaOrderDetailsPageState extends State<PsaOrderDetailsPage> {
                   icon: const Iconify(Mdi.calendar, size: 18),
                   label: const Text('Update PSA received date'),
                 ),
-                FilledButton.icon(
-                  onPressed: widget.canEdit ? _addReceivedCardsToOrder : null,
-                  icon: const Iconify(Mdi.plus_box, size: 18),
-                  label: const Text('Add RECEIVED cards'),
+                OutlinedButton.icon(
+                  onPressed: widget.canEdit ? _editGradeForAll : null,
+                  icon: const Iconify(Mdi.pencil_outline, size: 18),
+                  label: const Text('Edit grade for all'),
                 ),
                 OutlinedButton.icon(
                   onPressed: widget.canEdit ? _markAtGrader : null,
@@ -1458,7 +1625,7 @@ class _PsaOrderDetailsPageState extends State<PsaOrderDetailsPage> {
         actions: [
           IconButton(
             tooltip: 'Refresh',
-            onPressed: _loading ? null : _refresh,
+            onPressed: _loading ? null : () => _refresh(keepOffset: true),
             icon: _loading
                 ? const SizedBox(
                     width: 22,
@@ -1475,8 +1642,9 @@ class _PsaOrderDetailsPageState extends State<PsaOrderDetailsPage> {
         ],
       ),
       body: RefreshIndicator(
-        onRefresh: _refresh,
+        onRefresh: () => _refresh(keepOffset: true),
         child: ListView(
+          controller: _scrollCtrl,
           padding: const EdgeInsets.all(16),
           children: [
             _heroHeader(),
