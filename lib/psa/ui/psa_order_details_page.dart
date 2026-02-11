@@ -58,6 +58,7 @@ class _PsaOrderDetailsPageState extends State<PsaOrderDetailsPage> {
   String _itemQuery = '';
   final Map<int, TextEditingController> _gradeCtrls = {};
   final Map<int, TextEditingController> _noteCtrls = {};
+  final Map<int, TextEditingController> _feesCtrls = {};
   final Set<int> _editingIds = <int>{};
   final Set<int> _savingIds = <int>{};
 
@@ -68,6 +69,24 @@ class _PsaOrderDetailsPageState extends State<PsaOrderDetailsPage> {
       d == null ? '—' : d.toIso8601String().split('T').first;
 
   String _fmtMoney(num v) => v.toStringAsFixed(2);
+
+  String _numToText(num? v) => v == null ? '' : v.toString();
+
+  num? _parseNullableNum(String? raw) {
+    final s = (raw ?? '').trim();
+    if (s.isEmpty) return null;
+    final cleaned = s.replaceAll(RegExp(r'[^0-9,.-]'), '');
+    if (cleaned.isEmpty) return null;
+    final hasDot = cleaned.contains('.');
+    final hasComma = cleaned.contains(',');
+    var normalized = cleaned;
+    if (hasDot && hasComma) {
+      normalized = normalized.replaceAll(',', '');
+    } else if (hasComma && !hasDot) {
+      normalized = normalized.replaceAll(',', '.');
+    }
+    return num.tryParse(normalized);
+  }
 
   int _maxOrderPosition(List<PsaOrderItem> items) {
     var maxPos = 0;
@@ -100,14 +119,21 @@ class _PsaOrderDetailsPageState extends State<PsaOrderDetailsPage> {
         it.id, () => TextEditingController(text: it.gradingNote ?? ''));
   }
 
+  TextEditingController _feesCtrlFor(PsaOrderItem it) {
+    return _feesCtrls.putIfAbsent(
+        it.id, () => TextEditingController(text: _numToText(it.gradingFees)));
+  }
+
   void _syncItemControllers(List<PsaOrderItem> items) {
     final ids = items.map((it) => it.id).toSet();
     final stale = _gradeCtrls.keys.where((id) => !ids.contains(id)).toList();
     for (final id in stale) {
       _gradeCtrls[id]?.dispose();
       _noteCtrls[id]?.dispose();
+      _feesCtrls[id]?.dispose();
       _gradeCtrls.remove(id);
       _noteCtrls.remove(id);
+      _feesCtrls.remove(id);
       _editingIds.remove(id);
       _savingIds.remove(id);
     }
@@ -115,10 +141,13 @@ class _PsaOrderDetailsPageState extends State<PsaOrderDetailsPage> {
     for (final it in items) {
       final grade = it.gradeId ?? '';
       final note = it.gradingNote ?? '';
+      final fee = _numToText(it.gradingFees);
       final gc = _gradeCtrls[it.id];
       if (gc != null && gc.text != grade) gc.text = grade;
       final nc = _noteCtrls[it.id];
       if (nc != null && nc.text != note) nc.text = note;
+      final fc = _feesCtrls[it.id];
+      if (fc != null && fc.text != fee) fc.text = fee;
     }
   }
 
@@ -137,6 +166,15 @@ class _PsaOrderDetailsPageState extends State<PsaOrderDetailsPage> {
 
   Future<void> _saveInlineGrade(PsaOrderItem it) async {
     if (!widget.canEdit) return;
+    final feeText = _feesCtrlFor(it).text;
+    final feeValue =
+        widget.canSeeUnitCosts ? _parseNullableNum(feeText) : null;
+    if (widget.canSeeUnitCosts &&
+        feeText.trim().isNotEmpty &&
+        feeValue == null) {
+      _snack('Invalid grading fees value.');
+      return;
+    }
     setState(() => _savingIds.add(it.id));
     try {
       await repo.updateItemGrade(
@@ -144,6 +182,8 @@ class _PsaOrderDetailsPageState extends State<PsaOrderDetailsPage> {
         itemId: it.id,
         gradeId: _gradeCtrlFor(it).text,
         gradingNote: _noteCtrlFor(it).text,
+        updateGradingFees: widget.canSeeUnitCosts,
+        gradingFees: feeValue,
       );
       _editingIds.remove(it.id);
       await _refresh();
@@ -155,6 +195,7 @@ class _PsaOrderDetailsPageState extends State<PsaOrderDetailsPage> {
   void _cancelInlineEdit(PsaOrderItem it) {
     _gradeCtrlFor(it).text = it.gradeId ?? '';
     _noteCtrlFor(it).text = it.gradingNote ?? '';
+    _feesCtrlFor(it).text = _numToText(it.gradingFees);
     setState(() => _editingIds.remove(it.id));
   }
 
@@ -412,6 +453,9 @@ class _PsaOrderDetailsPageState extends State<PsaOrderDetailsPage> {
     for (final c in _noteCtrls.values) {
       c.dispose();
     }
+    for (final c in _feesCtrls.values) {
+      c.dispose();
+    }
     super.dispose();
   }
 
@@ -662,6 +706,7 @@ class _PsaOrderDetailsPageState extends State<PsaOrderDetailsPage> {
 
     final gradeCtrl = TextEditingController(text: it.gradeId ?? '');
     final noteCtrl = TextEditingController(text: it.gradingNote ?? '');
+    final feesCtrl = TextEditingController(text: _numToText(it.gradingFees));
 
     final ok = await showDialog<bool>(
           context: context,
@@ -687,6 +732,18 @@ class _PsaOrderDetailsPageState extends State<PsaOrderDetailsPage> {
                     border: OutlineInputBorder(),
                   ),
                 ),
+                if (widget.canSeeUnitCosts) ...[
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: feesCtrl,
+                    keyboardType:
+                        const TextInputType.numberWithOptions(decimal: true),
+                    decoration: const InputDecoration(
+                      labelText: 'Grading fees (USD)',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                ],
               ],
             ),
             actions: [
@@ -703,11 +760,23 @@ class _PsaOrderDetailsPageState extends State<PsaOrderDetailsPage> {
 
     if (!ok) return;
 
+    final feeValue = widget.canSeeUnitCosts
+        ? _parseNullableNum(feesCtrl.text)
+        : null;
+    if (widget.canSeeUnitCosts &&
+        feesCtrl.text.trim().isNotEmpty &&
+        feeValue == null) {
+      _snack('Invalid grading fees value.');
+      return;
+    }
+
     await repo.updateItemGrade(
       orgId: widget.orgId,
       itemId: it.id,
       gradeId: gradeCtrl.text,
       gradingNote: noteCtrl.text,
+      updateGradingFees: widget.canSeeUnitCosts,
+      gradingFees: feeValue,
     );
 
     _snack('Updated grade fields.');
@@ -1167,9 +1236,11 @@ class _PsaOrderDetailsPageState extends State<PsaOrderDetailsPage> {
     final tone = _statusTone(it.status);
     final gradeId = (it.gradeId ?? '').trim();
     final note = (it.gradingNote ?? '').trim();
+    final fee = it.gradingFees;
 
     final gradeDisplay = gradeId.isEmpty ? '—' : gradeId;
     final noteDisplay = note.isEmpty ? '—' : note;
+    final feeDisplay = fee == null ? '—' : '\$${_fmtMoney(fee)}';
 
     final game =
         (it.gameLabel ?? '').trim().isEmpty ? '—' : it.gameLabel!.trim();
@@ -1246,6 +1317,15 @@ class _PsaOrderDetailsPageState extends State<PsaOrderDetailsPage> {
                                       color: theme.colorScheme.secondary),
                                   tone: theme.colorScheme.secondary,
                                 ),
+                                if (widget.canSeeUnitCosts)
+                                  _statPill(
+                                    label: 'Fees',
+                                    value: feeDisplay,
+                                    leading: Icon(Icons.payments_outlined,
+                                        size: 14,
+                                        color: theme.colorScheme.tertiary),
+                                    tone: theme.colorScheme.tertiary,
+                                  ),
                               ],
                             );
                           },
@@ -1297,6 +1377,18 @@ class _PsaOrderDetailsPageState extends State<PsaOrderDetailsPage> {
                         border: OutlineInputBorder(),
                       ),
                     );
+                    final feeField = widget.canSeeUnitCosts
+                        ? TextField(
+                            controller: _feesCtrlFor(it),
+                            enabled: !saving,
+                            keyboardType: const TextInputType.numberWithOptions(
+                                decimal: true),
+                            decoration: const InputDecoration(
+                              labelText: 'Grading fees (USD)',
+                              border: OutlineInputBorder(),
+                            ),
+                          )
+                        : null;
 
                     return Column(
                       children: [
@@ -1304,12 +1396,20 @@ class _PsaOrderDetailsPageState extends State<PsaOrderDetailsPage> {
                           gradeField,
                           const SizedBox(height: 10),
                           noteField,
+                          if (feeField != null) ...[
+                            const SizedBox(height: 10),
+                            feeField,
+                          ],
                         ] else
                           Row(
                             children: [
                               Expanded(child: gradeField),
                               const SizedBox(width: 12),
                               Expanded(child: noteField),
+                              if (feeField != null) ...[
+                                const SizedBox(width: 12),
+                                Expanded(child: feeField),
+                              ],
                             ],
                           ),
                         const SizedBox(height: 10),

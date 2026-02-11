@@ -364,24 +364,36 @@ class PsaRepository {
     required int itemId,
     required String? gradeId,
     required String? gradingNote,
+    bool updateGradingFees = false,
+    num? gradingFees,
   }) async {
+    final update = <String, dynamic>{
+      'grade_id': (gradeId ?? '').trim().isEmpty ? null : gradeId!.trim(),
+      'grading_note':
+          (gradingNote ?? '').trim().isEmpty ? null : gradingNote!.trim(),
+    };
+    if (updateGradingFees) {
+      update['grading_fees'] = gradingFees;
+    }
+
     await sb
         .from('item')
-        .update({
-          'grade_id': (gradeId ?? '').trim().isEmpty ? null : gradeId!.trim(),
-          'grading_note':
-              (gradingNote ?? '').trim().isEmpty ? null : gradingNote!.trim(),
-        })
+        .update(update)
         .eq('org_id', orgId)
         .eq('id', itemId);
+
+    final changes = <String, Map<String, dynamic>>{
+      'grade_id': {'old': null, 'new': gradeId},
+      'grading_note': {'old': null, 'new': gradingNote},
+    };
+    if (updateGradingFees) {
+      changes['grading_fees'] = {'old': null, 'new': gradingFees};
+    }
 
     await _logBatchEdit(
       orgId: orgId,
       itemIds: [itemId],
-      changes: {
-        'grade_id': {'old': null, 'new': gradeId},
-        'grading_note': {'old': null, 'new': gradingNote},
-      },
+      changes: changes,
       reason: 'psa_update_grade_fields',
     );
   }
