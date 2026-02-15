@@ -1056,6 +1056,10 @@ class _InvoiceManagementPageState extends State<InvoiceManagementPage> {
         // Other
         paymentTerms: result.paymentTerms,
         notes: result.notes,
+        showLogoInPdf: result.showLogoInPdf,
+        showBankInfoInPdf: result.showBankInfoInPdf,
+        showDisplayTotalInAed: result.showDisplayTotalInAed,
+        aedPerInvoiceCurrencyRate: result.aedPerInvoiceCurrencyRate,
       );
 
       if (!mounted) return;

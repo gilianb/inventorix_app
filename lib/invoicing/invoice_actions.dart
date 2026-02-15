@@ -68,6 +68,10 @@ class InvoiceActions {
     // Other
     String? paymentTerms,
     String? notes,
+    bool showLogoInPdf = false,
+    bool showBankInfoInPdf = false,
+    bool showDisplayTotalInAed = false,
+    double? aedPerInvoiceCurrencyRate,
   }) async {
     // 1. Get next invoice number from backend
     final invoiceNumber = await invoiceService.getNextInvoiceNumber(orgId);
@@ -103,7 +107,14 @@ class InvoiceActions {
         await invoiceService.getInvoiceLines(invoice.id);
 
     // 4. Generate PDF
-    final Uint8List pdfBytes = await pdfBuilder.buildPdf(invoice, lines);
+    final Uint8List pdfBytes = await pdfBuilder.buildPdf(
+      invoice,
+      lines,
+      showLogoInPdf: showLogoInPdf,
+      showBankInfoInPdf: showBankInfoInPdf,
+      showDisplayTotalInAed: showDisplayTotalInAed,
+      aedPerInvoiceCurrencyRate: aedPerInvoiceCurrencyRate,
+    );
 
     // 5. Upload + link to invoice and item
     await invoiceService.uploadInvoicePdfAndLink(
@@ -175,6 +186,10 @@ class InvoiceActions {
     // Other
     String? paymentTerms,
     String? notes,
+    bool showLogoInPdf = false,
+    bool showBankInfoInPdf = false,
+    bool showDisplayTotalInAed = false,
+    double? aedPerInvoiceCurrencyRate,
   }) async {
     if (itemIds.isEmpty) {
       throw ArgumentError('Cannot create multi-item invoice with no items.');
@@ -214,7 +229,14 @@ class InvoiceActions {
         await invoiceService.getInvoiceLines(invoice.id);
 
     // 4. Generate PDF
-    final Uint8List pdfBytes = await pdfBuilder.buildPdf(invoice, lines);
+    final Uint8List pdfBytes = await pdfBuilder.buildPdf(
+      invoice,
+      lines,
+      showLogoInPdf: showLogoInPdf,
+      showBankInfoInPdf: showBankInfoInPdf,
+      showDisplayTotalInAed: showDisplayTotalInAed,
+      aedPerInvoiceCurrencyRate: aedPerInvoiceCurrencyRate,
+    );
 
     // 5. Upload + link to invoice and ALL items
     await invoiceService.uploadInvoicePdfAndLinkToItems(

@@ -15,6 +15,10 @@ class InvoiceFormResult {
   final double taxRate;
   final String paymentTerms;
   final String? notes;
+  final bool showLogoInPdf;
+  final bool showBankInfoInPdf;
+  final bool showDisplayTotalInAed;
+  final double? aedPerInvoiceCurrencyRate;
 
   InvoiceFormResult({
     required this.sellerName,
@@ -28,6 +32,10 @@ class InvoiceFormResult {
     required this.taxRate,
     required this.paymentTerms,
     this.notes,
+    required this.showLogoInPdf,
+    required this.showBankInfoInPdf,
+    required this.showDisplayTotalInAed,
+    this.aedPerInvoiceCurrencyRate,
   });
 }
 
@@ -86,9 +94,13 @@ class _InvoiceCreateDialogState extends State<InvoiceCreateDialog> {
     text: 'Payment due within 7 days by bank transfer.',
   );
   final _notesCtrl = TextEditingController();
+  final _aedRateCtrl = TextEditingController(text: '3.67');
 
   /// Case "TVA 5 % (Dubai)" – coche/décoche en mettant 5 ou 0 dans le champ.
   bool _vat5Checked = false;
+  bool _showLogoInPdf = true;
+  bool _showBankInfoInPdf = true;
+  bool _showDisplayTotalInAed = false;
 
   bool _loadingSociety = false;
 
@@ -101,6 +113,10 @@ class _InvoiceCreateDialogState extends State<InvoiceCreateDialog> {
 
     // Pré-remplissage auto depuis `society` si possible
     _loadSocietyDefaultsIfAny();
+
+    if (widget.defaultCurrency.trim().toUpperCase() == 'AED') {
+      _aedRateCtrl.text = '1';
+    }
   }
 
   @override
@@ -116,6 +132,7 @@ class _InvoiceCreateDialogState extends State<InvoiceCreateDialog> {
     _taxCtrl.dispose();
     _paymentTermsCtrl.dispose();
     _notesCtrl.dispose();
+    _aedRateCtrl.dispose();
     super.dispose();
   }
 
@@ -189,6 +206,8 @@ class _InvoiceCreateDialogState extends State<InvoiceCreateDialog> {
     if (!_formKey.currentState!.validate()) return;
 
     final tax = double.tryParse(_taxCtrl.text.replaceAll(',', '.')) ?? 0.0;
+    final aedRate =
+        double.tryParse(_aedRateCtrl.text.trim().replaceAll(',', '.'));
 
     final result = InvoiceFormResult(
       sellerName: _sellerNameCtrl.text.trim(),
@@ -218,6 +237,12 @@ class _InvoiceCreateDialogState extends State<InvoiceCreateDialog> {
           ? 'Payment due within 7 days by bank transfer.'
           : _paymentTermsCtrl.text.trim(),
       notes: _notesCtrl.text.trim().isNotEmpty ? _notesCtrl.text.trim() : null,
+      showLogoInPdf: _showLogoInPdf,
+      showBankInfoInPdf: _showBankInfoInPdf,
+      showDisplayTotalInAed: _showDisplayTotalInAed,
+      aedPerInvoiceCurrencyRate: _showDisplayTotalInAed
+          ? (aedRate != null && aedRate > 0 ? aedRate : null)
+          : null,
     );
 
     Navigator.of(context).pop(result);
@@ -376,6 +401,76 @@ class _InvoiceCreateDialogState extends State<InvoiceCreateDialog> {
                 ),
                 maxLines: 2,
               ),
+              const SizedBox(height: 12),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  'PDF options',
+                  style: Theme.of(context)
+                      .textTheme
+                      .titleSmall
+                      ?.copyWith(fontWeight: FontWeight.bold),
+                ),
+              ),
+              CheckboxListTile(
+                contentPadding: EdgeInsets.zero,
+                dense: true,
+                value: _showLogoInPdf,
+                onChanged: (v) {
+                  setState(() {
+                    _showLogoInPdf = v ?? true;
+                  });
+                },
+                title: const Text('Show CardShouker logo (top)'),
+                controlAffinity: ListTileControlAffinity.leading,
+              ),
+              CheckboxListTile(
+                contentPadding: EdgeInsets.zero,
+                dense: true,
+                value: _showBankInfoInPdf,
+                onChanged: (v) {
+                  setState(() {
+                    _showBankInfoInPdf = v ?? true;
+                  });
+                },
+                title: const Text('Show bank details (bottom)'),
+                controlAffinity: ListTileControlAffinity.leading,
+              ),
+              CheckboxListTile(
+                contentPadding: EdgeInsets.zero,
+                dense: true,
+                value: _showDisplayTotalInAed,
+                onChanged: (v) {
+                  setState(() {
+                    _showDisplayTotalInAed = v ?? false;
+                    if (_showDisplayTotalInAed &&
+                        _aedRateCtrl.text.trim().isEmpty) {
+                      _aedRateCtrl.text = '3.67';
+                    }
+                  });
+                },
+                title: const Text('Show additional total in AED'),
+                controlAffinity: ListTileControlAffinity.leading,
+              ),
+              if (_showDisplayTotalInAed)
+                TextFormField(
+                  controller: _aedRateCtrl,
+                  decoration: InputDecoration(
+                    labelText:
+                        'Conversion rate: 1 ${widget.defaultCurrency.toUpperCase()} = ? AED',
+                  ),
+                  keyboardType:
+                      const TextInputType.numberWithOptions(decimal: true),
+                  validator: (v) {
+                    if (!_showDisplayTotalInAed) return null;
+                    final n =
+                        double.tryParse((v ?? '').trim().replaceAll(',', '.'));
+                    if (n == null || n <= 0) {
+                      return 'Enter a valid rate > 0';
+                    }
+                    return null;
+                  },
+                ),
             ],
           ),
         ),

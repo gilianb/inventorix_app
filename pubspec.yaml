@@ -75,7 +75,8 @@ flutter:
   uses-material-design: true
   assets:
     - .env
-    - assets/images/default_card.png
+    - assets/images/
+    - assets/timage/
     - fonts/Roboto-Variable.ttf
 
 

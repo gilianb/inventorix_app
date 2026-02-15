@@ -3,6 +3,8 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../inventory/utils/status_utils.dart';
+
 // On réutilise le même dialog que pour la création d’une facture depuis la page details
 import 'invoice_create_dialog.dart';
 
@@ -35,6 +37,10 @@ class MultiInvoiceSelectionResult {
   // Other
   final String? paymentTerms;
   final String? notes;
+  final bool showLogoInPdf;
+  final bool showBankInfoInPdf;
+  final bool showDisplayTotalInAed;
+  final double? aedPerInvoiceCurrencyRate;
 
   MultiInvoiceSelectionResult({
     required this.itemIds,
@@ -59,6 +65,10 @@ class MultiInvoiceSelectionResult {
     // Other
     this.paymentTerms,
     this.notes,
+    required this.showLogoInPdf,
+    required this.showBankInfoInPdf,
+    required this.showDisplayTotalInAed,
+    this.aedPerInvoiceCurrencyRate,
   });
 }
 
@@ -83,6 +93,13 @@ class _GroupedItem {
 
   String get type => (sample['type'] ?? '').toString();
 
+  String get status => (sample['status'] ?? '').toString().trim().toLowerCase();
+
+  String? get photoUrl {
+    final p = (sample['photo_url'] ?? '').toString().trim();
+    return p.isEmpty ? null : p;
+  }
+
   /// ✅ Devise affichée = sale_currency (fallback currency, fallback USD)
   String get currency {
     final sc = (sample['sale_currency'] ?? '').toString().trim();
@@ -104,10 +121,41 @@ class _GroupedItem {
   /// buyer_infos = client final qui achète la carte à vous
   String get buyerInfos => (sample['buyer_infos'] ?? '').toString();
 
+  List<String> get buyerLabels {
+    final out = <String>[];
+    final seen = <String>{};
+    for (final row in rows) {
+      final raw = (row['buyer_infos'] ?? '').toString().trim();
+      if (raw.isEmpty) continue;
+      final key = raw.toLowerCase();
+      if (seen.add(key)) out.add(raw);
+    }
+    return out;
+  }
+
   /// Libellé affiché et utilisé pour la recherche = client final
   String get buyerLabel {
-    if (buyerInfos.isNotEmpty) return buyerInfos;
-    return '';
+    final labels = buyerLabels;
+    if (labels.isEmpty) return '';
+    if (labels.length == 1) return labels.first;
+    return '${labels.first} (+${labels.length - 1})';
+  }
+
+  String get buyerLabelVerbose {
+    final labels = buyerLabels;
+    if (labels.isEmpty) return '';
+    if (labels.length <= 2) return labels.join(', ');
+    return '${labels[0]}, ${labels[1]} +${labels.length - 2}';
+  }
+
+  String get typeLabel {
+    final t = type.trim();
+    if (t.isEmpty) return 'Item';
+    return t[0].toUpperCase() + t.substring(1);
+  }
+
+  String get quantityLabel {
+    return quantity > 1 ? 'x$quantity' : 'x1';
   }
 }
 
@@ -138,6 +186,12 @@ class InvoiceSelectItemsDialog extends StatefulWidget {
 
 class _InvoiceSelectItemsDialogState extends State<InvoiceSelectItemsDialog> {
   final _sb = Supabase.instance.client;
+  static const List<String> _eligibleStatuses = <String>[
+    'awaiting_payment',
+    'sold',
+    'shipped',
+    'finalized',
+  ];
 
   bool _loading = true;
 
@@ -173,8 +227,8 @@ class _InvoiceSelectItemsDialogState extends State<InvoiceSelectItemsDialog> {
     return 'USD';
   }
 
-  /// ✅ Récupère les item_id qui ont déjà une invoice (via invoice_line.item_id)
-  /// et aussi via invoice.related_item_id (si tu utilises ce champ dans certains flows).
+  /// ✅ Récupère les item_id qui ont déjà une invoice de vente
+  /// (via invoice_line.item_id ou invoice.related_item_id).
   Future<Set<int>> _fetchInvoicedItemIds() async {
     final ids = <int>{};
 
@@ -184,6 +238,7 @@ class _InvoiceSelectItemsDialogState extends State<InvoiceSelectItemsDialog> {
           .from('invoice')
           .select('related_item_id')
           .eq('org_id', widget.orgId)
+          .eq('invoice_type', 'sale')
           .not('related_item_id', 'is', null)
           .limit(5000);
 
@@ -199,9 +254,10 @@ class _InvoiceSelectItemsDialogState extends State<InvoiceSelectItemsDialog> {
     try {
       final lineRows = await _sb
           .from('invoice_line')
-          .select('item_id, invoice:invoice_id(org_id)')
+          .select('item_id, invoice:invoice_id(org_id, invoice_type)')
           .not('item_id', 'is', null)
           .eq('invoice.org_id', widget.orgId)
+          .eq('invoice.invoice_type', 'sale')
           .limit(20000);
 
       for (final r in (lineRows as List)) {
@@ -215,6 +271,7 @@ class _InvoiceSelectItemsDialogState extends State<InvoiceSelectItemsDialog> {
             .from('invoice')
             .select('id')
             .eq('org_id', widget.orgId)
+            .eq('invoice_type', 'sale')
             .limit(10000);
 
         final invoiceIds = (invoices as List)
@@ -249,15 +306,15 @@ class _InvoiceSelectItemsDialogState extends State<InvoiceSelectItemsDialog> {
     });
 
     try {
-      // Items finalisés (on filtre seulement sur status)
+      // Items vendus/finalisés éligibles à la facture de vente
       final rows = await _sb
           .from('item')
           .select(
-            'id, product:product(name), type, status, currency, sale_currency, '
+            'id, product:product(name), type, status, photo_url, currency, sale_currency, '
             'sale_price, unit_cost, buyer_company, buyer_infos, sale_date',
           )
           .eq('org_id', widget.orgId)
-          .eq('status', 'finalized')
+          .inFilter('status', _eligibleStatuses)
           .order('sale_date', ascending: false)
           .limit(5000);
 
@@ -280,12 +337,6 @@ class _InvoiceSelectItemsDialogState extends State<InvoiceSelectItemsDialog> {
               });
               return !hasAnyInvoiced;
             }).toList(growable: false);
-
-      // Remet _itemsRaw cohérent avec les groupes visibles (utile pour confirm etc.)
-      final allowedIds = filteredGroups
-          .expand((g) => g.rows)
-          .map<int>((r) => (r['id'] as num).toInt())
-          .toSet();
 
       _groups = filteredGroups;
     } catch (e) {
@@ -316,6 +367,7 @@ class _InvoiceSelectItemsDialogState extends State<InvoiceSelectItemsDialog> {
     final productName =
         (r['product']?['name'] ?? '').toString().trim().toLowerCase();
     final type = (r['type'] ?? '').toString().trim().toLowerCase();
+    final status = (r['status'] ?? '').toString().trim().toLowerCase();
 
     // ✅ group by SALE currency (sale_currency fallback currency)
     final currency = _saleCurrencyOfRow(r).toUpperCase();
@@ -324,21 +376,23 @@ class _InvoiceSelectItemsDialogState extends State<InvoiceSelectItemsDialog> {
 
     final buyerCompany =
         (r['buyer_company'] ?? '').toString().trim().toLowerCase();
-    final buyerInfos = (r['buyer_infos'] ?? '').toString().trim().toLowerCase();
+    final buyerNameKey =
+        (r['buyer_infos'] ?? '').toString().trim().toLowerCase();
 
     // On groupe aussi par date de vente (jour)
     final rawDate = r['sale_date']?.toString() ?? '';
     final saleDate = rawDate.length >= 10 ? rawDate.substring(0, 10) : rawDate;
 
-    // => même product, même type, même date, même prix, même SALE currency,
-    //    même client final (buyer_infos) et même société interne (buyer_company)
+    // => même product, même buyer, même date, même prix (+type/status/currency/company)
+    // buyer est pris tel quel (trim/lower) pour éviter les fusions non voulues.
     return [
       productName,
       type,
+      status,
       currency,
       price,
       buyerCompany,
-      buyerInfos,
+      buyerNameKey,
       saleDate,
     ].join('|');
   }
@@ -353,6 +407,15 @@ class _InvoiceSelectItemsDialogState extends State<InvoiceSelectItemsDialog> {
         _selected.add(key);
       }
     });
+  }
+
+  String _defaultBuyerForSelection(List<Map<String, dynamic>> rows) {
+    for (final r in rows) {
+      final name = (r['buyer_infos'] ?? '').toString().trim();
+      if (name.isNotEmpty) return name;
+    }
+
+    return 'Customer';
   }
 
   // ------------------ CONFIRMATION ------------------
@@ -385,13 +448,9 @@ class _InvoiceSelectItemsDialogState extends State<InvoiceSelectItemsDialog> {
     // ✅ Currency de la facture = SALE currency (sale_currency fallback currency)
     final String currency = _saleCurrencyOfRow(first);
 
-    // Buyer = client final (buyer_infos)
-    String buyer(Map<String, dynamic> r) {
-      final bi = (r['buyer_infos'] as String?)?.trim();
-      return (bi != null && bi.isNotEmpty) ? bi : 'Customer';
-    }
-
-    final firstBuyer = buyer(first);
+    // Buyer default: first non-empty buyer name from selection.
+    // Mixed buyer names are allowed; user can edit in the next dialog.
+    final firstBuyer = _defaultBuyerForSelection(selectedRows);
 
     // ✅ Vérification cohérence SALE currency
     for (final r in selectedRows) {
@@ -481,6 +540,10 @@ class _InvoiceSelectItemsDialogState extends State<InvoiceSelectItemsDialog> {
       // Other
       paymentTerms: formResult.paymentTerms,
       notes: formResult.notes,
+      showLogoInPdf: formResult.showLogoInPdf,
+      showBankInfoInPdf: formResult.showBankInfoInPdf,
+      showDisplayTotalInAed: formResult.showDisplayTotalInAed,
+      aedPerInvoiceCurrencyRate: formResult.aedPerInvoiceCurrencyRate,
     );
 
     if (!mounted) return;
@@ -508,12 +571,177 @@ class _InvoiceSelectItemsDialogState extends State<InvoiceSelectItemsDialog> {
 
     final haystack = StringBuffer()..write(g.productName.toLowerCase());
 
-    if (g.buyerLabel.isNotEmpty) {
+    if (g.buyerLabels.isNotEmpty) {
       haystack.write(' ');
-      haystack.write(g.buyerLabel.toLowerCase());
+      haystack.write(g.buyerLabels.join(' ').toLowerCase());
     }
 
+    haystack.write(' ');
+    haystack.write(g.status);
+
     return haystack.toString().contains(q);
+  }
+
+  String _statusLabel(String raw) {
+    final s = raw.trim();
+    if (s.isEmpty) return 'Unknown';
+    return s
+        .split('_')
+        .where((p) => p.isNotEmpty)
+        .map((p) => p[0].toUpperCase() + p.substring(1))
+        .join(' ');
+  }
+
+  Widget _buildStatusTag(String status, {double fontSize = 11}) {
+    final color = statusColor(context, status);
+    final label = _statusLabel(status);
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: color.withValues(alpha: 0.35)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 8,
+            height: 8,
+            decoration: BoxDecoration(
+              color: color,
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+          const SizedBox(width: 6),
+          Text(
+            label,
+            style: TextStyle(
+              color: color,
+              fontWeight: FontWeight.w700,
+              fontSize: fontSize,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildItemThumb(_GroupedItem g) {
+    final theme = Theme.of(context);
+    final url = g.photoUrl;
+
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(10),
+      child: Container(
+        width: 52,
+        height: 68,
+        color:
+            theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.55),
+        child: (url == null || url.isEmpty)
+            ? Icon(
+                Icons.image_not_supported_outlined,
+                size: 20,
+                color: theme.colorScheme.onSurfaceVariant,
+              )
+            : Image.network(
+                url,
+                fit: BoxFit.cover,
+                errorBuilder: (context, _, __) => Icon(
+                  Icons.broken_image_outlined,
+                  size: 20,
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+      ),
+    );
+  }
+
+  Widget _buildGroupTile(_GroupedItem g, bool checked) {
+    final theme = Theme.of(context);
+    final name = g.productName;
+    final currency = g.currency;
+    final priceStr = g.unitPriceRaw.toStringAsFixed(2);
+    final saleDate = _formatSaleDate(g.saleDateRaw);
+    final salePart = saleDate.isNotEmpty ? ' • Sold: $saleDate' : '';
+    final buyerText = g.buyerLabelVerbose;
+
+    return Material(
+      color: checked
+          ? theme.colorScheme.primary.withValues(alpha: 0.06)
+          : theme.colorScheme.surface,
+      borderRadius: BorderRadius.circular(12),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: () => _toggle(g.key),
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(10, 10, 8, 10),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: checked
+                  ? theme.colorScheme.primary.withValues(alpha: 0.35)
+                  : theme.colorScheme.outline.withValues(alpha: 0.2),
+            ),
+          ),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _buildItemThumb(g),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            '$name (${g.quantityLabel})',
+                            style: const TextStyle(
+                              fontWeight: FontWeight.w600,
+                              fontSize: 14,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        _buildStatusTag(g.status, fontSize: 10),
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      '${g.typeLabel} • $currency $priceStr$salePart',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                    if (buyerText.isNotEmpty) ...[
+                      const SizedBox(height: 3),
+                      Text(
+                        'Buyer: $buyerText',
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: theme.colorScheme.onSurfaceVariant,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              Checkbox(
+                value: checked,
+                onChanged: (_) => _toggle(g.key),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   @override
@@ -521,23 +749,50 @@ class _InvoiceSelectItemsDialogState extends State<InvoiceSelectItemsDialog> {
     final visibleGroups = _groups.where(_matchesSearch).toList();
 
     return AlertDialog(
-      title: const Text('Select items for invoice'),
+      title: const Text('Select items for new sales invoice'),
       content: SizedBox(
-        width: 560,
-        height: 460,
+        width: 700,
+        height: 560,
         child: _loading
             ? const Center(child: CircularProgressIndicator())
             : _groups.isEmpty
                 ? const Center(
-                    child: Text('No finalized non-invoiced items available.'),
+                    child: Text('No eligible non-invoiced items available.'),
                   )
                 : Column(
                     children: [
-                      const Align(
-                        alignment: Alignment.centerLeft,
-                        child: Text(
-                          'Only items with status "finalized" and without an existing invoice are shown. If any item in a sale-group is already invoiced, the whole group is hidden.',
-                          style: TextStyle(fontSize: 12),
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(10),
+                          color: Theme.of(context)
+                              .colorScheme
+                              .surfaceContainerHighest
+                              .withValues(alpha: 0.28),
+                          border: Border.all(
+                            color: Theme.of(context)
+                                .colorScheme
+                                .outline
+                                .withValues(alpha: 0.22),
+                          ),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Wrap(
+                              spacing: 6,
+                              runSpacing: 6,
+                              children: _eligibleStatuses
+                                  .map((s) => _buildStatusTag(s))
+                                  .toList(growable: false),
+                            ),
+                            const SizedBox(height: 8),
+                            const Text(
+                              'Only items without an existing sales invoice are shown. If one item in a sale-group already has a sales invoice, the whole group is hidden.',
+                              style: TextStyle(fontSize: 12),
+                            ),
+                          ],
                         ),
                       ),
                       const SizedBox(height: 8),
@@ -545,8 +800,7 @@ class _InvoiceSelectItemsDialogState extends State<InvoiceSelectItemsDialog> {
                         controller: _searchCtrl,
                         decoration: const InputDecoration(
                           prefixIcon: Icon(Icons.search),
-                          hintText:
-                              'Search by item name or buyer (end customer)',
+                          hintText: 'Search by item name, buyer, or status',
                           isDense: true,
                         ),
                         onChanged: (v) {
@@ -554,6 +808,20 @@ class _InvoiceSelectItemsDialogState extends State<InvoiceSelectItemsDialog> {
                             _searchQuery = v;
                           });
                         },
+                      ),
+                      const SizedBox(height: 6),
+                      Row(
+                        children: [
+                          Text(
+                            '${visibleGroups.length} group(s)',
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                          const Spacer(),
+                          Text(
+                            '${_selected.length} selected',
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                        ],
                       ),
                       const SizedBox(height: 8),
                       Expanded(
@@ -565,39 +833,10 @@ class _InvoiceSelectItemsDialogState extends State<InvoiceSelectItemsDialog> {
                                 itemCount: visibleGroups.length,
                                 itemBuilder: (ctx, index) {
                                   final g = visibleGroups[index];
-
-                                  final key = g.key;
-                                  final checked = _selected.contains(key);
-
-                                  final name = g.productName;
-                                  final type = g.type;
-
-                                  // ✅ affichage en SALE currency
-                                  final currency = g.currency;
-
-                                  final priceRaw = g.unitPriceRaw;
-                                  final priceStr = priceRaw.toStringAsFixed(2);
-
-                                  final saleDate =
-                                      _formatSaleDate(g.saleDateRaw);
-                                  final buyerLabel = g.buyerLabel;
-
-                                  final qtyPart =
-                                      g.quantity > 1 ? 'x${g.quantity}' : 'x1';
-                                  final salePart = saleDate.isNotEmpty
-                                      ? ' • Sold: $saleDate'
-                                      : '';
-                                  final buyerPart = buyerLabel.isNotEmpty
-                                      ? ' • Buyer: $buyerLabel'
-                                      : '';
-
-                                  return CheckboxListTile(
-                                    value: checked,
-                                    onChanged: (_) => _toggle(key),
-                                    title: Text('$name ($qtyPart)'),
-                                    subtitle: Text(
-                                      '$type • $currency $priceStr$salePart$buyerPart',
-                                    ),
+                                  final checked = _selected.contains(g.key);
+                                  return Padding(
+                                    padding: const EdgeInsets.only(bottom: 8),
+                                    child: _buildGroupTile(g, checked),
                                   );
                                 },
                               ),

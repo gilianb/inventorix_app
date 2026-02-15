@@ -1024,6 +1024,10 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
         // Other
         paymentTerms: formResult.paymentTerms,
         notes: formResult.notes,
+        showLogoInPdf: formResult.showLogoInPdf,
+        showBankInfoInPdf: formResult.showBankInfoInPdf,
+        showDisplayTotalInAed: formResult.showDisplayTotalInAed,
+        aedPerInvoiceCurrencyRate: formResult.aedPerInvoiceCurrencyRate,
       );
 
       _snack('Invoice ${invoice.invoiceNumber} created.');
