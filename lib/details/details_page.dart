@@ -985,12 +985,25 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
     final buyerInfos = (firstItem['buyer_infos'] ?? '').toString().trim();
     final buyerNameDefault = buyerInfos.isNotEmpty ? buyerInfos : 'Customer';
 
+    DateTime defaultInvoiceDate = DateTime.now();
+    final saleDates = candidates
+        .map((e) => e['sale_date'])
+        .where((v) => v != null)
+        .map((v) => DateTime.tryParse(v.toString()))
+        .whereType<DateTime>()
+        .toList();
+    if (saleDates.isNotEmpty) {
+      saleDates.sort((a, b) => a.compareTo(b));
+      defaultInvoiceDate = saleDates.last;
+    }
+
     final formResult = await InvoiceCreateDialog.show(
       context,
       currency: currency,
       // sellerName: sellerNameDefault,
       sellerName: 'cardshouker',
       buyerName: buyerNameDefault,
+      defaultInvoiceDate: defaultInvoiceDate,
     );
 
     if (formResult == null) {
@@ -1005,6 +1018,7 @@ class _GroupDetailsPageState extends State<GroupDetailsPage> {
         itemIds: itemIds,
         currency: currency, // ✅ sale currency
         taxRate: formResult.taxRate,
+        issueDateOverride: formResult.invoiceDate,
         dueDate: null,
         // Seller
         sellerName: formResult.sellerName,

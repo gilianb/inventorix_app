@@ -254,6 +254,7 @@ class InvoiceService {
     required String currency, // kept for backward-compat; used only as fallback
     int? folderId,
     double taxRate = 0.0,
+    DateTime? issueDateOverride,
     DateTime? dueDate,
 
     // Seller overrides
@@ -289,9 +290,9 @@ class InvoiceService {
     final productName =
         (itemRow['product'] as Map)['name']?.toString() ?? 'Item';
 
-    // ✅ Issue date: sale_date si renseignée, sinon date du jour
+    // ✅ Issue date: override (si fourni), sinon sale_date, sinon date du jour
     final DateTime issueDate =
-        _parseDate(itemRow['sale_date']) ?? DateTime.now();
+        issueDateOverride ?? _parseDate(itemRow['sale_date']) ?? DateTime.now();
 
     // ✅ Invoice currency = sale_currency (fallback currency, fallback param)
     final String invoiceCurrency = _saleCurrencyOfRow(
@@ -425,6 +426,7 @@ class InvoiceService {
     required String currency, // kept for backward-compat; used only as fallback
     int? folderId,
     double taxRate = 0.0,
+    DateTime? issueDateOverride,
     DateTime? dueDate,
 
     // Seller overrides
@@ -470,29 +472,23 @@ class InvoiceService {
         )
         .toList();
 
-    // ✅ Issue date (multi): on exige la même sale_date si présente
+    // ✅ Issue date (multi):
+    // - override (si fourni)
+    // - sinon la sale_date la plus récente parmi les items
+    // - sinon date du jour
     final parsedSaleDates = items
         .map((r) => _parseDate(r['sale_date']))
         .whereType<DateTime>()
         .toList();
 
     final DateTime issueDate;
-    if (parsedSaleDates.isEmpty) {
+    if (issueDateOverride != null) {
+      issueDate = issueDateOverride;
+    } else if (parsedSaleDates.isEmpty) {
       issueDate = DateTime.now();
     } else {
-      final first = parsedSaleDates.first;
-      final allSame = parsedSaleDates.every(
-        (d) =>
-            d.year == first.year &&
-            d.month == first.month &&
-            d.day == first.day,
-      );
-      if (!allSame) {
-        throw Exception(
-          'All selected items must share the same sale_date to generate one invoice.',
-        );
-      }
-      issueDate = first;
+      parsedSaleDates.sort((a, b) => a.compareTo(b));
+      issueDate = parsedSaleDates.last;
     }
 
     String computeBuyerName(Map<String, dynamic> r) {

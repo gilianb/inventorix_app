@@ -1037,6 +1037,7 @@ class _InvoiceManagementPageState extends State<InvoiceManagementPage> {
         itemIds: result.itemIds,
         currency: result.currency,
         taxRate: result.taxRate,
+        issueDateOverride: result.invoiceDate,
         dueDate: result.dueDate,
         // Seller
         sellerName: result.sellerName,

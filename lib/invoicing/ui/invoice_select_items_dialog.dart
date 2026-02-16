@@ -15,6 +15,7 @@ class MultiInvoiceSelectionResult {
   final String currency;
 
   final double taxRate;
+  final DateTime invoiceDate;
   final DateTime? dueDate;
 
   // Seller
@@ -46,6 +47,7 @@ class MultiInvoiceSelectionResult {
     required this.itemIds,
     required this.currency,
     required this.taxRate,
+    required this.invoiceDate,
     this.dueDate,
     // Seller
     this.sellerName,
@@ -231,20 +233,22 @@ class _InvoiceSelectItemsDialogState extends State<InvoiceSelectItemsDialog> {
   /// (via invoice_line.item_id ou invoice.related_item_id).
   Future<Set<int>> _fetchInvoicedItemIds() async {
     final ids = <int>{};
+    final saleInvoiceDocUrls = <String>{};
 
     // 1) invoice.related_item_id
     try {
       final invRows = await _sb
           .from('invoice')
-          .select('related_item_id')
+          .select('related_item_id, document_url')
           .eq('org_id', widget.orgId)
           .eq('invoice_type', 'sale')
-          .not('related_item_id', 'is', null)
           .limit(5000);
 
       for (final r in (invRows as List)) {
         final v = r['related_item_id'];
         if (v != null) ids.add((v as num).toInt());
+        final doc = (r['document_url'] ?? '').toString().trim();
+        if (doc.isNotEmpty) saleInvoiceDocUrls.add(doc);
       }
     } catch (_) {
       // best-effort
@@ -289,6 +293,30 @@ class _InvoiceSelectItemsDialogState extends State<InvoiceSelectItemsDialog> {
           for (final r in (lineRows as List)) {
             final v = r['item_id'];
             if (v != null) ids.add((v as num).toInt());
+          }
+        }
+      } catch (_) {
+        // best-effort
+      }
+    }
+
+    // 3) For multi-item sales invoices, all linked item IDs are reflected
+    // via item.document_url == sale-invoice document_url.
+    // This closes gaps where invoice_line.item_id stores only representative IDs.
+    if (saleInvoiceDocUrls.isNotEmpty) {
+      try {
+        final itemRows = await _sb
+            .from('item')
+            .select('id, document_url')
+            .eq('org_id', widget.orgId)
+            .not('document_url', 'is', null)
+            .limit(20000);
+
+        for (final r in (itemRows as List)) {
+          final doc = (r['document_url'] ?? '').toString().trim();
+          if (doc.isEmpty) continue;
+          if (saleInvoiceDocUrls.contains(doc)) {
+            ids.add((r['id'] as num).toInt());
           }
         }
       } catch (_) {
@@ -418,6 +446,20 @@ class _InvoiceSelectItemsDialogState extends State<InvoiceSelectItemsDialog> {
     return 'Customer';
   }
 
+  DateTime _defaultInvoiceDateForSelection(List<Map<String, dynamic>> rows) {
+    DateTime? latest;
+    for (final r in rows) {
+      final raw = r['sale_date'];
+      if (raw == null) continue;
+      final parsed = DateTime.tryParse(raw.toString());
+      if (parsed == null) continue;
+      if (latest == null || parsed.isAfter(latest)) {
+        latest = parsed;
+      }
+    }
+    return latest ?? DateTime.now();
+  }
+
   // ------------------ CONFIRMATION ------------------
 
   Future<void> _onConfirm() async {
@@ -451,6 +493,7 @@ class _InvoiceSelectItemsDialogState extends State<InvoiceSelectItemsDialog> {
     // Buyer default: first non-empty buyer name from selection.
     // Mixed buyer names are allowed; user can edit in the next dialog.
     final firstBuyer = _defaultBuyerForSelection(selectedRows);
+    final defaultInvoiceDate = _defaultInvoiceDateForSelection(selectedRows);
 
     // ✅ Vérification cohérence SALE currency
     for (final r in selectedRows) {
@@ -509,6 +552,7 @@ class _InvoiceSelectItemsDialogState extends State<InvoiceSelectItemsDialog> {
       // sellerName: sellerNameDefault,
       sellerName: 'cardshouker',
       buyerName: firstBuyer,
+      defaultInvoiceDate: defaultInvoiceDate,
     );
 
     if (formResult == null) return;
@@ -518,6 +562,7 @@ class _InvoiceSelectItemsDialogState extends State<InvoiceSelectItemsDialog> {
       itemIds: ids,
       currency: currency,
       taxRate: formResult.taxRate,
+      invoiceDate: formResult.invoiceDate,
       dueDate: null,
 
       // Seller

@@ -46,6 +46,7 @@ class InvoiceActions {
     required String
         currency, // kept for compat; service uses it only as fallback
     double taxRate = 0.0,
+    DateTime? issueDateOverride,
     DateTime? dueDate,
 
     // Seller
@@ -84,6 +85,7 @@ class InvoiceActions {
       currency: currency, // fallback only
       folderId: null,
       taxRate: taxRate,
+      issueDateOverride: issueDateOverride,
       dueDate: dueDate,
       sellerName: sellerName,
       sellerAddress: sellerAddress,
@@ -164,6 +166,7 @@ class InvoiceActions {
     required String
         currency, // kept for compat; service uses it only as fallback
     double taxRate = 0.0,
+    DateTime? issueDateOverride,
     DateTime? dueDate,
 
     // Seller
@@ -206,6 +209,7 @@ class InvoiceActions {
       currency: currency, // fallback only
       folderId: null,
       taxRate: taxRate,
+      issueDateOverride: issueDateOverride,
       dueDate: dueDate,
       sellerName: sellerName,
       sellerAddress: sellerAddress,

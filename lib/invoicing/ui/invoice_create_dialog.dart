@@ -15,6 +15,7 @@ class InvoiceFormResult {
   final double taxRate;
   final String paymentTerms;
   final String? notes;
+  final DateTime invoiceDate;
   final bool showLogoInPdf;
   final bool showBankInfoInPdf;
   final bool showDisplayTotalInAed;
@@ -32,6 +33,7 @@ class InvoiceFormResult {
     required this.taxRate,
     required this.paymentTerms,
     this.notes,
+    required this.invoiceDate,
     required this.showLogoInPdf,
     required this.showBankInfoInPdf,
     required this.showDisplayTotalInAed,
@@ -48,12 +50,14 @@ class InvoiceCreateDialog extends StatefulWidget {
 
   /// Nom par défaut du client final (buyer_infos).
   final String? defaultBuyerName;
+  final DateTime? defaultInvoiceDate;
 
   const InvoiceCreateDialog({
     super.key,
     required this.defaultCurrency,
     this.defaultSellerName,
     this.defaultBuyerName,
+    this.defaultInvoiceDate,
   });
 
   static Future<InvoiceFormResult?> show(
@@ -61,6 +65,7 @@ class InvoiceCreateDialog extends StatefulWidget {
     required String currency,
     String? sellerName,
     String? buyerName,
+    DateTime? defaultInvoiceDate,
   }) {
     return showDialog<InvoiceFormResult>(
       context: context,
@@ -68,6 +73,7 @@ class InvoiceCreateDialog extends StatefulWidget {
         defaultCurrency: currency,
         defaultSellerName: sellerName,
         defaultBuyerName: buyerName,
+        defaultInvoiceDate: defaultInvoiceDate,
       ),
     );
   }
@@ -101,6 +107,7 @@ class _InvoiceCreateDialogState extends State<InvoiceCreateDialog> {
   bool _showLogoInPdf = true;
   bool _showBankInfoInPdf = true;
   bool _showDisplayTotalInAed = false;
+  late DateTime _invoiceDate;
 
   bool _loadingSociety = false;
 
@@ -110,6 +117,7 @@ class _InvoiceCreateDialogState extends State<InvoiceCreateDialog> {
     _sellerNameCtrl =
         TextEditingController(text: widget.defaultSellerName ?? '');
     _buyerNameCtrl = TextEditingController(text: widget.defaultBuyerName ?? '');
+    _invoiceDate = widget.defaultInvoiceDate ?? DateTime.now();
 
     // Pré-remplissage auto depuis `society` si possible
     _loadSocietyDefaultsIfAny();
@@ -237,6 +245,7 @@ class _InvoiceCreateDialogState extends State<InvoiceCreateDialog> {
           ? 'Payment due within 7 days by bank transfer.'
           : _paymentTermsCtrl.text.trim(),
       notes: _notesCtrl.text.trim().isNotEmpty ? _notesCtrl.text.trim() : null,
+      invoiceDate: _invoiceDate,
       showLogoInPdf: _showLogoInPdf,
       showBankInfoInPdf: _showBankInfoInPdf,
       showDisplayTotalInAed: _showDisplayTotalInAed,
@@ -250,6 +259,13 @@ class _InvoiceCreateDialogState extends State<InvoiceCreateDialog> {
 
   @override
   Widget build(BuildContext context) {
+    String fmtDate(DateTime d) {
+      final y = d.year.toString().padLeft(4, '0');
+      final m = d.month.toString().padLeft(2, '0');
+      final day = d.day.toString().padLeft(2, '0');
+      return '$y-$m-$day';
+    }
+
     return AlertDialog(
       title: const Text('Create invoice'),
       content: SingleChildScrollView(
@@ -344,6 +360,38 @@ class _InvoiceCreateDialogState extends State<InvoiceCreateDialog> {
                 controller: _buyerEmailCtrl,
                 decoration: const InputDecoration(
                   labelText: 'Buyer email',
+                ),
+              ),
+              const SizedBox(height: 12),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  'Invoice date',
+                  style: Theme.of(context)
+                      .textTheme
+                      .titleSmall
+                      ?.copyWith(fontWeight: FontWeight.bold),
+                ),
+              ),
+              const SizedBox(height: 4),
+              InkWell(
+                onTap: () async {
+                  final picked = await showDatePicker(
+                    context: context,
+                    initialDate: _invoiceDate,
+                    firstDate: DateTime(2000, 1, 1),
+                    lastDate: DateTime(2100, 12, 31),
+                  );
+                  if (picked != null) {
+                    setState(() => _invoiceDate = picked);
+                  }
+                },
+                child: InputDecorator(
+                  decoration: const InputDecoration(
+                    labelText: 'Invoice date',
+                    suffixIcon: Icon(Icons.calendar_month_outlined),
+                  ),
+                  child: Text(fmtDate(_invoiceDate)),
                 ),
               ),
               const SizedBox(height: 12),
