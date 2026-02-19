@@ -110,6 +110,8 @@ class InventoryPdfExportOptions {
     required this.viewMode,
     required this.fields,
     required this.selectedStatuses,
+    this.selectedBuyerKeys = const [],
+    this.selectedBuyerLabels = const [],
     required this.sortMode,
     required this.landscape,
     required this.expandQtyToRows,
@@ -119,6 +121,8 @@ class InventoryPdfExportOptions {
   final InventoryPdfViewMode viewMode;
   final List<String> fields;
   final List<String> selectedStatuses;
+  final List<String> selectedBuyerKeys;
+  final List<String> selectedBuyerLabels;
   final InventoryPdfSortMode sortMode;
   final bool landscape;
   final bool expandQtyToRows;
@@ -710,6 +714,10 @@ Future<Uint8List> buildInventoryExportPdfBytes({
         options.viewMode == InventoryPdfViewMode.lines ? 'Lines' : 'Products';
     final statusNames =
         options.selectedStatuses.map((s) => s.replaceAll('_', ' ')).toList();
+    final buyerNames = options.selectedBuyerLabels
+        .map((s) => s.trim())
+        .where((s) => s.isNotEmpty)
+        .toList(growable: false);
     final rowLabel = options.viewMode == InventoryPdfViewMode.products
         ? 'grouped'
         : (options.expandQtyToRows ? 'per item' : 'per line');
@@ -717,8 +725,14 @@ Future<Uint8List> buildInventoryExportPdfBytes({
       if (includePhotoColumn) 'Photo',
       ...columns.map((c) => c.label),
     ];
+    final buyerSummary = buyerNames.isNotEmpty
+        ? summarizeList(buyerNames, max: 4)
+        : (options.selectedBuyerKeys.isNotEmpty
+            ? '${options.selectedBuyerKeys.length} selected'
+            : 'all');
     final settingsLine = sanitize(
       'View: $viewLabel ($rowLabel) | Statuses: ${summarizeList(statusNames)} | '
+      'Buyer infos: $buyerSummary | '
       'Fields: ${summarizeList(fieldLabels, max: 5)}',
     );
 

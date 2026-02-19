@@ -87,6 +87,16 @@ const Map<String, List<String>> kGroupToStatuses = {
   ],
 };
 
+class _InventoryPdfBuyerOption {
+  const _InventoryPdfBuyerOption({
+    required this.key,
+    required this.label,
+  });
+
+  final String key;
+  final String label;
+}
+
 class MainInventoryPage extends StatefulWidget {
   const MainInventoryPage({super.key, required this.orgId});
   final String orgId;
@@ -1041,6 +1051,33 @@ class _MainInventoryPageState extends State<MainInventoryPage>
     return label;
   }
 
+  String _pdfBuyerKeyForLine(Map<String, dynamic> line) {
+    final infos = (line['buyer_infos'] ?? '').toString().trim().toLowerCase();
+    if (infos.isEmpty) return '';
+    return infos;
+  }
+
+  String _pdfBuyerLabelForLine(Map<String, dynamic> line) {
+    final infos = (line['buyer_infos'] ?? '').toString().trim();
+    return infos;
+  }
+
+  List<_InventoryPdfBuyerOption> _allExportBuyerOptions(
+    List<Map<String, dynamic>> lines,
+  ) {
+    final byKey = <String, _InventoryPdfBuyerOption>{};
+    for (final line in lines) {
+      final key = _pdfBuyerKeyForLine(line);
+      if (key.isEmpty || byKey.containsKey(key)) continue;
+      final label = _pdfBuyerLabelForLine(line);
+      if (label.isEmpty) continue;
+      byKey[key] = _InventoryPdfBuyerOption(key: key, label: label);
+    }
+    final out = byKey.values.toList(growable: false);
+    out.sort((a, b) => a.label.toLowerCase().compareTo(b.label.toLowerCase()));
+    return out;
+  }
+
   List<Map<String, dynamic>> _filterLinesByStatuses(
     List<Map<String, dynamic>> lines,
     Set<String> statuses,
@@ -1048,6 +1085,16 @@ class _MainInventoryPageState extends State<MainInventoryPage>
     if (statuses.isEmpty) return const [];
     return lines
         .where((r) => statuses.contains((r['status'] ?? '').toString()))
+        .toList(growable: false);
+  }
+
+  List<Map<String, dynamic>> _filterLinesByBuyerKeys(
+    List<Map<String, dynamic>> lines,
+    Set<String> selectedBuyerKeys,
+  ) {
+    if (selectedBuyerKeys.isEmpty) return lines;
+    return lines
+        .where((line) => selectedBuyerKeys.contains(_pdfBuyerKeyForLine(line)))
         .toList(growable: false);
   }
 
@@ -1068,11 +1115,15 @@ class _MainInventoryPageState extends State<MainInventoryPage>
     return out;
   }
 
-  Future<InventoryPdfExportOptions?> _showPdfExportDialog() async {
+  Future<InventoryPdfExportOptions?> _showPdfExportDialog({
+    required List<_InventoryPdfBuyerOption> availableBuyers,
+  }) async {
     final allStatuses = _allExportStatuses();
     final initialView = InventoryPdfViewMode.lines;
+    final buyerListScrollController = ScrollController();
 
     var selectedStatuses = <String>{};
+    var selectedBuyerKeys = <String>{};
     var viewMode = initialView;
     var selectedFields =
         _normalizePdfFieldsForView(_defaultPdfFields(viewMode), viewMode);
@@ -1085,7 +1136,8 @@ class _MainInventoryPageState extends State<MainInventoryPage>
       context: context,
       builder: (ctx) {
         return AlertDialog(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
           title: const Text('Export inventory PDF'),
           titlePadding: const EdgeInsets.fromLTRB(20, 18, 20, 6),
           contentPadding: const EdgeInsets.fromLTRB(20, 0, 20, 0),
@@ -1097,6 +1149,12 @@ class _MainInventoryPageState extends State<MainInventoryPage>
               void applyStatusPreset(Iterable<String> statuses) {
                 setModalState(() {
                   selectedStatuses = statuses.toSet();
+                });
+              }
+
+              void applyBuyerPreset(Iterable<String> buyerKeys) {
+                setModalState(() {
+                  selectedBuyerKeys = buyerKeys.toSet();
                 });
               }
 
@@ -1190,6 +1248,16 @@ class _MainInventoryPageState extends State<MainInventoryPage>
                     fontWeight: selected ? FontWeight.w700 : FontWeight.w600,
                   ),
                 );
+              }
+
+              void toggleBuyerKey(String key, bool enabled) {
+                setModalState(() {
+                  if (enabled) {
+                    selectedBuyerKeys.add(key);
+                  } else {
+                    selectedBuyerKeys.remove(key);
+                  }
+                });
               }
 
               void setViewMode(InventoryPdfViewMode next) {
@@ -1313,6 +1381,108 @@ class _MainInventoryPageState extends State<MainInventoryPage>
                       ),
                       const SizedBox(height: 14),
                       sectionCard(
+                        title: 'Buyer infos',
+                        trailing: Text(
+                          selectedBuyerKeys.isEmpty
+                              ? 'All rows'
+                              : '${selectedBuyerKeys.length} selected',
+                          style: Theme.of(context)
+                              .textTheme
+                              .labelMedium
+                              ?.copyWith(color: cs.onSurfaceVariant),
+                        ),
+                        child: availableBuyers.isEmpty
+                            ? Text(
+                                'No buyer infos found in the current inventory scope.',
+                                style: Theme.of(context)
+                                    .textTheme
+                                    .bodySmall
+                                    ?.copyWith(color: cs.onSurfaceVariant),
+                              )
+                            : Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Wrap(
+                                    spacing: 8,
+                                    runSpacing: 8,
+                                    children: [
+                                      presetButton(
+                                        label: 'All rows',
+                                        icon: Icons.people_alt_outlined,
+                                        color: cs.primary,
+                                        onPressed: () =>
+                                            applyBuyerPreset(const <String>[]),
+                                      ),
+                                      presetButton(
+                                        label: 'Select all',
+                                        icon: Icons.done_all,
+                                        color: cs.secondary,
+                                        onPressed: () => applyBuyerPreset(
+                                          availableBuyers.map((b) => b.key),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 10),
+                                  Container(
+                                    constraints:
+                                        const BoxConstraints(maxHeight: 220),
+                                    decoration: BoxDecoration(
+                                      color: cs.surface,
+                                      borderRadius: BorderRadius.circular(10),
+                                      border: Border.all(
+                                        color:
+                                            cs.outlineVariant.withOpacity(0.6),
+                                      ),
+                                    ),
+                                    child: Scrollbar(
+                                      controller: buyerListScrollController,
+                                      thumbVisibility:
+                                          availableBuyers.length > 6,
+                                      child: ListView.builder(
+                                        controller: buyerListScrollController,
+                                        shrinkWrap: true,
+                                        itemCount: availableBuyers.length,
+                                        itemBuilder: (context, index) {
+                                          final buyer = availableBuyers[index];
+                                          final selected = selectedBuyerKeys
+                                              .contains(buyer.key);
+                                          return CheckboxListTile(
+                                            dense: true,
+                                            value: selected,
+                                            onChanged: (v) => toggleBuyerKey(
+                                              buyer.key,
+                                              v == true,
+                                            ),
+                                            controlAffinity:
+                                                ListTileControlAffinity.leading,
+                                            contentPadding:
+                                                const EdgeInsets.symmetric(
+                                              horizontal: 8,
+                                            ),
+                                            title: Text(
+                                              buyer.label,
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                          );
+                                        },
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(height: 8),
+                                  Text(
+                                    'Select one or more buyer infos to filter. Leave empty to export all rows.',
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .labelMedium
+                                        ?.copyWith(color: cs.onSurfaceVariant),
+                                  ),
+                                ],
+                              ),
+                      ),
+                      const SizedBox(height: 14),
+                      sectionCard(
                         title: 'View',
                         child: Column(
                           children: [
@@ -1322,8 +1492,7 @@ class _MainInventoryPageState extends State<MainInventoryPage>
                               onChanged: (v) {
                                 if (v != null) setViewMode(v);
                               },
-                              title:
-                                  const Text('Lines (one row per status)'),
+                              title: const Text('Lines (one row per status)'),
                               contentPadding: EdgeInsets.zero,
                             ),
                             RadioListTile<InventoryPdfViewMode>(
@@ -1384,20 +1553,18 @@ class _MainInventoryPageState extends State<MainInventoryPage>
                                           cs.primary.withOpacity(0.15),
                                       side: BorderSide(
                                         color: enabled
-                                            ? cs.outlineVariant
-                                                .withOpacity(0.6)
+                                            ? cs.outlineVariant.withOpacity(0.6)
                                             : cs.outlineVariant
                                                 .withOpacity(0.3),
                                       ),
                                       labelStyle: TextStyle(
                                         color: enabled
                                             ? cs.onSurface
-                                            : cs.onSurface
-                                                .withOpacity(0.45),
-                                        fontWeight: selectedFields
-                                                .contains(def.key)
-                                            ? FontWeight.w700
-                                            : FontWeight.w600,
+                                            : cs.onSurface.withOpacity(0.45),
+                                        fontWeight:
+                                            selectedFields.contains(def.key)
+                                                ? FontWeight.w700
+                                                : FontWeight.w600,
                                       ),
                                     );
                                   }(),
@@ -1479,7 +1646,7 @@ class _MainInventoryPageState extends State<MainInventoryPage>
                           const SizedBox(width: 6),
                           Expanded(
                             child: Text(
-                              'Default view is Lines. No statuses are pre-selected.',
+                              'Default view is Lines. No statuses are pre-selected. Buyer filter is optional.',
                               style: Theme.of(context)
                                   .textTheme
                                   .labelMedium
@@ -1512,13 +1679,27 @@ class _MainInventoryPageState extends State<MainInventoryPage>
             ),
             FilledButton(
               onPressed: () {
-                if (selectedStatuses.isEmpty || selectedFields.isEmpty) return;
+                if (selectedStatuses.isEmpty || selectedFields.isEmpty) {
+                  return;
+                }
+                final orderedStatuses = allStatuses
+                    .where((s) => selectedStatuses.contains(s))
+                    .toList(growable: false);
+                final selectedBuyerList = availableBuyers
+                    .where((b) => selectedBuyerKeys.contains(b.key))
+                    .toList(growable: false);
                 Navigator.pop(
                   ctx,
                   InventoryPdfExportOptions(
                     viewMode: viewMode,
-                    fields: selectedFields.toList(),
-                    selectedStatuses: selectedStatuses.toList(),
+                    fields: selectedFields.toList(growable: false),
+                    selectedStatuses: orderedStatuses,
+                    selectedBuyerKeys: selectedBuyerList
+                        .map((b) => b.key)
+                        .toList(growable: false),
+                    selectedBuyerLabels: selectedBuyerList
+                        .map((b) => b.label)
+                        .toList(growable: false),
                     sortMode: sortMode,
                     landscape: landscape,
                     expandQtyToRows: expandQtyToRows,
@@ -1537,7 +1718,30 @@ class _MainInventoryPageState extends State<MainInventoryPage>
   Future<void> _exportInventoryPdf() async {
     if (_exportingPdf) return;
 
-    final options = await _showPdfExportDialog();
+    List<Map<String, dynamic>> allSingleLines;
+    List<Map<String, dynamic>> allSealedLines;
+
+    try {
+      final grouped = await Future.wait<List<Map<String, dynamic>>>([
+        _fetchGroupedFromView(typeOverride: 'single'),
+        _fetchGroupedFromView(typeOverride: 'sealed'),
+      ]);
+
+      allSingleLines =
+          _explodeLinesFromGroups(grouped[0], overrideFilter: 'all');
+      allSealedLines =
+          _explodeLinesFromGroups(grouped[1], overrideFilter: 'all');
+    } catch (e) {
+      _snack('Could not load inventory for export: $e');
+      return;
+    }
+
+    final buyerOptions = _allExportBuyerOptions([
+      ...allSingleLines,
+      ...allSealedLines,
+    ]);
+
+    final options = await _showPdfExportDialog(availableBuyers: buyerOptions);
     if (options == null) return;
     if (options.selectedStatuses.isEmpty || options.fields.isEmpty) {
       _snack('Select at least one status and one field.');
@@ -1563,7 +1767,8 @@ class _MainInventoryPageState extends State<MainInventoryPage>
               content: ValueListenableBuilder<double?>(
                 valueListenable: progress,
                 builder: (context, value, _) {
-                  final isFinalizing = phase.value.toLowerCase().contains('finalizing');
+                  final isFinalizing =
+                      phase.value.toLowerCase().contains('finalizing');
                   final percent = (value == null || isFinalizing)
                       ? null
                       : (value.clamp(0.0, 1.0) * 100);
@@ -1590,7 +1795,8 @@ class _MainInventoryPageState extends State<MainInventoryPage>
                             ?.copyWith(color: Colors.black54),
                       ),
                       const SizedBox(height: 10),
-                      LinearProgressIndicator(value: isFinalizing ? null : value),
+                      LinearProgressIndicator(
+                          value: isFinalizing ? null : value),
                     ],
                   );
                 },
@@ -1603,18 +1809,12 @@ class _MainInventoryPageState extends State<MainInventoryPage>
 
     try {
       final now = DateTime.now();
-
-      final singleGroups = await _fetchGroupedFromView(typeOverride: 'single');
-      final sealedGroups = await _fetchGroupedFromView(typeOverride: 'sealed');
-
-      final allSingleLines =
-          _explodeLinesFromGroups(singleGroups, overrideFilter: '');
-      final allSealedLines =
-          _explodeLinesFromGroups(sealedGroups, overrideFilter: '');
-
       final statusSet = options.selectedStatuses.toSet();
+      final selectedBuyerKeys = options.selectedBuyerKeys.toSet();
       var singleLines = _filterLinesByStatuses(allSingleLines, statusSet);
       var sealedLines = _filterLinesByStatuses(allSealedLines, statusSet);
+      singleLines = _filterLinesByBuyerKeys(singleLines, selectedBuyerKeys);
+      sealedLines = _filterLinesByBuyerKeys(sealedLines, selectedBuyerKeys);
 
       if (options.viewMode == InventoryPdfViewMode.lines &&
           options.expandQtyToRows) {
@@ -1946,8 +2146,8 @@ class _MainInventoryPageState extends State<MainInventoryPage>
                   baseCurrency: 'USD',
                   fxToUsd: kFxToUsd,
                   finalizedMode: isFinalizedView,
-                    overrideInvested:
-                        useInvestOverride ? _finalizedInvestOverride : null,
+                  overrideInvested:
+                      useInvestOverride ? _finalizedInvestOverride : null,
                   titleInvested:
                       isFinalizedView ? 'Invested' : 'Invested (view)',
                   titleEstimated:
