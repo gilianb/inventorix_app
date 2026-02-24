@@ -418,7 +418,7 @@ class InvoiceService {
   ///
   /// ✅ All items must share the same SALE currency (sale_currency fallback currency).
   /// Buyer = end customer from `buyer_infos`.
-  /// Lines are grouped by product name & unit TTC price.
+  /// Lines are grouped by product identity & unit TTC price.
   Future<Invoice> createInvoiceForItems({
     required String orgId,
     required List<int> itemIds,
@@ -458,7 +458,7 @@ class InvoiceService {
     final rows = await client
         .from('item')
         .select(
-          'id, sale_date, sale_price, sale_currency, unit_cost, currency, buyer_infos, product:product(name)',
+          'id, product_id, sale_date, sale_price, sale_currency, unit_cost, currency, buyer_infos, product:product(name)',
         )
         .inFilter('id', itemIds);
 
@@ -601,8 +601,9 @@ class InvoiceService {
       }
       // ---------- FIN LOGIQUE PRIX / TVA ----------
 
-      // Clé de regroupement = produit + PRIX TTC
-      final key = '$productName|$unitPriceIncl';
+      // Clé de regroupement = même produit + même PRIX TTC
+      final int? productId = (r['product_id'] as num?)?.toInt();
+      final key = '${productId ?? productName.toLowerCase()}|$unitPriceIncl';
 
       grouped
           .putIfAbsent(
